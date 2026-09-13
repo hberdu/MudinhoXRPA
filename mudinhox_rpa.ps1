@@ -135,6 +135,7 @@ $InvGrid       = @{ X = 1317; Y = 408; Cell = 34.4; Cols = 8; Rows = 8 }   # gra
 $InvCellLit    = 210      # soma R+G+B acima disso = pixel "com item" (celula vazia e escura)
 $InvCellMin    = 10       # N pixels claros na celula = ocupada
 $InvFreeMin    = 4        # menos que N celulas livres = inventario cheio -> vai mixar
+$InvMaxFalhas  = 3       # apos N falhas seguidas de abrir o inventario, desiste (nao fica apertando tecla desconhecida no personagem)
 $InvCheckSec   = 300      # checa o inventario a cada N seg enquanto farma
 # Evento dos Dragoes Dourados: botao -> /lorencia -> procura os Golden Dragon (mobs DOURADOS) pela tela, anda ate eles e mata.
 # O chat anuncia dois bichos diferentes: "Golden Dragon vivo(s) em Lorencia" e "Golden Tantalo vivo(s) em Tarkan". O alvo aqui e o DRAGAO, em Lorencia.
@@ -994,7 +995,7 @@ function Inv-Open($img){   # a janela do inventario esta MESMO aberta? Sem isso 
   [bool]($t -match '(?i)zen')
 }
 function Inv-Free {   # abre o inventario (V), conta celulas livres, fecha. -1 se nao calibrado, nao abriu ou nao deu pra ler
-  if(-not $InvGrid){ return -1 }
+  if(-not $InvGrid -or $script:invDesligado){ return -1 }
   $prev = Focus-Game; if(-not $script:gameFg){ Restore-Focus $prev; return -1 }
   Close-Chat
   $map = $null
@@ -1013,11 +1014,20 @@ function Inv-Free {   # abre o inventario (V), conta celulas livres, fecha. -1 s
   if(-not $map){
     # Falha recorrente em todo start. O print + o que o OCR leu na faixa do Zen dizem QUAL dos dois casos e:
     # janela nao abriu (faixa com cenario/vazio) ou abriu noutro lugar (faixa com outro texto do jogo).
-    Log "inventario: nao consegui abrir/confirmar a janela (tecla V). Na faixa do 'Zen' o OCR leu: '$($script:invZenTxt)'"
+    $script:invFalhas++
+    Log "inventario: nao consegui abrir/confirmar a janela (tecla $('{0:X2}' -f $InvKey)). Na faixa do 'Zen' o OCR leu: '$($script:invZenTxt)'"
     Unblock-Areas   # pode ser a propria janela do bot cobrindo a grade
     $null = Save-Shot 'inventario_falhou.png'
+    if($script:invFalhas -ge $InvMaxFalhas){
+      # Insistir custa caro: aperta uma tecla que talvez nem seja a do inventario, varias vezes, a cada ciclo.
+      # Se nao e o atalho certo, sabe-se la o que ela dispara no personagem. Desiste e avisa UMA vez.
+      $script:invDesligado = $true
+      Log "inventario: desisti apos $($script:invFalhas) falhas - a tecla configurada nao abre o inventario neste cliente. Ajuste \$InvKey. O botao MIXAR JOIAS continua funcionando."
+      Notify "MudinhoX" "A tecla do inventario esta errada (\$InvKey). Desliguei a checagem automatica; o mix pelo botao continua."
+    }
     return -1
   }
+  $script:invFalhas = 0
   @($map | % { $_ } | ? { -not $_ }).Count
 }
 function Hover-Npc {   # passa o mouse por $MixNpcPos (e uns vizinhos) ate o nome do NPC aparecer. Devolve o ponto confirmado ou $null. Chamar com o jogo na frente
@@ -1151,7 +1161,7 @@ function Hunt-Golden {   # botao DRAGOES: /tarkan2 e caca os Golden Tantalos ate
   $script:ptsLastGain = Get-Date   # cacar nao distribui pontos; sem zerar aqui o watchdog de progresso dispararia na volta (caca dura ate 20min, o watchdog corta em 12)
   $script:restartCycle = $true
 }
-$script:invDue = (Get-Date).AddSeconds($InvCheckSec); $script:mixNow = $false; $script:goldNow = $false; $script:semPlay = 0
+$script:invDue = (Get-Date).AddSeconds($InvCheckSec); $script:mixNow = $false; $script:goldNow = $false; $script:semPlay = 0; $script:invFalhas = 0; $script:invDesligado = $false
 function Tick-Inventory {   # de tempos em tempos checa o inventario; cheio (ou botao MIXAR) -> vai mixar e reinicia o ciclo (volta pro spot)
   if(-not $script:mixNow){
     if(-not $InvGrid -or (Get-Date) -lt $script:invDue){ return }
