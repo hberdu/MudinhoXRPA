@@ -128,8 +128,11 @@ $MixJewels     = @(       # tipos da lista, na ordem; Pat = como o OCR pode ler 
   @{ Name = 'Chaos';    Pat = "(?i)^chaos" }
 )
 $MixConfirmWords = '(?i)^confirmar$'   # 2o dialogo do mix: "Deseja continuar?" com CONFIRMAR/CANCELAR. NUNCA casar com CANCELAR
+$CursorParkX   = 40      # canto pra onde o mouse e levado antes de ler a tela (o ponteiro aparece na captura e some com o texto debaixo)
+$CursorParkY   = 400
+$MixListaWords = '(?i)^(soul|life|creation|chaos|fragment|stone|jewel)'   # alguma dessas na tela = a LISTA de joias esta aberta
 $MixWaitSec    = 5        # espera entre o mix de um tipo e o proximo
-$MixRounds     = 8        # no maximo N voltas na lista antes de desistir (cada volta mixa os que estao verdes)
+$MixRounds     = 12      # no maximo N voltas (a lista tem 7 opcoes; sobra folga)
 $InvKey        = 0x56     # V = inventario
 $InvGrid       = @{ X = 1317; Y = 408; Cell = 34.4; Cols = 8; Rows = 8 }   # grade do inventario, medida no print do usuario (1920x1009): bate 64/64 celulas
 $InvCellLit    = 210      # soma R+G+B acima disso = pixel "com item" (celula vazia e escura)
@@ -1094,28 +1097,52 @@ function Hover-Npc {   # passa o mouse por $MixNpcPos (e uns vizinhos) ate o nom
   } }
   $null
 }
-function Mix-Jewels {   # /mixer -> clica no NPC -> "Mixar Joias" -> clica cada tipo VERDE (espera $MixWaitSec entre eles) ate sobrar so vermelho. $true se mixou
+function Tirar-Cursor {   # o ponteiro do mouse APARECE na captura e apaga a palavra debaixo dele no OCR.
+  # No 1o mix real ele ficou parado em cima de 'Jewel of Chaos' e o bot nao viu que aquela opcao estava verde.
+  try { $o = Client-Origin; [W]::SetCursorPos(($o.X + $CursorParkX), ($o.Y + $CursorParkY)) | Out-Null; Start-Sleep -Milliseconds 120 } catch {}
+}
+function Lista-Mix-Aberta($words){   # a lista de joias esta na tela? (o modal fecha a cada mix confirmado)
+  [bool]($words | ? { $_.Text -match $MixListaWords })
+}
+function Abrir-Modal-Mix([int]$volta){   # NPC -> botao "Mixar Joias". $true se abriu
+  $npc = Hover-Npc
+  if(-not $npc){
+    if($volta -eq 0){ Notify "MudinhoX" "Cheguei no $MixCmd mas o NPC nao apareceu em volta de ($($MixNpcPos.X),$($MixNpcPos.Y))." }
+    else { Log "mix: nao achei o NPC pra reabrir o modal, encerrando" }
+    return $false
+  }
+  Log "mix: clicando no NPC ($($npc.X),$($npc.Y))"
+  $null = Click-Client $npc.X $npc.Y -KeepFocus; Wait 2
+  $img = Capture-Raw
+  $menu = Screen-Words $img | ? { $_.Text -match $MixMenuWords } | sort { $_.BoundingRect.Y } | select -Last 1   # o de cima e o TITULO da janela; o botao e o de baixo
+  $img.Dispose()
+  if(-not $menu){
+    if($volta -eq 0){ Notify "MudinhoX" "Cliquei no NPC mas nao abriu o modal 'Mixar Joias'." }
+    else { Log "mix: o modal nao reabriu, encerrando" }
+    return $false
+  }
+  $c = Word-Center $menu; Log "mix: clicando '$($menu.Text)' em ($($c.X),$($c.Y))"
+  $null = Click-Client $c.X $c.Y -KeepFocus; Wait 2
+  $true
+}
+function Mix-Jewels {   # /mixer -> NPC -> "Mixar Joias" -> mixa TODAS as opcoes verdes (reabrindo o modal a cada uma) ate sobrar so vermelho
   if(-not $MixNpcPos){ Notify "MudinhoX" "Nao sei onde o NPC do mix fica: rode -TestNpc e preencha `$MixNpcPos."; return $false }
   Tag-Ciclo 'mix'; Log "mix: indo pro $MixCmd"
   if(-not (Send-Chat $MixCmd)){ return $false }
   Wait $WarpWaitSec
   $prev = Focus-Game; if(-not $script:gameFg){ Restore-Focus $prev; return $false }
   try {
-    $npc = Hover-Npc
-    if(-not $npc){ Notify "MudinhoX" "Cheguei no $MixCmd mas o NPC nao apareceu em volta de ($($MixNpcPos.X),$($MixNpcPos.Y)). Voltando pro farm sem mixar."; return $false }
-    Log "mix: clicando no NPC ($($npc.X),$($npc.Y))"
-    $null = Click-Client $npc.X $npc.Y -KeepFocus; Wait 2
-
-    $img = Capture-Raw
-    $menu = Screen-Words $img | ? { $_.Text -match $MixMenuWords } | sort { $_.BoundingRect.Y } | select -Last 1   # o de cima e o TITULO da janela; o botao e o de baixo
-    $img.Dispose()
-    if(-not $menu){ Notify "MudinhoX" "Cliquei no NPC mas nao abriu o modal 'Mixar Joias'. Voltando pro farm sem mixar."; return $false }
-    $c = Word-Center $menu; Log "mix: clicando '$($menu.Text)' em ($($c.X),$($c.Y))"
-    $null = Click-Client $c.X $c.Y -KeepFocus; Wait 2
-
     $mixados = 0
     for($round = 0; $round -lt $MixRounds; $round++){
+      Tirar-Cursor   # depois de clicar, o cursor fica EM CIMA da lista e some com a palavra debaixo dele no OCR
       $img = Capture-Raw; $words = Screen-Words $img
+      # Confirmar um mix FECHA o modal. Sem reabrir, a volta seguinte varre uma tela sem lista, nao acha verde
+      # e o bot conclui "acabou" tendo mixado so a primeira - foi o que aconteceu no 1o mix real (4 estavam verdes).
+      if(-not (Lista-Mix-Aberta $words)){
+        $img.Dispose()
+        if(-not (Abrir-Modal-Mix $round)){ break }
+        $img = Capture-Raw; $words = Screen-Words $img
+      }
       $verde = $null
       foreach($j in $MixJewels){
         $w = $words | ? { $_.Text -match $j.Pat } | select -First 1
@@ -1525,6 +1552,24 @@ if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guard
   # REGRESSAO da causa raiz do "nao consegui ler o status": neste print a caixa de chat esta ABERTA, mas as bordas
   # vermelhas estao em 117/92 a partir da base - as duas linhas fixas antigas (111/87) davam ZERO e o bot achava
   # que estava fechada, entao o C do status virava letra dentro do chat.
+  # Print real do 1o mix: Soul/Life/Creation/Chaos VERDES, Fragment/Stone/Jewel of God VERMELHOS.
+  # O bot mixou so a Soul e concluiu "acabou", porque o modal fecha a cada confirmacao e ele nao reabria.
+  $i = Fx 'mix_lista_4verdes.png'
+  if($i){
+    $ws = Screen-Words $i
+    Ok 'reconhece que a lista de mix esta aberta' (Lista-Mix-Aberta $ws) 'nao detectou a lista (entao nao reabriria o modal)'
+    $verdes = @(); $outras = @()
+    foreach($j in $MixJewels){
+      $w = $ws | ? { $_.Text -match $j.Pat } | select -First 1
+      if($w){ if((Word-Color $i $w) -eq 'green'){ $verdes += $j.Name } else { $outras += $j.Name } }
+    }
+    # Neste print o CURSOR esta em cima de 'Jewel of Chaos' e o OCR nao le a palavra - por isso 3 e nao 4.
+    # E justamente esse achado que motivou o Tirar-Cursor antes de cada leitura da lista.
+    Ok 'acha as joias verdes visiveis' ($verdes.Count -ge 3) "verdes: $($verdes -join ',') | nao-verdes: $($outras -join ',')"
+    $fd = $ws | ? { $_.Text -match '(?i)^fragment' } | select -First 1
+    Ok 'Fragment of Death nao e verde' ($fd -and (Word-Color $i $fd) -ne 'green') 'classificou opcao vermelha como verde'
+    $i.Dispose()
+  }
   foreach($fx in 'chat_ABERTO.png','chat_ABERTO_2.png'){   # duas amostras independentes; nas duas as bordas ficaram em 117-118 e 92-93
     $i = Fx $fx
     if($i){ Ok "Chat-Open detecta a caixa aberta ($fx)" (Chat-Open $i) 'disse fechada com a caixa aberta (o C viraria letra no chat)'; $i.Dispose() }
