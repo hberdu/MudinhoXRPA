@@ -745,34 +745,10 @@ function Parse-Attrs($words){   # das words do OCR global: acha cada rotulo (For
   }
   $vals
 }
-$script:statBox = $null   # recorte onde o painel de status foi visto da ultima vez (evita OCR da tela inteira a cada 15s)
-function Ocr-Status($img){   # palavras do painel de status. Usa o recorte aprendido; se nao achar nada, cai pro OCR global e RE-APRENDE
-  if($script:statBox){
-    $b = $script:statBox
-    $c = Crop-Bitmap $img $b.X $b.Y $b.W $b.H 2
-    $w = @((Ocr-Bitmap $c).Lines | % { $_.Words }); $c.Dispose()
-    if(Status-Open $w){ return $w }   # Parse-Attrs so compara posicoes RELATIVAS entre rotulo e numero, entao funciona no recorte
-    $script:statBox = $null; Log "status: recorte nao serviu mais, voltando pro OCR da tela toda"
-  }
-  $w = @((Ocr-Bitmap $img).Lines | % { $_.Words })
-  if(Status-Open $w){   # aprende o recorte a partir dos ROTULOS so.
-    # Incluir "qualquer numero" pegava numeros soltos do HUD/chat e o recorte saia com 1378x775 (72% da tela):
-    # nao economizava nada e ficava ancorado no lugar errado. Agora so os rotulos definem a caixa, e a largura
-    # e estendida a direita o suficiente pro numero caber.
-    $r = @($w | ? { $_.Text -match '(?i)^(pont|energia|vitalidade|agilidade|for|str|agi|ene|v(?!elo).*dade)' } | % { $_.BoundingRect })
-    if($r.Count -ge 4){
-      $x1 = ($r | % { $_.X } | measure -Minimum).Minimum; $x2 = ($r | % { $_.X + $_.Width } | measure -Maximum).Maximum
-      $y1 = ($r | % { $_.Y } | measure -Minimum).Minimum; $y2 = ($r | % { $_.Y + $_.Height } | measure -Maximum).Maximum
-      $x = [Math]::Max(0, [int]$x1 - 20); $y = [Math]::Max(0, [int]$y1 - 25)
-      $ww = [Math]::Min($img.Width - $x, [int]($x2 - $x1) + 300)   # +300 pro numero a direita do rotulo
-      $hh = [Math]::Min($img.Height - $y, [int]($y2 - $y1) + 50)
-      if($ww -gt 120 -and $hh -gt 80 -and $ww -lt $img.Width * 0.45 -and $hh -lt $img.Height * 0.7){
-        $script:statBox = @{ X = $x; Y = $y; W = $ww; H = $hh }; Log "status: recorte aprendido ($x,$y ${ww}x${hh}) - proximas leituras nao usam a tela toda"
-      } else { Log "status: recorte candidato ${ww}x${hh} nao faz sentido (rotulos espalhados), seguindo com OCR global" }
-    }
-  }
-  $w
-}
+# Aqui existia um "recorte aprendido" pra evitar o OCR da tela inteira. REMOVIDO por medicao:
+# OCR global 88ms contra ~30ms no recorte, UMA vez a cada 15s = 0.4% de um core. Nao pagava a complexidade,
+# aprendia caixa errada (chegou a 1378x775, 72% da tela) e, quando envelhecia, custava um OCR A MAIS.
+function Ocr-Status($img){ @((Ocr-Bitmap $img).Lines | % { $_.Words }) }
 function Read-Status {   # abre a janela de status (C), le os 4 atributos + pontos, fecha. @{For;Agi;Vit;Ene;Pts} ou $null
   $prev = Focus-Game; if(-not $script:gameFg){ Restore-Focus $prev; return $null }
   Close-Chat; $out = $null
