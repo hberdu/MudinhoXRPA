@@ -2364,6 +2364,20 @@ function Resets-Faltando {   # projecao: quantos resets ainda faltam pro /darmr.
   if(-not $pr -or $pr -le 0){ return $null }
   [Math]::Ceiling($script:ptsNeeded / $pr)
 }
+function Log-Plano {   # o que o bot VAI fazer, em duas linhas, logo no start
+  # O plano estava espalhado por quatro variaveis de CONFIG ($WarmupResets, $WarmupCmd, $WarpCmd, $TargetLevel)
+  # e por duas de estado (fase, warmupCount). Pra saber o que o bot ia fazer era preciso juntar tudo de cabeca -
+  # e quando ele fazia outra coisa (spot errado, fase errada retomada do estado.txt) isso so aparecia dali a
+  # varios minutos, no meio do log. Declarado aqui, uma linha desmente a outra na hora.
+  $ciclo = if($WarmupTeste){ "TESTA $WarpCmd primeiro; se nao fechar um reset em ${WarmupTesteSec}s, cai pro warmup" }
+           else { "$WarmupResets resets em $WarmupCmd (warmup: apos o /darmr o char volta fraco)" }
+  Log "plano: $ciclo -> depois $WarpCmd ate os 4 atributos no cap -> /darmr"
+  $agora = if($script:modo -eq 'joias'){ "MODO JOIAS - farma em $WarpCmd, mixa no $MixCmd, NAO reseta" }
+           elseif($script:phase -eq 'warmup'){ "warmup $($script:warmupCount)/$WarmupResets -> vai pra $WarmupCmd" }
+           else { "fase normal -> vai pra $WarpCmd" }
+  Log ("  agora: {0} | reseta no level {1} (piso {2}) | {3} resets e {4} pontos neste MR" -f `
+       $agora, $script:TargetLevel, $script:LevelMinReset, $script:resets, $script:ptsSent)
+}
 function Metrics {   # o objetivo e o /darmr, nao o reset: o numero que importa e PONTOS/HORA e o ETA do MR. Reset e so o meio.
   $h = $script:ativoSeg / 3600.0   # TEMPO ATIVO, nao relogio de parede: downtime nao pode afundar a taxa
   if($h -le 0.01){ return }
@@ -2952,6 +2966,7 @@ if($script:phase -eq 'warmup' -and $script:warmupCount -ge $WarmupResets){
 }
 if($script:modo -eq 'joias'){ Log "retomando em MODO JOIAS: farma em $WarpCmd ate encher, mixa no $MixCmd, repete" }
 if(Test-Path $WarmupFile){ Remove-Item $WarmupFile -ErrorAction SilentlyContinue; $script:phase = 'warmup'; $script:warmupCount = 0; Save-Estado; Log "iniciando em modo warmup (pos-MR manual): $WarmupCmd ate $WarmupResets resets" }
+Log-Plano   # DEPOIS do Load-Estado e dos ajustes de fase acima: o plano tem que refletir o que o bot vai fazer de verdade, nao o CONFIG cru
 while(-not $script:stop){   # envelope: se o cliente cair, o catch espera ele voltar e o ciclo recomeca aqui (antes o script terminava)
 try {
 while($true){
