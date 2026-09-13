@@ -232,5 +232,24 @@ Chk 'ptsNeeded absurdo nao vai abaixo de 0' (Progresso-MR) 0
 $script:ptsNeeded = -50
 Chk 'ptsNeeded negativo tambem cai em 0'    (Progresso-MR) 0
 
+# --- a barra desenhada (dois paineis, nao ProgressBar) --------------------------------------------
+# O ProgressBar do WinForms ignora BackColor/ForeColor com visual styles e sai sempre verde - a unica cor que a
+# HUD do jogo nao tem. Virou trilho + preenchimento, e ai a largura passa a ser conta nossa: sem o clamp, uma
+# fracao fora de 0..1 daria Width negativo (excecao) ou um painel maior que o trilho.
+if($src -notmatch '(?s)(function Set-Barra(.*?){.*?\r?\n\})'){ throw "nao achei a Set-Barra" }
+. ([scriptblock]::Create($Matches[1]))
+$script:barraBg   = [pscustomobject]@{ Width = 260 }
+$script:barraFill = [pscustomobject]@{ Width = 0; Visible = $false }
+Set-Barra 0.5;  Chk 'metade do trilho'        $script:barraFill.Width   130
+Set-Barra 1.0;  Chk 'cheia nao passa do trilho' $script:barraFill.Width 260
+Set-Barra 3.0;  Chk 'fracao absurda e cortada'  $script:barraFill.Width 260
+Set-Barra -1.0; Chk 'fracao negativa vira 0'    $script:barraFill.Width 0
+Chk '  (e some em vez de virar risco)'          $script:barraFill.Visible $false
+Set-Barra 0.25; Chk 'volta a aparecer'          $script:barraFill.Visible $true
+# chamada antes do Show-Ui (o Log roda desde o comeco do script) nao pode explodir
+$script:barraFill = $null
+Set-Barra 0.5
+Chk 'sem UI ainda, nao quebra'                  'ok' 'ok'
+
 if($script:erros -eq 0){ "OK: mediana ignora etiquetas, culpa dividida certo, Tick-Stats so rele quando precisa, miss infinito por leituras+tempo, barra do MR nao estoura" }
 else { "$($script:erros) FALHA(S)"; exit 1 }
