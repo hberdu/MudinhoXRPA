@@ -235,3 +235,29 @@ Rodada 13, 2026-09-01 10:25 — 1o MIX REAL funcionou, e revelou 2 bugs:
 - **Modo joias no level MAXIMO**: sem reset, o level fica cravado em 400 e o detector de miss infinito disparava a cada 40s pausando o farm a toa. `$LevelMaximo` desliga o stall-por-level la em cima.
 - **Dialogo de confirmacao demora um tempo VARIAVEL pra aparecer** (2026-09-01 12:56): o bot leu a tela UMA vez 1.5s apos clicar na joia, nao achou CONFIRMAR e desistiu — mas o print de diagnostico, tirado 1s depois, mostrava o dialogo na tela. Trocado por busca repetida (`$MixConfirmTentativas` = 5, 1s cada). Licao: em UI de jogo, procurar ate achar, nunca olhar uma vez.
 - Fixture `mix_dialogo_confirmar.png` + 3 testes: acha CONFIRMAR, nao confunde com CANCELAR, e a lista nao e dada como aberta nessa tela (senao nao reabriria o modal).
+
+## 2026-09-01 - contagem de celulas DELETADA do loop; metrica do modo joias
+
+- **`Tick-Inventory` nao conta mais celulas.** Consequencia direta do achado de 11:22 (a ancora oscila 37px, e o
+  MESMO inventario cheio le 0 ou 26 livres): a contagem abria e fechava o inventario a cada 2 min (dois cliques,
+  foco roubado do usuario) pra produzir um numero que a gente **ja tinha decidido nao usar** pra adiar o mix.
+  Sobraram os gatilhos que nao dependem de alinhamento:
+  1. mensagem do proprio jogo (`$MsgInvWords` liga `$script:mixNow`) — vale nos dois modos;
+  2. botao **MIXAR JOIAS**;
+  3. teto de tempo `$JoiasFarmMax` (25 min) — **so no modo joias**.
+  No ciclo de reset/MR nao ha teto de tempo, e de proposito: inventario cheio nao impede resetar, e o objetivo
+  la e o `/darmr`. `Inv-Free` e `Achar-InvGrid` continuam existindo pro `-Preflight` e `-TestInv`, onde o numero
+  e informativo e um humano esta olhando. `$InvCheckSec` foi removido do CONFIG (nao tinha mais leitor).
+- **Metrica do modo joias: `joias/h`.** As metricas antigas (`pontos/h`, ETA do MR) sao todas do master reset e
+  nao dizem nada num modo que nao reseta. Ao fim de cada ciclo o bot loga
+  `== JOIAS: 12 mixadas em 3 ciclos | 4,1 joias/h | farm de 25 min por ciclo ==` e poe o mesmo resumo no titulo
+  da janelinha. E o numero que responde a unica pergunta aberta do modo: **`$JoiasFarmMax` (25 min) esta bom?**
+  Se joias/h cair ao aumentar o farm, o inventario ja estava cheio antes do teto.
+  `$joiasMix`/`$joiasCiclos` entram no `estado.txt` (com regressao no `test_estado.ps1`), senao um restart do
+  watchdog zeraria a medicao — foi exatamente o que aconteceu com as metricas do MR antes.
+- **Contagem so conta se o jogo confirmar.** Cada mix so incrementa `$joiasMix` depois que a mensagem do jogo
+  bate em `$MixSucessoWords`; clicar em CONFIRMAR e o jogo recusar (sem jóias suficientes, por exemplo) agora
+  aparece no log como "cliquei em CONFIRMAR mas o jogo nao avisou sucesso" em vez de virar mix contabilizado.
+- **`Achar-Ate` generico.** Tres lugares repetiam o mesmo laco "tira o cursor, captura, procura o texto, tenta de
+  novo": menu do mix, icone do inventario e o botao CONFIRMAR. Viraram um helper so. O padrao ja tinha custado
+  bug antes (uma leitura unica falha porque o dialogo aparece com atraso variavel) — agora e um lugar so.

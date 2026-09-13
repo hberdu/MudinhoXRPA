@@ -128,6 +128,7 @@ $MixJewels     = @(       # tipos da lista, na ordem; Pat = como o OCR pode ler 
   @{ Name = 'Creation'; Pat = "(?i)^creation" },
   @{ Name = 'Chaos';    Pat = "(?i)^chaos" }
 )
+$MixSucessoWords = '(?i)(sucesso|voc. mixou|mixou [0-9])'   # resposta do jogo apos o mix; confirma que aconteceu de verdade
 $MixConfirmTentativas = 5   # o dialogo de confirmacao demora um tempo VARIAVEL: procura ate N vezes (1s cada) em vez de olhar uma vez
 $MixConfirmWords = '(?i)^confirmar$'   # 2o dialogo do mix: "Deseja continuar?" com CONFIRMAR/CANCELAR. NUNCA casar com CANCELAR
 $CursorParkX   = 40      # canto pra onde o mouse e levado antes de ler a tela (o ponteiro aparece na captura e some com o texto debaixo)
@@ -147,15 +148,13 @@ $InvGridDy     = 296     # do TOPO do titulo ate o topo da 1a celula
 $InvCellPx     = 34.4    # lado da celula (fracionario: arredondar acumula erro na 8a coluna)
 $InvCellLit    = 210      # soma R+G+B acima disso = pixel "com item" (celula vazia e escura)
 $InvCellMin    = 10       # N pixels claros na celula = ocupada
-$InvFreeMin    = 4        # menos que N celulas livres = inventario cheio -> vai mixar
+$InvFreeMin    = 4        # so informativo agora (-Preflight/-TestInv): quantas celulas livres ainda contam como "vazio"
 $JoiasFarmMax  = 8       # modo JOIAS: vai mixar a cada N min. E o gatilho PRINCIPAL: a contagem de celulas depende de alinhamento e a ancora oscila, entao nao da pra confiar nela pra adiar o mix
 $InvUsarMenu   = $true   # se a tecla nao abrir o inventario, tenta pelo MENU do jogo (botao de 3 barras no topo direito)
 $InvMenuBtn    = @{ X = 1888; Y = 23 }   # botao de 3 barras (menu) no canto superior direito, area cliente
-$InvMenuAncora = '(?i)^(shop|personagem|guild|mercado|invent)'   # se nenhuma dessas palavras aparece, o menu NAO abriu: nao clica
 $InvMenuClickDy = -45    # no menu, o item e um ICONE com o rotulo EMBAIXO: o OCR acha o texto, mas o clicavel esta ACIMA dele
 $InvMenuWords  = '(?i)^invent'   # item do menu que abre o inventario
 $InvMaxFalhas  = 3       # apos N falhas seguidas de abrir o inventario, desiste (nao fica apertando tecla desconhecida no personagem)
-$InvCheckSec   = 120     # checa o inventario a cada N seg (a contagem e aproximada, mas confirma cheio mais cedo que o teto de tempo)
 # Evento dos Dragoes Dourados: botao -> /lorencia -> procura os Golden Dragon (mobs DOURADOS) pela tela, anda ate eles e mata.
 # O chat anuncia dois bichos diferentes: "Golden Dragon vivo(s) em Lorencia" e "Golden Tantalo vivo(s) em Tarkan". O alvo aqui e o DRAGAO, em Lorencia.
 $GoldCmd       = '/lorencia'
@@ -551,6 +550,8 @@ function Save-Estado {   # fase/warmup E as metricas do MR. Medir um MR leva hor
       "ptsSent=$($script:ptsSent)"
       "runStart=$($script:runStart.Ticks)"
       "ativoSeg=$([int]$script:ativoSeg)"
+      "joiasMix=$($script:joiasMix)"
+      "joiasCiclos=$($script:joiasCiclos)"
       "mrs=$($script:mrs)"
       "mrStart=$($script:mrStart.Ticks)"
       "ciclos=$(@($script:ciclos) -join ",")"
@@ -577,6 +578,8 @@ function Load-Estado {
       if($kv.mrs){ $script:mrs = [int]$kv.mrs }
       if($kv.runStart){ $script:runStart = [datetime]::new([long]$kv.runStart) }
       if($kv.ativoSeg){ $script:ativoSeg = [double]$kv.ativoSeg }
+      if($kv.joiasMix){ $script:joiasMix = [int]$kv.joiasMix }
+      if($kv.joiasCiclos){ $script:joiasCiclos = [int]$kv.joiasCiclos }
       if($kv.mrStart){ $script:mrStart = [datetime]::new([long]$kv.mrStart) }
       if($kv.ciclos){ $script:ciclos = @($kv.ciclos -split "," | ? { $_ }) }
       if($kv.alvo){ $script:TargetLevel = [int]$kv.alvo }
@@ -1053,13 +1056,9 @@ function Abrir-Inv-PeloMenu {   # caminho alternativo: a tecla configurada nao a
   # clica, CONFIRMA por OCR que o menu abriu, so entao clica no item. Nunca clica no escuro.
   Log "inventario: tentando pelo menu do jogo (a tecla nao abriu)"
   $null = Click-Client $InvMenuBtn.X $InvMenuBtn.Y -KeepFocus
-  Wait 1.5
-  $img = Capture-Raw
-  $ws = Screen-Words $img
-  $ok = [bool]($ws | ? { $_.Text -match $InvMenuAncora })   # o menu tem varios itens conhecidos; se nenhum aparece, nao e o menu
-  $item = $ws | ? { $_.Text -match $InvMenuWords } | select -First 1
-  $img.Dispose()
-  if(-not $ok -or -not $item){
+  # Achar o proprio item "Inventario" ja prova que o menu abriu - e procurar ate achar cobre o tempo variavel de desenho
+  $item = Achar-Ate $InvMenuWords $MixConfirmTentativas
+  if(-not $item){
     Log "inventario: o menu nao abriu (ou nao achei o item). Fechando com ESC."
     Close-Popup; return $false
   }
@@ -1132,6 +1131,22 @@ function Tirar-Cursor {   # o ponteiro do mouse APARECE na captura e apaga a pal
   # No 1o mix real ele ficou parado em cima de 'Jewel of Chaos' e o bot nao viu que aquela opcao estava verde.
   try { $o = Client-Origin; [W]::SetCursorPos(($o.X + $CursorParkX), ($o.Y + $CursorParkY)) | Out-Null; Start-Sleep -Milliseconds 120 } catch {}
 }
+function Achar-Ate([string]$pat,[int]$tentativas,[switch]$MaisAbaixo){   # procura uma palavra na tela ate achar.
+  # UI de jogo demora um tempo VARIAVEL pra desenhar: o dialogo de confirmacao do mix apareceu DEPOIS da leitura
+  # unica do bot (o print de diagnostico, 1s mais tarde, mostrava ele na tela). Olhar uma vez perde a janela.
+  for($t = 0; $t -lt $tentativas; $t++){
+    Wait 1
+    Tirar-Cursor   # o ponteiro apaga a palavra debaixo dele no OCR
+    $img = Capture-Raw
+    $ws = @(Screen-Words $img | ? { $_.Text -match $pat })
+    $img.Dispose()
+    if($ws.Count){
+      if($MaisAbaixo){ return ($ws | sort { $_.BoundingRect.Y } | select -Last 1) }   # ex: o BOTAO "Mixar Joias", nao o titulo
+      return $ws[0]
+    }
+  }
+  $null
+}
 function Lista-Mix-Aberta($words){   # a lista de joias esta na tela? (o modal fecha a cada mix confirmado)
   [bool]($words | ? { $_.Text -match $MixListaWords })
 }
@@ -1143,10 +1158,9 @@ function Abrir-Modal-Mix([int]$volta){   # NPC -> botao "Mixar Joias". $true se 
     return $false
   }
   Log "mix: clicando no NPC ($($npc.X),$($npc.Y))"
-  $null = Click-Client $npc.X $npc.Y -KeepFocus; Wait 2
-  $img = Capture-Raw
-  $menu = Screen-Words $img | ? { $_.Text -match $MixMenuWords } | sort { $_.BoundingRect.Y } | select -Last 1   # o de cima e o TITULO da janela; o botao e o de baixo
-  $img.Dispose()
+  $null = Click-Client $npc.X $npc.Y -KeepFocus
+  # -MaisAbaixo: o "Mixar" de cima e o TITULO da janela; o botao e o de baixo
+  $menu = Achar-Ate $MixMenuWords $MixConfirmTentativas -MaisAbaixo
   if(-not $menu){
     if($volta -eq 0){ Notify "MudinhoX" "Cliquei no NPC mas nao abriu o modal 'Mixar Joias'." }
     else { Log "mix: o modal nao reabriu, encerrando" }
@@ -1192,14 +1206,7 @@ function Mix-Jewels {   # /mixer -> NPC -> "Mixar Joias" -> mixa TODAS as opcoes
       # Clicar na joia abre um SEGUNDO dialogo ("Mixar 12 Jewel of Soul / Deseja continuar?" com CONFIRMAR e CANCELAR).
       # Ele demora um tempo VARIAVEL pra aparecer: com uma leitura unica apos 1.5s o bot ja perdeu o dialogo que o
       # print de diagnostico (tirado 1s depois) mostrava na tela. Entao PROCURA ate achar, em vez de olhar uma vez.
-      $conf = $null
-      for($t = 0; $t -lt $MixConfirmTentativas -and -not $conf; $t++){
-        Wait 1
-        Tirar-Cursor
-        $img2 = Capture-Raw
-        $conf = Screen-Words $img2 | ? { $_.Text -match $MixConfirmWords } | select -First 1
-        $img2.Dispose()
-      }
+      $conf = Achar-Ate $MixConfirmWords $MixConfirmTentativas
       if(-not $conf){
         Log "mix: cliquei em $($verde.J.Name) mas nao achei o botao CONFIRMAR - parando pra nao travar"
         Notify "MudinhoX" "O mix abriu um dialogo que eu nao reconheci. Confirma na mao e clique RETOMAR."
@@ -1208,7 +1215,16 @@ function Mix-Jewels {   # /mixer -> NPC -> "Mixar Joias" -> mixa TODAS as opcoes
       }
       $cc = Word-Center $conf
       Log "mix: confirmando em ($($cc.X),$($cc.Y))"
-      $null = Click-Client $cc.X $cc.Y -KeepFocus; $mixados++
+      $null = Click-Client $cc.X $cc.Y -KeepFocus
+      # Antes o bot so CLICAVA e assumia que deu certo. O jogo responde "Sucesso! voce mixou N Soul Points" - ler
+      # isso troca "cliquei" por "confirmei que mixou", e se nao vier, ele sabe que algo falhou.
+      $ok = $false
+      for($t = 0; $t -lt $MixConfirmTentativas -and -not $ok; $t++){
+        Wait 1
+        if((Read-Msgs $null) -match $MixSucessoWords){ $ok = $true }
+      }
+      if($ok){ $mixados++; $script:joiasMix++; Log "mix: $($verde.J.Name) confirmado pelo jogo" }
+      else { Log "mix: cliquei em CONFIRMAR mas o jogo nao avisou sucesso - pode nao ter mixado" }
       Wait $MixWaitSec
     }
     Close-Popup
@@ -1292,17 +1308,14 @@ function Ciclo-Dragoes {   # MODO DRAGOES: so caca. Nao checa inventario, nao ch
   Log "dragoes: saindo do modo ($achados alvos nesta rodada)"
   $script:ptsLastGain = Get-Date
 }
-$script:invDue = (Get-Date).AddSeconds($InvCheckSec); $script:mixNow = $false; $script:semPlay = 0; $script:invFalhas = 0; $script:invDesligado = $false
-function Tick-Inventory {   # de tempos em tempos checa o inventario; cheio (ou botao MIXAR) -> vai mixar e reinicia o ciclo (volta pro spot)
-  if(-not $script:mixNow){
-    if((Get-Date) -lt $script:invDue){ return }
-    $script:invDue = (Get-Date).AddSeconds((Jit $InvCheckSec))
-    $free = Inv-Free
-    if($free -lt 0){ return }
-    Log "inventario: $free celulas livres"
-    if($free -ge $InvFreeMin){ return }
-  }
-  $script:mixNow = $false; $script:invDue = (Get-Date).AddSeconds((Jit $InvCheckSec))
+$script:mixNow = $false; $script:semPlay = 0; $script:invFalhas = 0; $script:invDesligado = $false
+function Tick-Inventory {   # aviso do jogo (ou botao MIXAR JOIAS) -> vai mixar e reinicia o ciclo (volta pro spot)
+  # A contagem periodica de celulas saiu daqui: abria e fechava o inventario a cada 2 min (dois cliques, foco
+  # roubado) pra produzir um numero que oscila com o alinhamento da grade - o MESMO inventario cheio leu 0 e 26
+  # livres com 20px de diferenca na ancora. Sobrou o gatilho confiavel: a mensagem do proprio jogo. Inv-Free
+  # continua existindo pro -Preflight e pro -TestInv, onde o numero e so informativo.
+  if(-not $script:mixNow){ return }
+  $script:mixNow = $false
   $null = Mix-Jewels
   $script:ptsLastGain = Get-Date   # mixar tambem nao distribui pontos: nao deixa o watchdog de progresso contar esse tempo
   $script:restartCycle = $true   # volta pro spot pelo caminho normal (warp + andar + play)
@@ -1372,6 +1385,7 @@ function Tick-Msgs($img){   # le as mensagens do jogo de vez em quando. A caca a
   if($m -match $MsgGoldWords){ Log "evento dos dragoes no chat (use o botao DRAGOES DOURADOS se quiser ir)" }
   elseif($m -match $MsgInvWords){ Log "jogo avisou inventario cheio -> vou mixar"; $script:mixNow = $true }
 }
+$script:joiasMix = 0; $script:joiasCiclos = 0
 $script:tuneOn = $AutoTune; $script:tuneArm = 0; $script:tuneResets = 0; $script:tunePts = 0; $script:tuneAtivo0 = 0.0; $script:tuneRes = @()
 if($script:tuneOn){ $script:TargetLevel = [Math]::Max($AutoTuneAlvos[0], $LevelMinReset) }   # comeca pelo primeiro alvo da lista (Load-Estado sobrepoe se o A/B ja terminou antes)
 function Tick-AutoTune {   # $TargetLevel sempre foi chute. Em vez de pedir experimento manual, o bot roda o A/B sozinho.
@@ -1433,7 +1447,6 @@ function Ciclo-Joias {   # MODO JOIAS: farma no spot ate encher o inventario, va
   if(-not $ok){ Wait 15; return }
   $fim = (Get-Date).AddMinutes($JoiasFarmMax)
   $cheio = $false
-  $script:invDue = Get-Date   # checa o inventario JA na primeira leitura: se ja esta cheio, nao faz sentido farmar 5 min antes de olhar
   Log "joias: farmando em $WarpCmd ate encher (ou $JoiasFarmMax min)"
   do {
     Wait (Poll-Interval); Bater-Heartbeat
@@ -1450,14 +1463,11 @@ function Ciclo-Joias {   # MODO JOIAS: farma no spot ate encher o inventario, va
           Tick-Stats            # continua distribuindo pontos (o /darmr fica bloqueado neste modo)
           Tick-Msgs $img        # "inventario cheio" no chat liga $script:mixNow
           Tick-Human
-          if($script:mixNow){ $script:mixNow = $false; $cheio = $true; Log "joias: inventario cheio (aviso do jogo)" }
-          elseif(-not $script:invDesligado -and (Get-Date) -ge $script:invDue){   # NAO a cada leitura: abrir/fechar o inventario a cada poll seria absurdo
-            $script:invDue = (Get-Date).AddSeconds((Jit $InvCheckSec))
-            $free = Inv-Free
-            # A contagem so e confiavel com a grade bem alinhada, e a ancora (titulo) oscila ate 37px. Entao ela
-            # so CONFIRMA cheio (poucas livres); nunca serve pra dizer "ainda tem espaco" e adiar o mix.
-            if($free -ge 0){ Log "joias: $free celulas livres (contagem aproximada)"; if($free -lt $InvFreeMin){ $cheio = $true } }
-          }
+          # A contagem periodica de celulas foi REMOVIDA: ela abria e fechava o inventario a cada 2 min (dois
+          # cliques, foco roubado) pra produzir um numero que oscila (17 e 13 livres em 8s no mesmo inventario,
+          # porque a ancora varia ate 37px) e que a gente ja tinha decidido nao usar pra adiar o mix.
+          # Sobraram os dois gatilhos que nao dependem de alinhamento: aviso do jogo e teto de tempo.
+          if($script:mixNow){ $script:mixNow = $false; $cheio = $true; Log "joias: hora de mixar (aviso do jogo ou botao)" }
         }
         $img.Dispose()
       }
@@ -1467,6 +1477,16 @@ function Ciclo-Joias {   # MODO JOIAS: farma no spot ate encher o inventario, va
   if(-not $cheio){ Log "joias: $JoiasFarmMax min de farm, indo mixar mesmo assim (sem deteccao de inventario cheio)" }
   Hold-Focus; try { $null = Mix-Jewels } finally { Release-Focus }
   $script:ptsLastGain = Get-Date   # mixar nao distribui pontos: nao deixa o watchdog de progresso contar esse tempo
+  # As metricas do bot eram todas do master reset (pontos/h, ETA do MR) e nao valem nada aqui, que nao reseta.
+  # O numero do modo joias e JOIAS/HORA - e e ele que diz se $JoiasFarmMax (chute) esta bom.
+  $script:joiasCiclos++
+  $h = $script:ativoSeg / 3600.0
+  if($h -gt 0.02){
+    Log ("== JOIAS: {0} mixadas em {1} ciclos | {2} joias/h | farm de {3} min por ciclo ==" -f `
+         $script:joiasMix, $script:joiasCiclos, [Math]::Round($script:joiasMix / $h, 1), $JoiasFarmMax)
+    if($script:ui -and -not $script:ui.IsDisposed){ $script:ui.Text = "MudinhoX RPA - $($script:joiasMix) joias ($([Math]::Round($script:joiasMix / $h,1))/h)" }
+  }
+  Save-Estado
 }
 function Poll-Interval {   # perto do alvo le rapido: o level sobe ~150 entre leituras e o reset saia com 400 em vez de 350
   if($null -ne $script:lvlPrev -and $script:lvlPrev -ge ($TargetLevel * $PollNearFrom)){ return $PollNearSec }
@@ -1536,7 +1556,7 @@ function Run-Preflight([bool]$comSpot){   # valida os subsistemas de leitura no 
     if($st){ Log "       F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) Pts=$($st.Pts) | faltam $(Points-Needed $st) pro cap" }
     $free = Inv-Free
     Ok 'le o inventario' ($free -ge 0) 'Inv-Free devolveu -1 (tecla errada e o menu tambem nao abriu)'
-    if($free -ge 0){ Log "       $free celulas livres (mixa abaixo de $InvFreeMin)" }
+    if($free -ge 0){ Log "       $free celulas livres (referencia: menos de $InvFreeMin ja e inventario cheio)" }
     $m = Read-Msgs $null
     Log $(if($m){ "  OK   le a faixa de mensagens: '$m'" } else { "  (faixa de mensagens vazia agora - normal se o chat esta quieto)" })
   } finally { Release-Focus }
