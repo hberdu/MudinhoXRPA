@@ -109,7 +109,20 @@ Validação: o desktop calibrou sozinho em `(1121,932)`. O `$LevelBox` cravado q
 
 Se o recorte parar de dar número plausível (janela redimensionada, layout trocado), a caixa é descartada e ele recalibra na próxima leitura de status. E sem calibração o `Read-Level` devolve `$null` em vez de inventar — level errado manda o bot resetar na hora errada.
 
-**Ainda por coordenada:** botão play (é ícone, não texto), grade do inventário (brilho de pixel), chat aberto (borda vermelha), posição do NPC do mix (sem texto até o hover). Esses vão precisar de busca por template/âncora, não de OCR.
+Os que **não são texto** não podiam ser OCR, mas também deixaram de ser pixel cravado:
+
+| | como se localiza |
+|---|---|
+| chat aberto | a borda é uma **linha vermelha contínua e longa**; o orbe de vida também é vermelho, mas redondo, então a corrida por linha é curta. O que separa é o **comprimento da corrida em fração da largura**, não a posição |
+| botão play/pause | maior concentração de verde-ou-vermelho no canto superior esquerdo **do canvas**. Achou desktop em `(78,30)` (o cravado era `77,33`) e web em `(78,115)` |
+| NPC do mix | fração do canvas como **ponto de partida**, varredura em volta, e quem autoriza o clique continua sendo o OCR do nome no hover. O ponto confirmado fica guardado pra próxima |
+| painel de status, login, menu do jogo | fração da área cliente / do canvas |
+
+**Topo do canvas:** na aba do navegador, abas e barra de endereço ocupam ~85px no topo, e sem descontar isso a busca do play achava **favicon de aba**. Separar por brilho não funciona — a barra de abas do Chrome no tema escuro é tão escura quanto o jogo. O que funciona é ancorar no rótulo do minimapa, que o `Read-Map` já localiza: ele fica ~68px abaixo do topo do canvas no desktop e ~85px na web.
+
+**Onde o bot se recusa a chutar:** com o painel de status por cima do botão play, `Get-HelperState` devolve `unknown` em vez de um palpite — clicar no lugar errado é pior que não achar, e o `Start-Helper` já trata `unknown` esperando sem clicar.
+
+**Sobrou em pixel:** só o `$ClientEsperado`, que é a referência de calibração, não uma coordenada de leitura.
 
 ## Uso
 

@@ -1,4 +1,4 @@
-<#
+﻿<#
   MudinhoX RPA - loop: /k37 -> play (MU Helper) -> espera level 350 -> /resetar -> repete.
   Stats: distribui de 5k em 5k ate 32767, na ordem energia, agilidade, forca, vitalidade. Atributos cheios -> /darmr e entra de novo.
   Level parado (miss infinito) -> religa o helper. De vez em quando faz algo "humano". Captcha: resolve sozinho (compara imagens);
@@ -32,7 +32,6 @@ $TargetLevel   = 305     # level pra resetar. Nunca abaixo de $LevelMinReset (o 
                          # dois bracos rodaram em sequencia e nao intercalados, entao a comparacao nao era controlada.
                          # O que aquele A/B sugere e que alvo MENOR rende mais - o ciclo encurta mais do que os pontos
                          # por reset caem -, entao 305 deve render acima de 350. Da pra conferir no `pontos/h` do log.
-$PlayBtn       = @{ X = 77;   Y = 33 }                     # centro do botao play/pause (canto sup. esquerdo)
 $PollSec       = 6       # intervalo de leitura do level com o jogo na frente
 $PollNearSec   = 2       # perto do level alvo le a cada N seg: o level sobe ~150 entre leituras e o reset saia com 400 em vez de 350 (farm jogado fora)
 $PollNearFrom  = 0.82    # "perto" = a partir de N% do $TargetLevel
@@ -120,19 +119,30 @@ $KeyGapMs      = 40      # pausa entre uma tecla e a proxima
 $KeyClearMs    = 12      # backspaces pra limpar o chat (sao 30 seguidos, e so apagar: aguenta ser rapido)
 $ChatOpenMs    = 130     # espera a caixa de chat abrir antes de digitar
 $ChatSendMs    = 70      # espera em volta do Enter que envia
-$StatPanel     = @{ X = 0; Y = 0; W = 500; H = 760 }   # regiao do painel de status (C), que abre encostado na esquerda. Recortada e AMPLIADA antes do OCR
+                          # Regiao do painel de status (C), que abre encostado na ESQUERDA. Em FRACAO da area
+                          # cliente (era 500x760 em pixel). Largura 0.45 e nao 0.26 (o equivalente ao desktop): na web o painel
+                          # ocupa x 0.15-0.39, e cortar em 0.26 deixava o botao "Pontos: 244" de fora. Isto e so otimizacao: se o recorte nao pegar o painel,
+                          # o Ocr-Status cai pra tela inteira sozinho - por isso errar aqui custa tempo, nao leitura.
+$StatPanelFrac = @{ W = 0.45; H = 0.80 }
 $StatPanelScale = 2      # 2x: na resolucao nativa o OCR nao le o painel; em 3x tambem falha (imagem grande demais). Medido, nao chutado
 $StatMaxValue  = 32767   # atributo cheio (cap real do servidor). /darmr SO funciona com Forca, Agilidade, Vitalidade E Energia TODOS = 32767; abaixo disso o jogo recusa ("precisa 32767 em todos status")
 $StatStages    = @(1..([Math]::Floor(($StatMaxValue - 1) / $StatStep)) | % { $_ * $StatStep }) + $StatMaxValue   # 5000,10000,...,30000,32767
 $StatusKey     = 0x43    # C = janela de status
 $HotkeyHoldMs  = 150     # hotkey (C) segurada mais tempo que tecla de texto
-$LoginBtn      = @{ X = 960; YFromBottom = 69 }    # botao pra entrar com o personagem apos /darmr (centro embaixo). Antes disso procura o texto abaixo por OCR.
+                          # Fallback CEGO pra entrar com o personagem apos /darmr (centro embaixo), em fracao.
+                          # So e usado depois do OCR falhar, e nunca numa tela com $LoginDangerWords - 'CRIAR NOVA
+                          # CONTA' fica logo abaixo e um clique errado ali cria conta.
+$LoginBtnFrac  = @{ X = 0.50; YFromBottom = 0.068 }
                                           # Y medido a partir da BASE da area cliente (era Y=940 cravado, calibrado numa altura de 1009). Numa janela de outra altura o
                                           # clique cego escorregava - e logo ali embaixo mora o "CRIAR NOVA CONTA". Todo o resto do layout ja e ancorado no topo ou na base.
 $LoginWords    = 'Entrar|Conectar|Iniciar|Jogar|Selecionar|Enter|Start|Login'   # tela de selecao de PERSONAGEM
 $LoginServerWords = '(?i)server vip gold'   # tela de selecao de SERVIDOR: regex do botao a clicar (ex 'Server Principal'). Vazio = nao clica, avisa
 $LoginDangerWords = '(?i)(criar nova conta|create account|^sair$|delete)'   # se isso esta na tela, NUNCA clicar em coordenada chutada
-$ChatBox       = @{ X1 = 870; X2 = 1130; YFromBottomMin = 80; YFromBottomMax = 130 }   # bordas vermelhas da caixa de chat aberta. FAIXA, nao linha fixa: a caixa desloca alguns px conforme o layout
+                          # Caixa de chat aberta: bordas VERMELHAS em cima e embaixo. Tudo em FRACAO da area
+                          # cliente (era $ChatBox em pixel: X 870..1130, 80..130 da base - so valia em 1920x1009).
+                          # MinRun e o comprimento minimo da corrida vermelha CONTINUA, em fracao da largura: e
+                          # o que separa a borda (linha longa) do orbe de vida (redondo, corrida curta por linha).
+$ChatFaixa     = @{ X1 = 0.30; X2 = 0.70; Y1FromBottom = 0.20; Y2FromBottom = 0.05; MinRun = 0.06 }
 # Miss infinito. A METRICA DO PROPRIO BOT aponta 'stall' como 23-27% de TODO o tempo (113 disparos numa sessao),
 # e a maior parte disso e latencia de DETECCAO, nao a recuperacao. Por isso duas condicoes em vez de um relogio so:
 $StallReads    = 3       # N LEITURAS seguidas com o level identico. E o sinal forte, e imune a OCR: uma leitura que falhou nao entra na conta (antes ela empurrava o relogio como se o level estivesse parado)
@@ -231,8 +241,14 @@ $JitterPct     = 0.25    # varia +-25% os intervalos (stats, inventario, mensage
 # Mix de joias: inventario cheio -> /mixer -> clica no NPC -> "Mixar Joias" -> clica cada tipo em VERDE -> volta pro farm
 $MixCmd        = '/mixer'
 $MixNpcWords   = '(?i)^(lahap|mixador|mixer|goblin|joalheiro)'   # nome do NPC. So aparece com o mouse EM CIMA dele, entao serve de CONFIRMACAO do hover, nao de busca
-$MixNpcPos     = @{ X = 805; Y = 285 }   # onde o Lahap fica (area cliente), medido nos prints do usuario. Hover-Npc confirma pelo nome antes de clicar; se errar, ajuste com -TestNpc
-$MixNpcSweep   = 0, -45, 45, -90, 90   # se o nome nao aparecer na posicao exata, tenta esses deslocamentos (X e Y) em volta
+                          # Onde o Lahap fica, em FRACAO do CANVAS (era $MixNpcPos cravado em 805,285 - so valia
+                          # em 1920x1009). Fracao do CANVAS e nao da area cliente: na web a barra do navegador
+                          # empurra tudo pra baixo. So serve de PONTO DE PARTIDA - quem autoriza o clique e
+                          # sempre o OCR do nome no hover, e o ponto confirmado fica guardado pra proxima vez.
+$MixNpcFrac    = @{ X = 0.42; Y = 0.28 }
+$MixNpcSweep   = 0, -45, 45, -90, 90, -140, 140   # deslocamentos tentados em volta do ponto de partida. Mais
+                          # largo desde 12/09: o ponto agora e estimado por fracao, nao medido a dedo, entao a
+                          # varredura precisa cobrir o erro da estimativa.
 $MixNpcNameDy  = -70      # o nome aparece ~70px ACIMA do cursor; o OCR le so essa faixa (rapido)
 $MixMenuWords  = '(?i)^mixar$'   # botao "Mixar Joias" do modal do NPC. Ancora no "Mixar" sozinho (o texto de descricao e "mixar/dissolver"); entre os que casam, vale o MAIS DE BAIXO (o de cima e o titulo da janela)
 $MixJewels     = @(       # tipos da lista, na ordem; Pat = como o OCR pode ler o rotulo
@@ -269,7 +285,9 @@ $MixEveryMin   = 25      # ciclo NORMAL (reset/master reset): mixa a cada N min 
                          # Existe porque o aviso "inventario cheio" NUNCA foi lido: 0 ocorrencias no rpa.log inteiro, contra 68 pausas manuais suas pra mixar na mao.
                          # Custo medido: um mix leva 30-70s (ida pro /mixer, mix, warp de volta, play), ~3% do tempo a cada 25 min.
 $InvUsarMenu   = $true   # se a tecla nao abrir o inventario, tenta pelo MENU do jogo (botao de 3 barras no topo direito)
-$InvMenuBtn    = @{ X = 1888; Y = 23 }   # botao de 3 barras (menu) no canto superior direito, area cliente
+                          # Botao de 3 barras (menu do jogo), canto superior direito do CANVAS - em fracao, e do
+                          # canvas e nao da area cliente porque na web a barra do navegador empurra tudo pra baixo.
+$InvMenuFrac   = @{ X = 0.983; Y = 0.023 }
 $InvMenuClickDy = -45    # no menu, o item e um ICONE com o rotulo EMBAIXO: o OCR acha o texto, mas o clicavel esta ACIMA dele
 $InvMenuWords  = '(?i)^invent'   # item do menu que abre o inventario
 $InvMaxFalhas  = 3       # apos N falhas seguidas de abrir o inventario, desiste (nao fica apertando tecla desconhecida no personagem)
@@ -709,17 +727,27 @@ function Chat-Open($img){   # caixa de chat aberta = bordas vermelhas em cima e 
   # em 117-118 e 92-93 - a caixa desceu ~6px e as duas linhas fixas deram ZERO vermelho. Com isso Chat-Open dizia
   # "fechada" com a caixa aberta, o Close-Chat nao fechava, e o C do status virava LETRA dentro do chat.
   # Era a causa do "nao consegui ler o status" a sessao inteira. Agora varre a FAIXA e conta linhas vermelhas.
+  # 12/09: a FAIXA e a largura viraram FRACAO da area cliente. A borda nao e texto, entao nao ha OCR possivel -
+  # mas dava pra parar de cravar pixel. O que identifica a caixa e uma LINHA VERMELHA CONTINUA e longa: o orbe
+  # de vida tambem e vermelho, so que redondo, entao a corrida continua dele por linha e curta. E o comprimento
+  # da corrida, em fracao da largura, que separa os dois - nao a posicao.
   $own = -not $img; if($own){ $img = Capture-Raw }
-  $largura = $ChatBox.X2 - $ChatBox.X1; $linhas = 0
-  for($yb = $ChatBox.YFromBottomMax; $yb -ge $ChatBox.YFromBottomMin; $yb--){
-    $y = $img.Height - $yb
-    if($y -lt 0 -or $y -ge $img.Height){ continue }
-    $red = 0
-    for($x = $ChatBox.X1; $x -le $ChatBox.X2; $x += 4){   # passo 4: a borda e linha continua, nao precisa de todo pixel
-      $p = $img.GetPixel($x,$y); if($p.R -gt 150 -and $p.G -lt 100 -and $p.B -lt 100){ $red += 4 }
+  $linhas = 0
+  try {
+    $x1 = [int]($img.Width * $ChatFaixa.X1); $x2 = [int]($img.Width * $ChatFaixa.X2)
+    $yIni = [int]($img.Height * $ChatFaixa.Y1FromBottom); $yFim = [int]($img.Height * $ChatFaixa.Y2FromBottom)
+    $minRun = [int]($img.Width * $ChatFaixa.MinRun)
+    for($yb = $yIni; $yb -ge $yFim; $yb--){
+      $y = $img.Height - $yb
+      if($y -lt 0 -or $y -ge $img.Height){ continue }
+      $run = 0; $maior = 0
+      for($x = $x1; $x -le $x2 -and $x -lt $img.Width; $x += 4){   # passo 4: a borda e linha continua, nao precisa de todo pixel
+        $p = $img.GetPixel($x,$y)
+        if($p.R -gt 150 -and $p.G -lt 100 -and $p.B -lt 100){ $run += 4; if($run -gt $maior){ $maior = $run } } else { $run = 0 }
+      }
+      if($maior -ge $minRun){ $linhas++ }
     }
-    if($red -gt $largura/2){ $linhas++ }
-  }
+  } catch { $linhas = 0 }
   if($own){ $img.Dispose() }
   $linhas -ge 2   # borda de cima + borda de baixo
 }
@@ -1063,14 +1091,80 @@ function Read-Level($img){
   if($own){ $img.Dispose() }
   $out
 }
-function Get-HelperState($img){   # pausa = barras vermelhas; play = triangulo verde. Conta pixels num quadrado em volta do botao
-  $own = -not $img; if($own){ $img = Capture-Game }; if(-not $img){ return 'unknown' }; $red = 0; $green = 0
-  for($x = $PlayBtn.X-11; $x -le $PlayBtn.X+11; $x++){ for($y = $PlayBtn.Y-13; $y -le $PlayBtn.Y+13; $y++){
-    $p = $img.GetPixel($x,$y)
-    if($p.R -gt 120 -and $p.G -lt 100 -and $p.B -lt 100){ $red++ } elseif($p.G -gt 140 -and $p.R -lt 140 -and $p.B -lt 140){ $green++ }
-  } }
+# ---------- BOTAO PLAY/PAUSE sem coordenada cravada ----------
+# Nao e texto: e um icone (triangulo VERDE = parado, barras VERMELHAS = rodando). OCR nao serve. Mas da pra
+# parar de cravar o ponto: o botao e a unica coisa fortemente verde OU vermelha no CANTO SUPERIOR ESQUERDO,
+# e e pequeno. Entao varre esse canto (em FRACAO da area cliente) procurando a maior concentracao, guarda onde
+# achou e reusa - mesma ideia da caixa do level.
+$PlayCanto     = @{ X = 0.20; Y = 0.35 }   # fracao da area cliente varrida no canto sup. esquerdo. Generoso de
+                                           # proposito: na web a barra do navegador empurra o canvas pra baixo
+                                           # (o botao sai de y=33 no desktop pra ~116 na aba do Chrome).
+$PlayCell      = 12                        # lado do quadradinho agregador, em px
+$script:playBox = $null
+$PlayAcimaDoMapa = 80   # px que o topo do canvas fica ACIMA do rotulo do minimapa
+function Topo-Do-Canvas($img){   # primeira linha que e JOGO, nao enfeite do navegador
+  # No cliente desktop a area cliente E o jogo: 0. Na aba do navegador, abas + barra de endereco ocupam o topo
+  # (~85px) e a busca do play sem isso acha FAVICON colorido de aba.
+  # Separar por brilho NAO funciona: a barra de abas do Chrome no tema escuro e tao escura quanto o jogo.
+  # O que funciona e ancorar no rotulo do minimapa, que o Read-Map ja localiza: ele fica ~68px abaixo do topo do
+  # canvas no desktop e ~85px na web. Descontar 80 poe o corte logo acima do rotulo nos dois casos.
+  # Sem rotulo conhecido ainda, devolve 0 - que e o certo pro desktop e so deixa a busca mais larga na web.
+  if($script:mapaBox){ return [Math]::Max(0, [int]$script:mapaBox.Y - $PlayAcimaDoMapa) }
+  0
+}
+function Achar-Botao-Play($img){   # devolve @{X;Y;Estado} do centro do botao, ou $null
+  $y0 = Topo-Do-Canvas $img
+  $w = [int]($img.Width * $PlayCanto.X); $h = $y0 + [int](($img.Height - $y0) * $PlayCanto.Y)
+  if($w -le $PlayCell -or ($h - $y0) -le $PlayCell){ return $null }
+  $melhor = $null
+  for($cy = $y0; $cy -lt ($h - $PlayCell); $cy += [int]($PlayCell/2)){
+    for($cx = 0; $cx -lt ($w - $PlayCell); $cx += [int]($PlayCell/2)){
+      $r = 0; $g = 0
+      for($x = $cx; $x -lt ($cx + $PlayCell); $x += 2){ for($y = $cy; $y -lt ($cy + $PlayCell); $y += 2){
+        $p = $img.GetPixel($x,$y)
+        if($p.R -gt 120 -and $p.G -lt 100 -and $p.B -lt 100){ $r++ } elseif($p.G -gt 140 -and $p.R -lt 140 -and $p.B -lt 140){ $g++ }
+      } }
+      # Exigente de proposito: o quadradinho tem 36 amostras (12x12 passo 2) e o botao e SOLIDO, entao enche
+      # quase tudo. Limiar baixo pegava barra de vida e favicon. Clicar no lugar errado e pior que nao achar -
+      # 'unknown' o Start-Helper ja trata (espera sem clicar).
+      $tot = [Math]::Max($r,$g)
+      if($tot -ge 20 -and (-not $melhor -or $tot -gt $melhor.Tot)){
+        $melhor = @{ X = $cx + [int]($PlayCell/2); Y = $cy + [int]($PlayCell/2); Tot = $tot
+                     Estado = $(if($r -ge $g){ 'running' } else { 'stopped' }) }
+      }
+    }
+  }
+  $melhor
+}
+function Get-HelperState($img){   # pausa = barras vermelhas; play = triangulo verde
+  $own = -not $img; if($own){ $img = Capture-Game }; if(-not $img){ return 'unknown' }
+  $out = 'unknown'
+  try {
+    # com a caixa ja conhecida, conta so ali - barato, igual ao que era com o $PlayBtn cravado
+    if($script:playBox){
+      $b = $script:playBox; $red = 0; $green = 0
+      for($x = $b.X-11; $x -le $b.X+11; $x++){ for($y = $b.Y-13; $y -le $b.Y+13; $y++){
+        if($x -lt 0 -or $y -lt 0 -or $x -ge $img.Width -or $y -ge $img.Height){ continue }
+        $p = $img.GetPixel($x,$y)
+        if($p.R -gt 120 -and $p.G -lt 100 -and $p.B -lt 100){ $red++ } elseif($p.G -gt 140 -and $p.R -lt 140 -and $p.B -lt 140){ $green++ }
+      } }
+      if($red -gt 10){ $out = 'running' } elseif($green -gt 10){ $out = 'stopped' }
+      if($out -eq 'unknown'){ $script:playBox = $null }   # sumiu dali: procura de novo
+    }
+    if($out -eq 'unknown'){
+      $achou = Achar-Botao-Play $img
+      if($achou){
+        $script:playBox = @{ X = $achou.X; Y = $achou.Y }; $out = $achou.Estado
+        Log "play: botao localizado em ($($achou.X),$($achou.Y)) - estado '$out'"
+      }
+    }
+  } catch { $out = 'unknown' }
   if($own){ $img.Dispose() }
-  if($red -gt 10){ 'running' } elseif($green -gt 10){ 'stopped' } else { 'unknown' }
+  $out
+}
+function Play-XY {   # onde clicar pra ligar/desligar o helper. Sem caixa conhecida ainda, procura uma vez.
+  if(-not $script:playBox){ $img = Capture-Game; if($img){ $null = Get-HelperState $img; $img.Dispose() } }
+  if($script:playBox){ $script:playBox } else { $null }
 }
 
 # ---------- captcha ----------
@@ -1434,7 +1528,7 @@ function Check-Progress([int]$lvl, $img){   # level parado: se saiu do spot, re-
   Tag-Ciclo 'stall'
   $null = Focus-Game   # o Hold-Focus nao traz mais o jogo sozinho (ver $NoFocusRead) e o ESC abaixo precisa dele
   Close-Popup   # se o que travou foi uma janela/modal aberta por acidente, andar nao resolve - ESC resolve
-  $null = Click-Client $PlayBtn.X $PlayBtn.Y; Wait 2   # pausa o helper
+  $pb = Play-XY; if($pb){ $null = Click-Client $pb.X $pb.Y }; Wait 2   # pausa o helper
   Walk-Forward                                          # anda um pouco (desbuga o miss infinito)
   $null = Start-Helper; $true                           # religa o ataque (descarta o retorno dele: quem responde aqui e o $true)
 }
@@ -1488,8 +1582,9 @@ function Ocr-Status($img){
   # 100 "nao consegui ler o status" e dos "nao li Vit"/"Pts=-1" do log, nao a tecla C.
   # Ampliar 3x volta a falhar (imagem grande demais), entao 2x nao e chute: e o unico que funciona.
   $r = @()
-  if($img.Width -ge $StatPanel.W -and $img.Height -ge $StatPanel.H){
-    $c = Crop-Bitmap $img $StatPanel.X $StatPanel.Y $StatPanel.W $StatPanel.H $StatPanelScale
+  $pw = [int]($img.Width * $StatPanelFrac.W); $ph = [int]($img.Height * $StatPanelFrac.H)
+  if($pw -gt 0 -and $ph -gt 0){
+    $c = Crop-Bitmap $img 0 0 $pw $ph $StatPanelScale
     $r = @((Ocr-Bitmap $c).Lines | % { $_.Words }); $c.Dispose()
   }
   # Fallback pra tela inteira: se o painel abrir noutro lugar (as janelas deste cliente nao tem posicao fixa -
@@ -1606,7 +1701,7 @@ function Enter-Game([string]$motivo){   # clica pra entrar com o personagem ate 
     }
     if(-not $btn){   # nao reconheci nada: pode ser so tela de loading. So usa a coordenada de config apos insistir
       if($i -lt 3){ Log "tela de login: nao achei o botao ainda, esperando"; Wait 5; continue }
-      $btn = @{ X = $LoginBtn.X; Y = $alturaCli - $LoginBtn.YFromBottom }
+      $btn = @{ X = [int](($(if($img){$img.Width}else{$ClientEsperado.W})) * $LoginBtnFrac.X); Y = $alturaCli - [int]($alturaCli * $LoginBtnFrac.YFromBottom) }
     }
     Log "tela de login: clicando ($($btn.X),$($btn.Y))"; $null = Click-Client $btn.X $btn.Y; Wait 8
   }
@@ -1720,7 +1815,8 @@ function Start-Helper {   # liga o helper e CONFIRMA. Para de clicar apos PlayTr
     $st = Get-HelperState
     if($st -eq 'running'){ if($i){ Log "helper rodando" }; return $true }
     if($st -eq 'stopped'){
-      Log "clicando play ($($i+1)/$PlayTries)"; $null = Click-Client $PlayBtn.X $PlayBtn.Y
+      $pb = Play-XY; if(-not $pb){ Log "play: nao achei o botao no canto superior esquerdo"; break }
+      Log "clicando play ($($i+1)/$PlayTries) em ($($pb.X),$($pb.Y))"; $null = Click-Client $pb.X $pb.Y
       # Espera ATIVA dentro da mesma janela de 2.5s: o helper costuma ligar na hora, e dormir os 2.5s inteiros
       # custava ~2s por ciclo (~42s por master reset). O piso ANTES do 2o clique continua igual - o play e um
       # ALTERNADOR, e clicar de novo cedo demais DESLIGA o helper. Era so pra isso que o sleep cheio existia.
@@ -1785,7 +1881,10 @@ function Abrir-Inv-PeloMenu {   # caminho alternativo: a tecla configurada nao a
   # menu do jogo (botao de 3 barras no topo direito) tem um item "Inventario". Mesmo padrao do NPC do mix:
   # clica, CONFIRMA por OCR que o menu abriu, so entao clica no item. Nunca clica no escuro.
   Log "inventario: tentando pelo menu do jogo (a tecla nao abriu)"
-  $null = Click-Client $InvMenuBtn.X $InvMenuBtn.Y -KeepFocus
+  # posicao do botao de menu em fracao do CANVAS (o topo do canvas vem do rotulo do minimapa, ver Topo-Do-Canvas)
+  $ic = Capture-Raw; $iy0 = Topo-Do-Canvas $ic
+  $mx = [int]($ic.Width * $InvMenuFrac.X); $my = $iy0 + [int](($ic.Height - $iy0) * $InvMenuFrac.Y); $ic.Dispose()
+  $null = Click-Client $mx $my -KeepFocus
   # Achar o proprio item "Inventario" ja prova que o menu abriu - e procurar ate achar cobre o tempo variavel de desenho
   $item = Achar-Ate $InvMenuWords $MixConfirmTentativas
   if(-not $item){
@@ -1844,17 +1943,31 @@ function Inv-Free {   # abre o inventario (V), conta celulas livres, fecha. -1 s
   $script:invFalhas = 0
   @($map | % { $_ } | ? { -not $_ }).Count
 }
-function Hover-Npc {   # passa o mouse por $MixNpcPos (e uns vizinhos) ate o nome do NPC aparecer. Devolve o ponto confirmado ou $null. Chamar com o jogo na frente
-  if(-not $MixNpcPos){ return $null }
+$script:npcPos = $null   # onde o Lahap foi confirmado da ultima vez (por OCR). Vale mais que qualquer chute
+function Hover-Npc {   # passa o mouse ate o nome do NPC aparecer. Devolve o ponto confirmado ou $null. Chamar com o jogo na frente
+  # SEM coordenada cravada. Tres fontes, nesta ordem:
+  #  1. onde ele foi CONFIRMADO por OCR da ultima vez (o mapa do /mixer nao muda, entao isso acerta sempre depois da 1a vez)
+  #  2. fracao do CANVAS (nao da area cliente: na web a barra do navegador empurra tudo pra baixo)
+  #  3. a varredura em volta, que ja existia
+  # O nome do NPC so aparece com o mouse EM CIMA dele, entao nao da pra procurar por texto antes de chegar la -
+  # por isso aqui e varredura, e nao OCR direto. Mas nada disso clica: quem autoriza o clique e o OCR do nome.
   $o = Client-Origin
+  $img0 = Capture-Raw; $y0 = Topo-Do-Canvas $img0; $cw = $img0.Width; $ch = $img0.Height - $y0; $img0.Dispose()
+  $base = if($script:npcPos){ $script:npcPos } else { @{ X = [int]($cw * $MixNpcFrac.X); Y = $y0 + [int]($ch * $MixNpcFrac.Y) } }
   foreach($dy in $MixNpcSweep){ foreach($dx in $MixNpcSweep){
-    $x = $MixNpcPos.X + $dx; $y = $MixNpcPos.Y + $dy
+    $x = $base.X + $dx; $y = $base.Y + $dy
+    if($x -lt 0 -or $y -lt $y0 -or $x -ge $cw -or $y -ge ($y0 + $ch)){ continue }
     [W]::SetCursorPos($o.X + $x, $o.Y + $y) | Out-Null; Start-Sleep -Milliseconds 350
     $img = Capture-Raw
     $c = Crop-Bitmap $img ([Math]::Max(0,$x-150)) ([Math]::Max(0,$y+$MixNpcNameDy-25)) 300 60 2   # o nome so aparece com o mouse em cima: le so a faixa acima do cursor
     $txt = (Ocr-Bitmap $c).Text; $c.Dispose(); $img.Dispose()
-    if($txt -match $MixNpcWords){ Log "mix: NPC confirmado em ($x,$y) - OCR leu '$($txt.Trim())'"; return @{ X = $x; Y = $y } }
+    if($txt -match $MixNpcWords){
+      $script:npcPos = @{ X = $x; Y = $y }   # confirmado por OCR: da proxima vez comeca daqui e acerta de primeira
+      Log "mix: NPC confirmado em ($x,$y) - OCR leu '$($txt.Trim())'"
+      return $script:npcPos
+    }
   } }
+  $script:npcPos = $null   # nao achou: nao insiste no ponto velho na proxima
   $null
 }
 function Tirar-Cursor {   # o ponteiro do mouse APARECE na captura e apaga a palavra debaixo dele no OCR.
@@ -1883,7 +1996,7 @@ function Lista-Mix-Aberta($words){   # a lista de joias esta na tela? (o modal f
 function Abrir-Modal-Mix([int]$volta){   # NPC -> botao "Mixar Joias". $true se abriu
   $npc = Hover-Npc
   if(-not $npc){
-    if($volta -eq 0){ Notify "MudinhoX" "Cheguei no $MixCmd mas o NPC nao apareceu em volta de ($($MixNpcPos.X),$($MixNpcPos.Y))." }
+    if($volta -eq 0){ Notify "MudinhoX" "Cheguei no $MixCmd mas o NPC nao apareceu na varredura." }
     else { Log "mix: nao achei o NPC pra reabrir o modal, encerrando" }
     return $false
   }
@@ -1901,7 +2014,6 @@ function Abrir-Modal-Mix([int]$volta){   # NPC -> botao "Mixar Joias". $true se 
   $true
 }
 function Mix-Jewels {   # /mixer -> NPC -> "Mixar Joias" -> mixa TODAS as opcoes verdes (reabrindo o modal a cada uma) ate sobrar so vermelho
-  if(-not $MixNpcPos){ Notify "MudinhoX" "Nao sei onde o NPC do mix fica: rode -TestNpc e preencha `$MixNpcPos."; return $false }
   Tag-Ciclo 'mix'; Log "mix: indo pro $MixCmd"
   # O return mudo daqui escondia a falha: o gatilho por tempo disparava, o comando morria e o log nao dizia nada.
   if(-not (Send-Chat $MixCmd)){ Log "mix: nao consegui mandar $MixCmd (captcha na tela? jogo sem foco?) - tento de novo no proximo tick"; return $false }
@@ -2241,7 +2353,7 @@ if($TestNpc){   # de /mixer no jogo e deixe o mouse EM CIMA do Lahap: mostra a c
     Log ("  cursor ({0},{1})  OCR acima do cursor: '{2}'  {3}" -f $x,$y,$txt,$ok)
     Start-Sleep 1
   }
-  Log "TestNpc: use a coordenada que apareceu com CONFERE em `$MixNpcPos = @{ X=..; Y=.. }"
+  Log "TestNpc: o bot NAO usa mais coordenada fixa aqui - ele estima por fracao do canvas, varre em volta e confirma pelo OCR do nome. Este teste serve pra ver se o nome aparece no hover."
   exit
 }
 function Run-Preflight([bool]$comSpot){   # valida os subsistemas de leitura no jogo de verdade. Devolve quantas falhas.
@@ -2370,8 +2482,32 @@ if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guard
     $i = Fx $fx
     if($i){ Ok "Chat-Open detecta a caixa aberta ($fx)" (Chat-Open $i) 'disse fechada com a caixa aberta (o C viraria letra no chat)'; $i.Dispose() }
   }
-  $i = Fx 'tela_servidor.png'
-  if($i){ Ok 'Chat-Open nao inventa caixa onde nao tem' (-not (Chat-Open $i)) 'achou chat aberto na tela de servidor'; $i.Dispose() }
+  # FALSO POSITIVO e o erro caro aqui: se Chat-Open mente "aberta", o Close-Chat manda Enter e ABRE um chat que
+  # nao estava aberto - e dai as teclas viram letra, que foi o que cegou o bot por uma sessao inteira.
+  # As capturas web sao o teste novo: o orbe de vida vermelho continua la, so que agora noutro tamanho e posicao.
+  foreach($fx in 'tela_servidor.png','web_hud.png','web_status_ABERTO.png','lorencia_modal_mix.png','status_ABERTO.png'){
+    $i = Fx $fx
+    if($i){ Ok "Chat-Open nao inventa caixa ($fx)" (-not (Chat-Open $i)) 'disse aberta com o chat fechado - o Enter do Close-Chat abriria um de verdade'; $i.Dispose() }
+  }
+  # BOTAO PLAY sem coordenada: nao e texto (triangulo verde / barras vermelhas), entao a busca e pela maior
+  # concentracao de verde-ou-vermelho no canto superior esquerdo, em fracao da area cliente. Precisa achar nos
+  # dois layouts - na web a barra do navegador empurra o botao de y=33 pra ~116.
+  # O topo do canvas e ancorado no rotulo do minimapa, entao Read-Map roda ANTES - e o que acontece em producao
+  # (o bot le o mapa a cada warp e no Check-Progress). status_ABERTO tem o painel TAPANDO o botao: ali o certo e
+  # devolver 'unknown', nao um palpite - clicar no lugar errado e pior que nao achar.
+  foreach($pl in @(@{ F='lorencia_modal_mix.png'; E='achou' },
+                   @{ F='web_hud.png';            E='achou' },
+                   @{ F='status_ABERTO.png';      E='unknown' })){
+    $i = Fx $pl.F
+    if(-not $i){ continue }
+    $script:playBox = $null; $script:mapaBox = $null
+    $null = Read-Map $i                     # ancora o topo do canvas
+    $st = Get-HelperState $i
+    if($pl.E -eq 'achou'){ Ok "play: acha o botao e le o estado ($($pl.F))" ($st -in 'running','stopped') "devolveu '$st'" }
+    else { Ok "play: nao chuta com o botao tapado ($($pl.F))" ($st -eq 'unknown') "devolveu '$st' com o painel por cima do botao" }
+    $script:playBox = $null; $script:mapaBox = $null
+    $i.Dispose()
+  }
   $i = Fx 'tela_servidor.png'
   if($i){
     $b = Login-Btn $i
@@ -2548,7 +2684,7 @@ Bater-Heartbeat
 Log $(if($Slot -gt 0){ "iniciando (slot $Slot, spot $WarpCmd, arquivos rpa$Sfx.log / estado$Sfx.txt)" } else { 'iniciando' })
 try {   # preflight no start: 10s conferindo tudo evita a noite inteira perdida por algo obvio. Nao BLOQUEIA (o spot nem e checado, o bot ainda vai warpar)
   # JANELA MENOR QUE A CALIBRACAO = para na hora, com instrucao. Nao e frescura de preflight: TODA coordenada do
-  # bot ainda e fixa em $ClientEsperado ($PlayBtn, $MixNpcPos, a grade do inventario...). Numa janela menor o
+  # bot ainda depende do $ClientEsperado (a grade do inventario, a do captcha). Numa janela menor o
   # Read-Level vai ler em x=1080 de uma tela de 958 e o GetPixel estoura - foi o que matou os 4 slots em 08/09,
   # quando os clientes foram reduzidos pra 958x484 pra caberem os quatro no monitor. O erro que aparecia era
   # "O parametro deve ser positivo e < Width", que nao diz nada sobre o tamanho da janela.

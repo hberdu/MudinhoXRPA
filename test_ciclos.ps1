@@ -109,7 +109,9 @@ function Close-Popup { }
 function Click-Client($x,$y){ $script:destravouStall++; $true }
 function Walk-Forward { }
 function Wait([double]$s){ }
-$PlayBtn = @{ X = 77; Y = 33 }
+# O botao play nao tem mais coordenada fixa: o Play-XY procura o icone no canto do canvas e devolve onde achou.
+# Aqui devolve um ponto qualquer - o que este teste mede e o DETECTOR de miss infinito, nao onde se clica.
+function Play-XY { @{ X = 77; Y = 33 } }
 if($src -notmatch '(?s)(function Check-Progress.*?\r?\n\})'){ throw "nao achei a Check-Progress" }
 . ([scriptblock]::Create($Matches[1]))
 
