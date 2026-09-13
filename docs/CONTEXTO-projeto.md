@@ -397,3 +397,31 @@ stats: ALERTA - 32922 pontos sobrando (limite 10000) e nao consigo gastar nenhum
 - **O lint pagou o proprio custo aqui**: `Jit (if($x){ $a } else { $b })` parseia mas explode em runtime (o
   PowerShell trata `if` dentro de parenteses como nome de comando). O `test_lint.ps1` pegou antes de rodar:
   `COMANDO INEXISTENTE linha 889: 'if'`.
+
+## 2026-09-01 15:00 - o que sobrou depois dos consertos (sessao 13:49-15:01)
+
+A culpa dos ciclos lentos mudou de dono. Antes: `reset 14%, status 14%, ? 9%`. Depois:
+`? 14%, status 5%, captcha 2-3%` e a perda total caiu de 38% pra 22%. Ou seja: **o `?` virou o maior custo**.
+
+Rastreei os ciclos sem etiqueta (236s, 219s, 216s, 216s contra mediana de 89-111s) ate os warmups em Lost Tower.
+Dentro deles, o desperdicio real:
+
+- **149 das 264 leituras de status (56%) nao renderam UM comando.** Mediana de 556 pontos disponiveis - abaixo
+  do piso. Cada leitura abre a janela C, rouba o foco e gasta ~3s pra descobrir que nao da pra gastar nada.
+  O portao "so rele se o level mudou" nao pega esse caso: no warmup o level sobe o tempo todo, so que rende
+  poucos pontos por level.
+- Correcao: **recuo progressivo**. Leitura que nao rende comando dobra o intervalo (15s, 30s, 60s, teto de
+  `$StatMaxSec`); a primeira leitura util zera o recuo. Perto do cap o teto e curto (`$StatEveryNearSec * 4`),
+  porque la a pressa vale mais que o foco. Regressao no `test_ciclos.ps1` com os quatro casos.
+- **23 toasts iguais em 5,5 minutos** (o travamento das 14:49-14:55, mesmo alerta repetido). Toast repetido
+  treina o usuario a ignorar toast. `Notify-Once <chave>` re-avisa no maximo a cada `$RenotifySec` por assunto;
+  o `Log` continua saindo toda vez, que e o que serve pra diagnostico depois.
+- **27 linhas iguais de "evento dos dragoes no chat"** em ~1h (o servidor repete o aviso). Mesma logica.
+- **Modos de teste agora escrevem em `testes.log`, nao no `rpa.log`.** Cada `-TestVisao` despejava ~30 linhas de
+  "OK ..." no meio do log do bot. Como TODO bug serio deste projeto foi achado contando linhas do `rpa.log`,
+  poluir o arquivo com as proprias verificacoes atrapalha o unico instrumento de diagnostico que existe aqui.
+
+Confirmado no mesmo log, sobre as correcoes anteriores: **MR #1 saiu limpo** (`/darmr` -> tela de login ->
+re-entrada -> warmup em Lost Tower, sem falha de warp), `reset nao aconteceu` caiu pra **1 em 198 comandos**, e
+o auto-tune fechou (`350=175938 vs 380=272925 -> alvo 380`), com o `estado.txt` retomando `alvo 380` no restart
+das 15:04.

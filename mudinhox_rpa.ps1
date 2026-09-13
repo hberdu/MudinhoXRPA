@@ -80,7 +80,9 @@ $MapLabel      = @{ X = 1690; Y = 68; W = 230; H = 30 }   # rotulo do minimapa
 $WarpTries     = 4       # reenvia o comando de warp ate N vezes se o mapa nao mudar, depois avisa e segue
 $PlayTries     = 3       # clica no play ate N vezes; se nao ligar, para de clicar (nao insiste cego)
 $HumanMinSec   = 120; $HumanMaxSec = 420   # a cada X seg (aleatorio) faz algo "humano": anda um pouco, abre/fecha janela, mexe o mouse
-$LogFile       = Join-Path $PSScriptRoot 'rpa.log'
+# Modos de teste escrevem em OUTRO arquivo. Analisar o rpa.log e como todo bug serio deste projeto foi achado,
+# e cada -TestVisao despejava ~30 linhas de "OK ..." no meio do log do bot, quebrando as contagens.
+$LogFile       = Join-Path $PSScriptRoot $(if($Check -or $TestImage -or $TestStatus -or $TestInv -or $TestMix -or $TestNpc -or $TestGold -or $TestVisao -or $TestStatMin){ 'testes.log' } else { 'rpa.log' })
 $StopFile      = Join-Path $PSScriptRoot 'stop.flag'
 $HeartbeatFile = Join-Path $PSScriptRoot 'heartbeat.txt'   # o bot bate aqui a cada volta; o watchdog externo relanca se ficar velho
 $AtivoGapMax   = 120     # buraco maior que N seg entre voltas = o bot esteve PARADO; nao conta como tempo ativo nas metricas
@@ -743,6 +745,16 @@ function Handle-Captcha($img){   # $true se captcha esta na tela (tentou resolve
 }
 
 # ---------- notificacao ----------
+function Notify-Once([string]$chave,[string]$title,[string]$msg){
+  # Toast repetido treina o usuario a ignorar toast. No log de 14:49-14:55 o mesmo alerta saiu 23 vezes em 5,5
+  # minutos - 23 toasts com som de alarme pro MESMO problema. Aqui cada assunto ($chave) so re-avisa a cada
+  # $RenotifySec; o Log continua saindo toda vez, que e o que serve pra diagnostico depois.
+  if(-not $script:avisos){ $script:avisos = @{} }
+  $ultimo = $script:avisos[$chave]
+  if($ultimo -and ((Get-Date) - $ultimo).TotalSeconds -lt $RenotifySec){ Log "AVISO ($chave, ja notificado): $msg"; return }
+  $script:avisos[$chave] = Get-Date
+  Notify $title $msg
+}
 function Notify([string]$title,[string]$msg){
   Log "NOTIFY: $title - $msg"
   try {
@@ -839,8 +851,9 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
     $p = [int]$st['Pts']; $script:ptsLeft = $p
     # O jogo SO mostra a linha "Pontos" quando ha pontos a distribuir (o print do painel confirma: Forca/Agilidade/
     # Vitalidade/Energia aparecem, "Pontos" nao). Entao Pts=-1 quase sempre significa ZERO, nao erro de leitura.
-    if($p -lt 0){ Log "stats: F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) - sem linha de Pontos (0 a distribuir)"; return }
-    if($p -lt $StatMinAvail){ return }   # nada relevante a distribuir agora
+    # Zero ponto tambem e leitura que nao rendeu nada: entra no mesmo recuo (foram 84 destas no log anterior).
+    if($p -lt 0){ Log "stats: F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) - sem linha de Pontos (0 a distribuir)"; $script:statVazias++; return }
+    if($p -lt $StatMinAvail){ $script:statVazias++; return }   # nada relevante a distribuir agora
     if($p -eq $prevP){ $stuck++ } else { $stuck = 0 }; $prevP = $p
     if($stuck -ge 2){ Log "stats: $p pontos nao baixam (faltam $($script:ptsNeeded) pontos pro cap). Parei pra nao repetir a toa."; return }
     $stage = Stat-Stage $st
@@ -856,13 +869,15 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
         if($encalhado.Count){
           $det = ($encalhado | % { "$_ falta $($StatMaxValue - [int]$st[$_])" }) -join ', '
           Log "stats: $det - vao menor que $StatMinAgi, nenhum comando de chat fecha isso. Abra o status (C) e clique no '+' desse atributo."
-          Notify "MudinhoX" "Trava do /darmr: $det. Abra o status (C) e clique no '+' desse atributo - o chat nao consegue fechar vao tao pequeno."
-        } else { Notify "MudinhoX" "$p pontos parados e nao consigo distribuir. Da uma olhada." }
+          Notify-Once 'stat-encalhado' "MudinhoX" "Trava do /darmr: $det. Abra o status (C) e clique no '+' desse atributo - o chat nao fecha vao tao pequeno."
+        } else { Notify-Once 'stat-parado' "MudinhoX" "$p pontos parados e nao consigo distribuir. Da uma olhada." }
       }
       else { Log "stats: nada a distribuir agora ($p pontos; minimo $StatMinCmd por comando)" }
+      $script:statVazias++   # leitura que nao rendeu comando: da proxima vez espera mais (ver Tick-Stats)
       return
     }
     Log "stats: plano ($($plano.Count) comandos): $($plano -join ' | ')"
+    $script:statVazias = 0   # rendeu comando: volta a ler no ritmo rapido
     foreach($cmd in $plano){   # acumula pra metrica de pontos/h e marca que houve progresso
       if($script:stop -or -not (Send-Chat $cmd)){ break }
       $script:ptsSent += [int](($cmd -split " ")[1]); $script:ptsLastGain = Get-Date; $script:semProgresso = 0
@@ -873,12 +888,17 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
 # Le o status quando ha MOTIVO pra ler. Pontos so vem de subir de level - com o level parado, abrir a janela
 # de novo so custa: rouba o foco, gasta 2-3s e loga "0 a distribuir". No log foram 84 leituras assim.
 # O teto de tempo continua existindo porque o level as vezes nao e legivel (OCR) e nao da pra confiar so nele.
-$script:statLvlLast = -1; $script:statMax = Get-Date; $script:pertoDoMax = $false
+$script:statLvlLast = -1; $script:statMax = Get-Date; $script:pertoDoMax = $false; $script:statVazias = 0
 function Tick-Stats {   # so roda enquanto upa (nunca durante captcha)
   if((Get-Date) -lt $script:statDue){ return }
   # Na reta final o portao do level nao vale: com os 4 atributos perto do cap, o level pode nem subir mais e sao
   # justamente os ultimos pontos que liberam o /darmr. Entao la ele le rapido e sempre.
-  $intervalo = if($script:pertoDoMax){ $StatEveryNearSec } else { $StatEverySec }
+  $base = if($script:pertoDoMax){ $StatEveryNearSec } else { $StatEverySec }
+  # Recuo progressivo: 149 das 264 leituras da sessao (56%) nao renderam UM comando - mediana de 556 pontos,
+  # abaixo do piso. Cada uma abre a janela C, rouba o foco e gasta ~3s pra descobrir que nao da pra gastar nada.
+  # Depois de N leituras vazias seguidas o intervalo dobra, ate o teto; a primeira leitura util zera o recuo.
+  $teto = if($script:pertoDoMax){ $StatEveryNearSec * 4 } else { $StatMaxSec }   # perto do cap o recuo e curto: la a pressa vale
+  $intervalo = [Math]::Min($teto, $base * [Math]::Pow(2, [Math]::Min($script:statVazias, 5)))
   if(-not $script:pertoDoMax){
     $mesmoLevel = ($null -ne $script:lvlPrev -and $script:lvlPrev -eq $script:statLvlLast)
     if($mesmoLevel -and (Get-Date) -lt $script:statMax){ $script:statDue = (Get-Date).AddSeconds((Jit $intervalo)); return }
@@ -1492,7 +1512,12 @@ function Tick-Msgs($img){   # le as mensagens do jogo de vez em quando. A caca a
   $script:msgDue = (Get-Date).AddSeconds((Jit $MsgCheckSec))
   $m = Read-Msgs $img
   if(-not $m){ return }
-  if($m -match $MsgGoldWords){ Log "evento dos dragoes no chat (use o botao DRAGOES DOURADOS se quiser ir)" }
+  # O servidor repete o aviso do evento; no log foram 27 linhas iguais em ~1h. Loga uma vez por $RenotifySec.
+  if($m -match $MsgGoldWords){
+    if(-not $script:goldAviso -or ((Get-Date) - $script:goldAviso).TotalSeconds -ge $RenotifySec){
+      $script:goldAviso = Get-Date; Log "evento dos dragoes no chat (use o botao DRAGOES DOURADOS se quiser ir)"
+    }
+  }
   elseif($m -match $MsgInvWords){ Log "jogo avisou inventario cheio -> vou mixar"; $script:mixNow = $true }
 }
 $script:joiasMix = 0; $script:joiasCiclos = 0

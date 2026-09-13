@@ -82,5 +82,17 @@ $script:statDue = Get-Date; Tick-Stats
 Chk 'e continua lendo' $script:chamadas 6
 $script:pertoDoMax = $false; $script:statDue = Get-Date; Tick-Stats
 Chk 'longe do maximo volta a respeitar o level' $script:chamadas 6
+# recuo progressivo: leitura que nao rende comando espaca a proxima (56% das leituras do log eram assim)
+$StatMaxSec = 90
+$script:pertoDoMax = $false; $script:statVazias = 0; $script:lvlPrev = 500; $script:statLvlLast = -1
+$script:statDue = Get-Date; Tick-Stats
+Chk 'sem leituras vazias, intervalo base' ([int]($script:statDue - (Get-Date)).TotalSeconds) 15
+$script:statVazias = 3; $script:statDue = Get-Date; $script:lvlPrev = 501; Tick-Stats
+Chk '3 vazias seguidas: 15s vira 120s, cortado no teto de 90s' ([int]($script:statDue - (Get-Date)).TotalSeconds) 90
+$script:statVazias = 1; $script:statDue = Get-Date; $script:lvlPrev = 502; Tick-Stats
+Chk '1 vazia: dobra pra 30s' ([int]($script:statDue - (Get-Date)).TotalSeconds) 30
+# perto do maximo o recuo e curto: la os ultimos pontos e que liberam o /darmr
+$script:pertoDoMax = $true; $script:statVazias = 5; $script:statDue = Get-Date; Tick-Stats
+Chk 'perto do maximo o recuo para em 4x o intervalo curto' ([int]($script:statDue - (Get-Date)).TotalSeconds) 20
 if($script:erros -eq 0){ "OK: mediana ignora etiquetas, culpa dividida certo, Tick-Stats so rele quando precisa" }
 else { "$($script:erros) FALHA(S)"; exit 1 }
