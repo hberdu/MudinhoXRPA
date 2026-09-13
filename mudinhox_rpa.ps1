@@ -142,6 +142,7 @@ $JoiasFarmMax  = 25      # modo JOIAS: se nao detectar inventario cheio em N min
 $InvUsarMenu   = $true   # se a tecla nao abrir o inventario, tenta pelo MENU do jogo (botao de 3 barras no topo direito)
 $InvMenuBtn    = @{ X = 1888; Y = 23 }   # botao de 3 barras (menu) no canto superior direito, area cliente
 $InvMenuAncora = '(?i)^(shop|personagem|guild|mercado|invent)'   # se nenhuma dessas palavras aparece, o menu NAO abriu: nao clica
+$InvMenuClickDy = -45    # no menu, o item e um ICONE com o rotulo EMBAIXO: o OCR acha o texto, mas o clicavel esta ACIMA dele
 $InvMenuWords  = '(?i)^invent'   # item do menu que abre o inventario
 $InvMaxFalhas  = 3       # apos N falhas seguidas de abrir o inventario, desiste (nao fica apertando tecla desconhecida no personagem)
 $InvCheckSec   = 300      # checa o inventario a cada N seg enquanto farma
@@ -1036,9 +1037,12 @@ function Abrir-Inv-PeloMenu {   # caminho alternativo: a tecla configurada nao a
     Close-Popup; return $false
   }
   $c = Word-Center $item
-  Log "inventario: clicando em '$($item.Text)' ($($c.X),$($c.Y))"
-  $null = Click-Client $c.X $c.Y -KeepFocus
-  Wait 1.5
+  # No menu cada item e um ICONE com o rotulo EMBAIXO. O OCR acha o texto, mas o clicavel e o icone ACIMA dele:
+  # clicar no rotulo abriu o menu e nao aconteceu nada (visto no print de 10:35:50, tela continuou no Stadium).
+  $cy = [Math]::Max(0, $c.Y + $InvMenuClickDy)
+  Log "inventario: clicando no icone de '$($item.Text)' ($($c.X),$cy)"
+  $null = Click-Client $c.X $cy -KeepFocus
+  Wait 2.5
   $true
 }
 function Inv-Free {   # abre o inventario (V), conta celulas livres, fecha. -1 se nao calibrado, nao abriu ou nao deu pra ler
