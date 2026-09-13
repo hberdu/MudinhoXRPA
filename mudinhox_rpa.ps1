@@ -128,6 +128,7 @@ $MixJewels     = @(       # tipos da lista, na ordem; Pat = como o OCR pode ler 
   @{ Name = 'Creation'; Pat = "(?i)^creation" },
   @{ Name = 'Chaos';    Pat = "(?i)^chaos" }
 )
+$MixConfirmTentativas = 5   # o dialogo de confirmacao demora um tempo VARIAVEL: procura ate N vezes (1s cada) em vez de olhar uma vez
 $MixConfirmWords = '(?i)^confirmar$'   # 2o dialogo do mix: "Deseja continuar?" com CONFIRMAR/CANCELAR. NUNCA casar com CANCELAR
 $CursorParkX   = 40      # canto pra onde o mouse e levado antes de ler a tela (o ponteiro aparece na captura e some com o texto debaixo)
 $CursorParkY   = 400
@@ -1188,12 +1189,17 @@ function Mix-Jewels {   # /mixer -> NPC -> "Mixar Joias" -> mixa TODAS as opcoes
       $imgS = Capture-Raw; try { $imgS.Save($shot) } catch {}; $imgS.Dispose()
       Log "mix: $($verde.J.Name) verde em ($($c.X),$($c.Y)), clicando. Print: $(Split-Path $shot -Leaf)"
       $null = Click-Client $c.X $c.Y -KeepFocus
-      Wait 1.5
-      # Clicar na joia abre um SEGUNDO dialogo ("Mixar 16 Jewel of Life / Deseja continuar?" com CONFIRMAR e CANCELAR).
-      # O bot nao clicava em CONFIRMAR e ficava travado nele - era o travamento que o usuario reportou.
-      $img2 = Capture-Raw
-      $conf = Screen-Words $img2 | ? { $_.Text -match $MixConfirmWords } | select -First 1
-      $img2.Dispose()
+      # Clicar na joia abre um SEGUNDO dialogo ("Mixar 12 Jewel of Soul / Deseja continuar?" com CONFIRMAR e CANCELAR).
+      # Ele demora um tempo VARIAVEL pra aparecer: com uma leitura unica apos 1.5s o bot ja perdeu o dialogo que o
+      # print de diagnostico (tirado 1s depois) mostrava na tela. Entao PROCURA ate achar, em vez de olhar uma vez.
+      $conf = $null
+      for($t = 0; $t -lt $MixConfirmTentativas -and -not $conf; $t++){
+        Wait 1
+        Tirar-Cursor
+        $img2 = Capture-Raw
+        $conf = Screen-Words $img2 | ? { $_.Text -match $MixConfirmWords } | select -First 1
+        $img2.Dispose()
+      }
       if(-not $conf){
         Log "mix: cliquei em $($verde.J.Name) mas nao achei o botao CONFIRMAR - parando pra nao travar"
         Notify "MudinhoX" "O mix abriu um dialogo que eu nao reconheci. Confirma na mao e clique RETOMAR."
@@ -1591,6 +1597,17 @@ if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guard
   # que estava fechada, entao o C do status virava letra dentro do chat.
   # Print real do 1o mix: Soul/Life/Creation/Chaos VERDES, Fragment/Stone/Jewel of God VERMELHOS.
   # O bot mixou so a Soul e concluiu "acabou", porque o modal fecha a cada confirmacao e ele nao reabria.
+  # Dialogo "Mixar 12 Jewel of Soul / Deseja continuar?". O bot deu por perdido lendo a tela UMA vez 1.5s apos o
+  # clique; este print, tirado 1s depois, mostra o dialogo na tela. Tem que achar o CONFIRMAR e NUNCA o CANCELAR.
+  $i = Fx 'mix_dialogo_confirmar.png'
+  if($i){
+    $ws = Screen-Words $i
+    $conf = $ws | ? { $_.Text -match $MixConfirmWords } | select -First 1
+    Ok 'acha o botao CONFIRMAR no dialogo' ([bool]$conf) 'nao achou CONFIRMAR na tela que o tem'
+    Ok 'nao confunde CANCELAR com CONFIRMAR' (-not ($ws | ? { $_.Text -match '(?i)^cancelar$' -and $_.Text -match $MixConfirmWords })) 'o padrao casou com CANCELAR'
+    Ok 'a lista NAO e considerada aberta no dialogo' (-not (Lista-Mix-Aberta $ws)) 'acharia a lista aberta e nao reabriria o modal'
+    $i.Dispose()
+  }
   $i = Fx 'mix_lista_4verdes.png'
   if($i){
     $ws = Screen-Words $i
