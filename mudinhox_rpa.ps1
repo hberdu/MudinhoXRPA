@@ -1430,7 +1430,12 @@ function Tick-Human {   # de vez em quando, em ordem aleatoria, faz algo que um 
   Restore-Focus $prev
 }
 function Get-Points($words){   # numero na mesma linha do rotulo "Pontos". -1 se nao achou
-  $lab = $words | ? { $_.Text -match '(?i)^pont' } | select -First 1; if(-not $lab){ return -1 }
+  # O padrao aceita o rotulo MASTIGADO pelo OCR. Na versao web (game.mudinhox.com.br) os pontos sao um BOTAO
+  # "Pontos: 244" e o OCR devolveu '%' + 'ritos:' + '244' - o "Pon" virou "%", entao `^pont` nao casava e o bot
+  # lia "sem pontos" com 244 na tela. Ler ponto como zero e exatamente como um char empilhou 1.66 MILHAO deles.
+  # `tos:?$` pega 'ritos:', 'ntos', 'Pontos'. Conferido no painel inteiro (web e desktop): nenhuma outra palavra
+  # termina em "tos", entao afrouxar aqui nao cria falso positivo.
+  $lab = $words | ? { $_.Text -match '(?i)(^pont|tos:?$)' } | select -First 1; if(-not $lab){ return -1 }
   $yc = $lab.BoundingRect.Y + $lab.BoundingRect.Height/2
   $n = $words | ? { $_.Text -match '^\d{1,7}$' -and $_.BoundingRect.X -gt $lab.BoundingRect.X -and [Math]::Abs(($_.BoundingRect.Y + $_.BoundingRect.Height/2) - $yc) -lt ($lab.BoundingRect.Height + 4) } | sort { $_.BoundingRect.X } | select -First 1
   if($n){ [int]$n.Text } else { -1 }
@@ -2453,6 +2458,20 @@ if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guard
     Ok 'painel que a tela inteira nao lia agora e lido' (Status-Open $w) 'Status-Open disse fechada'
     $v = Parse-Attrs $w
     Ok 'le os 4 atributos no print que falhava' (@('For','Agi','Vit','Ene' | ? { -not $v.ContainsKey($_) }).Count -eq 0) "faltou: $(@('For','Agi','Vit','Ene' | ? { -not $v.ContainsKey($_) }) -join ',')"
+    $i.Dispose()
+  }
+  # VERSAO WEB (game.mudinhox.com.br numa aba do Chrome, 1024x720). Dois pontos que so aparecem aqui:
+  #  - o HUD da web NAO encolhe com a janela, ao contrario do cliente desktop: e por isso que o OCR le num
+  #    tamanho onde o desktop reprovou (em 958x484 ele nem detectava o painel aberto).
+  #  - os pontos sao um BOTAO "Pontos: 244", e o OCR devolveu '%' + 'ritos:' + '244'. Com o padrao antigo
+  #    (`^pont`) o bot lia "sem pontos" com 244 na tela - e ponto nao lido nunca e distribuido.
+  $i = Fx 'web_status_ABERTO.png'
+  if($i){
+    $w = Ocr-Status $i
+    Ok 'web: reconhece o painel de status' (Status-Open $w) 'Status-Open disse fechada'
+    $v = Parse-Attrs $w
+    Ok 'web: le os 4 atributos' (@('For','Agi','Vit','Ene' | ? { -not $v.ContainsKey($_) }).Count -eq 0) "faltou: $(@('For','Agi','Vit','Ene' | ? { -not $v.ContainsKey($_) }) -join ',')"
+    Ok 'web: le os PONTOS do botao mastigado' ((Get-Points $w) -eq 244) "Get-Points devolveu $(Get-Points $w), esperado 244"
     $i.Dispose()
   }
   $i = Fx 'inventario_FECHADO.png'
