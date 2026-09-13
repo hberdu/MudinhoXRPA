@@ -144,7 +144,7 @@ $InvCellPx     = 34.4    # lado da celula (fracionario: arredondar acumula erro 
 $InvCellLit    = 210      # soma R+G+B acima disso = pixel "com item" (celula vazia e escura)
 $InvCellMin    = 10       # N pixels claros na celula = ocupada
 $InvFreeMin    = 4        # menos que N celulas livres = inventario cheio -> vai mixar
-$JoiasFarmMax  = 25      # modo JOIAS: se nao detectar inventario cheio em N min, vai mixar mesmo assim
+$JoiasFarmMax  = 8       # modo JOIAS: vai mixar a cada N min. E o gatilho PRINCIPAL: a contagem de celulas depende de alinhamento e a ancora oscila, entao nao da pra confiar nela pra adiar o mix
 $InvUsarMenu   = $true   # se a tecla nao abrir o inventario, tenta pelo MENU do jogo (botao de 3 barras no topo direito)
 $InvMenuBtn    = @{ X = 1888; Y = 23 }   # botao de 3 barras (menu) no canto superior direito, area cliente
 $InvMenuAncora = '(?i)^(shop|personagem|guild|mercado|invent)'   # se nenhuma dessas palavras aparece, o menu NAO abriu: nao clica
@@ -1027,6 +1027,12 @@ function Achar-InvGrid($img){   # acha a grade ANCORADA NO TITULO da janela. Coo
   if(-not $t){ return $null }
   $r = $t.BoundingRect
   $cx = [int]($r.X + $r.Width/2)
+  # ATENCAO: a caixa do OCR no titulo OSCILA (visto ao vivo: (652,314) e (689,300) com 8s de diferenca = 37px,
+  # mais que uma celula de 34.4px). Medido no fixture: o MESMO inventario cheio le 0 livres alinhado e 26 livres
+  # 20px fora. Ou seja, a CONTAGEM POR CELULA nao e confiavel com esta ancora.
+  # Tentei refinar escolhendo o deslocamento que deixa as celulas mais "decisivas" - NAO FUNCIONA: num inventario
+  # cheio toda celula tem item, entao grade torta pontua igual. Por isso a contagem virou informativa e o gatilho
+  # de "cheio" passou a ser a MENSAGEM do jogo + o teto de tempo, que nao dependem de alinhamento.
   @{ X = $cx + $InvGridDx; Y = [int]$r.Y + $InvGridDy; Cell = $InvCellPx; Cols = 8; Rows = 8; Titulo = "$($t.Text)" }
 }
 function Inv-Open($img){ [bool](Achar-InvGrid $img) }   # titulo visivel = painel aberto
@@ -1431,7 +1437,9 @@ function Ciclo-Joias {   # MODO JOIAS: farma no spot ate encher o inventario, va
           elseif(-not $script:invDesligado -and (Get-Date) -ge $script:invDue){   # NAO a cada leitura: abrir/fechar o inventario a cada poll seria absurdo
             $script:invDue = (Get-Date).AddSeconds((Jit $InvCheckSec))
             $free = Inv-Free
-            if($free -ge 0){ Log "joias: $free celulas livres"; if($free -lt $InvFreeMin){ $cheio = $true } }
+            # A contagem so e confiavel com a grade bem alinhada, e a ancora (titulo) oscila ate 37px. Entao ela
+            # so CONFIRMA cheio (poucas livres); nunca serve pra dizer "ainda tem espaco" e adiar o mix.
+            if($free -ge 0){ Log "joias: $free celulas livres (contagem aproximada)"; if($free -lt $InvFreeMin){ $cheio = $true } }
           }
         }
         $img.Dispose()
@@ -1611,10 +1619,11 @@ if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guard
     $g = Achar-InvGrid $i
     Ok 'acha a grade pelo titulo, mesmo fora do lugar antigo' ([bool]$g) 'nao localizou o painel aberto'
     if($g){
-      Ok 'grade cai onde foi medida (607,333)' ([Math]::Abs($g.X-607) -le 12 -and [Math]::Abs($g.Y-333) -le 12) "deu ($($g.X),$($g.Y))"
-      $m = Inv-Occupancy $i $g
+      # Com a grade NA POSICAO MEDIDA a contagem e certa. Fora dela nao e - por isso a contagem e so informativa
+      # e o gatilho de "cheio" nao depende dela (mensagem do jogo + teto de tempo).
+      $m = Inv-Occupancy $i @{ X=607; Y=333; Cell=$InvCellPx; Cols=8; Rows=8 }
       $livres = @($m | % { $_ } | ? { -not $_ }).Count
-      Ok 'inventario cheio e visto como cheio' ($livres -le 4) "$livres celulas livres (o print mostra quase tudo ocupado)"
+      Ok 'na posicao medida, ve o inventario cheio como cheio' ($livres -le 4) "$livres celulas livres"
     }
     $i.Dispose()
   }
