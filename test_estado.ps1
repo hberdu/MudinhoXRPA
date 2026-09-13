@@ -15,11 +15,11 @@ function Chk($n,$got,$exp){ if("$got" -ne "$exp"){ "FALHOU $n : '$got' != '$exp'
 # 1. round-trip completo
 $script:phase='warmup'; $script:warmupCount=7; $script:resets=42; $script:ptsSent=91234
 $script:mrs=3; $script:runStart=(Get-Date).AddHours(-2.5); $script:mrStart=(Get-Date).AddHours(-1.25)
-$script:ciclos=@(88,91,102,301,77)
+$script:ciclos=@(88,91,102,301,77); $script:ativoSeg=4200
 $rs=$script:runStart.Ticks; $ms=$script:mrStart.Ticks
 Save-Estado
 $script:phase='normal'; $script:warmupCount=0; $script:resets=0; $script:ptsSent=0; $script:mrs=0
-$script:ciclos=@(); $script:runStart=Get-Date; $script:mrStart=Get-Date
+$script:ciclos=@(); $script:ativoSeg=0; $script:runStart=Get-Date; $script:mrStart=Get-Date
 Load-Estado
 Chk 'fase' $script:phase 'warmup'
 Chk 'warmup' $script:warmupCount 7
@@ -29,6 +29,7 @@ Chk 'mrs' $script:mrs 3
 Chk 'runStart' $script:runStart.Ticks $rs
 Chk 'mrStart' $script:mrStart.Ticks $ms
 Chk 'ciclos' ($script:ciclos -join ',') '88,91,102,301,77'
+Chk 'tempo ativo' $script:ativoSeg 4200
 
 # 1b. o alvo de level e o estado do auto-tune sobrevivem (o estado.txt agora manda no $TargetLevel:
 #     um bug aqui mudaria silenciosamente o alvo do bot)

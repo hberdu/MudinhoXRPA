@@ -77,6 +77,7 @@ $HumanMinSec   = 120; $HumanMaxSec = 420   # a cada X seg (aleatorio) faz algo "
 $LogFile       = Join-Path $PSScriptRoot 'rpa.log'
 $StopFile      = Join-Path $PSScriptRoot 'stop.flag'
 $HeartbeatFile = Join-Path $PSScriptRoot 'heartbeat.txt'   # o bot bate aqui a cada volta; o watchdog externo relanca se ficar velho
+$AtivoGapMax   = 120     # buraco maior que N seg entre voltas = o bot esteve PARADO; nao conta como tempo ativo nas metricas
 $HeartbeatVivoSec = 180  # heartbeat mais novo que isso = tem bot vivo (impede duas instancias no mesmo jogo)
 $SemProgressoMax = 3     # apos N ciclos seguidos sem progresso, o bot REINICIA A SI MESMO (ja elevado: nao pede UAC de novo)
 $EstadoFile    = Join-Path $PSScriptRoot 'estado.txt'   # fase + contagem de warmup, pra sobreviver a reinicio do bot
@@ -257,7 +258,18 @@ function Log($m){
     $script:logBox.AppendText("$line`r`n"); [System.Windows.Forms.Application]::DoEvents()
   }
 }
-function Bater-Heartbeat { try { (Get-Date).Ticks | Set-Content -Path $HeartbeatFile -Encoding ASCII } catch {} }   # o watchdog externo usa isto pra saber se o bot esta vivo
+$script:ativoSeg = 0.0; $script:tickLast = $null
+function Bater-Heartbeat {   # prova de vida pro watchdog E acumulador de TEMPO ATIVO
+  # pontos/h precisa dividir pelo tempo em que o bot REALMENTE rodou. Usando relogio de parede, as 6h que ele
+  # passou travado em 01/09 entraram como tempo produtivo e afundaram a taxa (19527 pts/h contra 147116 reais).
+  $agora = Get-Date
+  if($script:tickLast){
+    $d = ($agora - $script:tickLast).TotalSeconds
+    if($d -gt 0 -and $d -lt $AtivoGapMax){ $script:ativoSeg += $d }   # buraco maior que isso = bot estava parado, nao conta
+  }
+  $script:tickLast = $agora
+  try { $agora.Ticks | Set-Content -Path $HeartbeatFile -Encoding ASCII } catch {}
+}
 function Heartbeat-Fresco {   # $true se OUTRA instancia bateu o heartbeat ha pouco (evita dois bots no mesmo jogo)
   if(-not (Test-Path $HeartbeatFile)){ return $false }
   try { $t = [datetime]::new([long](Get-Content $HeartbeatFile -Raw).Trim()); return ((Get-Date) - $t).TotalSeconds -lt $HeartbeatVivoSec } catch { return $false }
@@ -495,6 +507,7 @@ function Save-Estado {   # fase/warmup E as metricas do MR. Medir um MR leva hor
       "resets=$($script:resets)"
       "ptsSent=$($script:ptsSent)"
       "runStart=$($script:runStart.Ticks)"
+      "ativoSeg=$([int]$script:ativoSeg)"
       "mrs=$($script:mrs)"
       "mrStart=$($script:mrStart.Ticks)"
       "ciclos=$(@($script:ciclos) -join ",")"
@@ -519,6 +532,7 @@ function Load-Estado {
       if($kv.ptsSent){ $script:ptsSent = [int]$kv.ptsSent }
       if($kv.mrs){ $script:mrs = [int]$kv.mrs }
       if($kv.runStart){ $script:runStart = [datetime]::new([long]$kv.runStart) }
+      if($kv.ativoSeg){ $script:ativoSeg = [double]$kv.ativoSeg }
       if($kv.mrStart){ $script:mrStart = [datetime]::new([long]$kv.mrStart) }
       if($kv.ciclos){ $script:ciclos = @($kv.ciclos -split "," | ? { $_ }) }
       if($kv.alvo){ $script:TargetLevel = [int]$kv.alvo }
@@ -889,7 +903,7 @@ function Master-Reset {   # atributos cheios: /darmr -> tela de selecao -> clica
     $dur = [Math]::Round(((Get-Date) - $script:mrStart).TotalHours, 2); $script:mrStart = Get-Date
     Log "== MASTER RESET #$($script:mrs) FEITO (levou ${dur}h, $($script:resets) resets) =="   # o marco que interessa
     Notify "MudinhoX" "Master reset #$($script:mrs) feito em ${dur}h."
-    $script:resets = 0; $script:ptsSent = 0; $script:runStart = Get-Date   # zera pra medir o proximo MR limpo
+    $script:resets = 0; $script:ptsSent = 0; $script:runStart = Get-Date; $script:ativoSeg = 0   # zera pra medir o proximo MR limpo
     $script:phase = 'warmup'; $script:warmupCount = 0; Save-Estado; $script:restartCycle = $true; Log "modo warmup ($WarmupCmd ate $WarmupResets resets)"
   }
 }
@@ -1161,7 +1175,7 @@ function CicloSeg($c){ [int](("$c" -split ':')[0]) }        # ciclo e "segundos"
 function CicloTags($c){ $p = "$c" -split ':'; if($p.Count -gt 1){ $p[1] } else { '' } }
 function Mediana($a){ if(-not $a -or $a.Count -eq 0){ return 0 }; $s = @(@($a | % { CicloSeg $_ }) | sort); [int]$s[[int]($s.Count/2)] }
 function Metrics {   # o objetivo e o /darmr, nao o reset: o numero que importa e PONTOS/HORA e o ETA do MR. Reset e so o meio.
-  $h = ((Get-Date) - $script:runStart).TotalHours
+  $h = $script:ativoSeg / 3600.0   # TEMPO ATIVO, nao relogio de parede: downtime nao pode afundar a taxa
   if($h -le 0.01){ return }
   $ph = [int]($script:ptsSent / $h)
   $eta = if($ph -gt 0 -and $script:ptsNeeded -gt 0){ [Math]::Round($script:ptsNeeded / $ph, 1) } else { -1 }
@@ -1217,21 +1231,21 @@ function Tick-Msgs($img){   # le as mensagens do jogo de vez em quando. A caca a
   if($m -match $MsgGoldWords){ Log "evento dos dragoes no chat (use o botao DRAGOES DOURADOS se quiser ir)" }
   elseif($m -match $MsgInvWords){ Log "jogo avisou inventario cheio -> vou mixar"; $script:mixNow = $true }
 }
-$script:tuneOn = $AutoTune; $script:tuneArm = 0; $script:tuneResets = 0; $script:tunePts = 0; $script:tuneStart = Get-Date; $script:tuneRes = @()
+$script:tuneOn = $AutoTune; $script:tuneArm = 0; $script:tuneResets = 0; $script:tunePts = 0; $script:tuneAtivo0 = 0.0; $script:tuneRes = @()
 if($script:tuneOn){ $script:TargetLevel = [Math]::Max($AutoTuneAlvos[0], $LevelMinReset) }   # comeca pelo primeiro alvo da lista (Load-Estado sobrepoe se o A/B ja terminou antes)
 function Tick-AutoTune {   # $TargetLevel sempre foi chute. Em vez de pedir experimento manual, o bot roda o A/B sozinho.
   # Compara PONTOS/H (nao resets/h): resetar mais cedo da mais resets, mas pode dar menos pontos por reset.
   if(-not $script:tuneOn){ return }
   $script:tuneResets++
   if($script:tuneResets -lt $AutoTuneResets){ return }
-  $h = ((Get-Date) - $script:tuneStart).TotalHours
+  $h = ($script:ativoSeg - $script:tuneAtivo0) / 3600.0   # tempo ATIVO do braco: travar no meio nao pode penalizar o alvo injustamente
   $ph = if($h -gt 0){ [int](($script:ptsSent - $script:tunePts) / $h) } else { 0 }
   $script:tuneRes += ,@($TargetLevel, $ph)
   Log "autotune: alvo $TargetLevel rendeu $ph pontos/h em $($script:tuneResets) resets"
   $script:tuneArm++
   if($script:tuneArm -lt $AutoTuneAlvos.Count){
     $script:TargetLevel = [Math]::Max($AutoTuneAlvos[$script:tuneArm], $script:LevelMinReset)   # nunca abaixo do minimo que o servidor exige
-    $script:tuneResets = 0; $script:tunePts = $script:ptsSent; $script:tuneStart = Get-Date
+    $script:tuneResets = 0; $script:tunePts = $script:ptsSent; $script:tuneAtivo0 = $script:ativoSeg
     Log "autotune: testando agora alvo $($script:TargetLevel) por $AutoTuneResets resets"
   } else {
     $melhor = @($script:tuneRes | sort { $_[1] } -Descending)[0]
