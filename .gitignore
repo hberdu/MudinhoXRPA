@@ -25,3 +25,6 @@ fixtures/
 # heartbeat e log do watchdog (runtime)
 heartbeat.txt
 watchdog.log
+
+# scripts temporarios de investigacao
+_*.ps1
