@@ -43,6 +43,8 @@ $script:modo = 'joias'; Save-Estado; $script:modo = 'reset'; Load-Estado
 Chk 'modo joias sobrevive' $script:modo 'joias'
 $script:modo = 'reset'; Save-Estado; $script:modo = 'joias'; Load-Estado
 Chk 'modo reset sobrevive' $script:modo 'reset'
+$script:modo = 'dragoes'; Save-Estado; $script:modo = 'reset'; Load-Estado
+Chk 'modo dragoes sobrevive' $script:modo 'dragoes'
 'fase=normal' | Set-Content $EstadoFile -Encoding ASCII   # arquivo sem 'modo' nao pode virar lixo
 $script:modo = 'joias'; Load-Estado
 Chk 'sem modo no arquivo, mantem o da memoria' $script:modo 'joias'

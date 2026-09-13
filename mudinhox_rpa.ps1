@@ -142,7 +142,6 @@ $InvCheckSec   = 300      # checa o inventario a cada N seg enquanto farma
 # O chat anuncia dois bichos diferentes: "Golden Dragon vivo(s) em Lorencia" e "Golden Tantalo vivo(s) em Tarkan". O alvo aqui e o DRAGAO, em Lorencia.
 $GoldCmd       = '/lorencia'
 $GoldMap       = 'lore'   # nome esperado do mapa (4 letras). Lorencia e CIDADE: ver $GoldHelper abaixo
-$GoldMinutes   = 20       # tempo maximo cacando; depois volta pro farm sozinho
 $GoldArea      = @{ X1 = 70; Y1 = 100; X2FromRight = 70; Y2FromBottom = 150 }   # area util da tela (fora do HUD, minimapa e chat)
 # Calibrado pelo print do Golden Derkon em Lorencia (01/09). O bicho e laranja-ouro MUITO saturado: R alto, G medio, B quase zero.
 # O filtro antigo (GMin=140, RmG=75) rejeitava justo as partes mais saturadas do dragao e aceitava areia clara - dai casar com o chao de Tarkan.
@@ -306,22 +305,31 @@ function Show-Ui {
   $script:btnNormal = New-Object System.Windows.Forms.Button; $script:btnNormal.SetBounds(137,40,122,32); $script:btnNormal.Text = "Normal /s18`n(ate MT)"; $script:btnNormal.BackColor = 'MediumSeaGreen'
   $script:btnMR     = New-Object System.Windows.Forms.Button; $script:btnMR.SetBounds(264,40,120,32);     $script:btnMR.Text = "Atribuir tudo`n+ MR"; $script:btnMR.BackColor = 'MediumPurple'
   $script:btnMix    = New-Object System.Windows.Forms.Button; $script:btnMix.SetBounds(10,76,122,26);    $script:btnMix.Text = 'MODO JOIAS'; $script:btnMix.BackColor = 'DarkCyan'
-  $script:btnGold   = New-Object System.Windows.Forms.Button; $script:btnGold.SetBounds(137,76,247,26); $script:btnGold.Text = "DRAGOES DOURADOS ($GoldCmd)"; $script:btnGold.BackColor = 'Teal'   # NAO usar tom dourado: o -TestGold roda em processo separado (nao mascara a UI) e detectava o proprio botao como dragao
+  $script:btnGold   = New-Object System.Windows.Forms.Button; $script:btnGold.SetBounds(137,76,247,26); $script:btnGold.Text = "MODO DRAGOES ($GoldCmd)"; $script:btnGold.BackColor = 'Teal'   # NAO usar tom dourado: o -TestGold roda em processo separado (nao mascara a UI) e detectava o proprio botao como dragao
   $script:logBox = New-Object System.Windows.Forms.TextBox; $script:logBox.SetBounds(10,108,375,150); $script:logBox.Multiline = $true; $script:logBox.ReadOnly = $true; $script:logBox.ScrollBars = 'Vertical'
   $script:btnPause.Add_Click({ $script:paused = -not $script:paused; $script:btnPause.Text = $(if($script:paused){ 'RETOMAR' } else { 'PAUSAR' }); $script:btnPause.BackColor = $(if($script:paused){ 'ForestGreen' } else { 'Goldenrod' }); Log $(if($script:paused){ 'PAUSADO pelo usuario (mixe as joias; clique RETOMAR pra voltar)' } else { 'retomado pelo usuario' }) })
   $btn.Add_Click({ $script:stop = $true })
   $script:btnWarmup.Add_Click({ $script:phase = 'warmup'; $script:warmupCount = 0; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Save-Estado; Log "[BOTAO] modo WARMUP: /losttower7 ate $WarmupResets resets" })
-  $script:btnNormal.Add_Click({ $script:modo = 'reset'; $script:btnMix.Text = 'MODO JOIAS'; $script:btnMix.BackColor = 'DarkCyan'; $script:phase = 'normal'; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Save-Estado; Log "[BOTAO] modo NORMAL: /s18 ate os atributos encherem" })
+  $script:btnNormal.Add_Click({ $script:modo = 'reset'; $script:btnMix.Text = 'MODO JOIAS'; $script:btnMix.BackColor = 'DarkCyan'; $script:btnGold.Text = "MODO DRAGOES ($GoldCmd)"; $script:btnGold.BackColor = 'Teal'; $script:phase = 'normal'; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Save-Estado; Log "[BOTAO] modo NORMAL: /s18 ate os atributos encherem" })
   $script:btnMR.Add_Click({ $script:forceMR = $true; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Log "[BOTAO] ATRIBUIR TUDO + MR" })
   $script:btnMix.Add_Click({
     $script:modo = if($script:modo -eq 'joias'){ 'reset' } else { 'joias' }
     $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'
     $script:btnMix.Text = if($script:modo -eq 'joias'){ 'MODO JOIAS (ligado)' } else { 'MODO JOIAS' }
+    $script:btnGold.Text = "MODO DRAGOES ($GoldCmd)"; $script:btnGold.BackColor = 'Teal'
     $script:btnMix.BackColor = if($script:modo -eq 'joias'){ 'ForestGreen' } else { 'DarkCyan' }
     Save-Estado
     Log $(if($script:modo -eq 'joias'){ "[BOTAO] MODO JOIAS: farma em $WarpCmd ate encher, mixa no $MixCmd, repete. Sem reset e sem /darmr." } else { '[BOTAO] modo JOIAS desligado: volta ao ciclo de reset/master reset' })
   })
-  $script:btnGold.Add_Click({ $script:goldNow = $true; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Log "[BOTAO] DRAGOES DOURADOS: $GoldCmd por ate $GoldMinutes min" })
+  $script:btnGold.Add_Click({
+    $script:modo = if($script:modo -eq 'dragoes'){ 'reset' } else { 'dragoes' }
+    $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'
+    $script:btnGold.Text = if($script:modo -eq 'dragoes'){ 'MODO DRAGOES (ligado)' } else { "MODO DRAGOES ($GoldCmd)" }
+    $script:btnGold.BackColor = if($script:modo -eq 'dragoes'){ 'ForestGreen' } else { 'Teal' }
+    $script:btnMix.Text = 'MODO JOIAS'; $script:btnMix.BackColor = 'DarkCyan'
+    Save-Estado
+    Log $(if($script:modo -eq 'dragoes'){ "[BOTAO] MODO DRAGOES: so caca em $GoldCmd, sem reset/darmr/inventario" } else { '[BOTAO] modo DRAGOES desligado: volta ao ciclo de reset/master reset' })
+  })
   $f.Add_FormClosing({ $script:stop = $true })
   $f.Controls.AddRange(@($script:status,$script:btnPause,$btn,$script:btnWarmup,$script:btnNormal,$script:btnMR,$script:btnMix,$script:btnGold,$script:logBox)); $f.Show(); $script:ui = $f
 }
@@ -538,7 +546,7 @@ function Load-Estado {
     } else {
       $kv = @{}; foreach($l in ($txt -split "`r?`n")){ if($l -match '^(\w+)=(.*)$'){ $kv[$Matches[1]] = $Matches[2] } }
       if($kv.fase -in 'normal','warmup'){ $script:phase = $kv.fase }
-      if($kv.modo -in 'reset','joias'){ $script:modo = $kv.modo }
+      if($kv.modo -in 'reset','joias','dragoes'){ $script:modo = $kv.modo }
       if($kv.warmup){ $script:warmupCount = [int]$kv.warmup }
       if($kv.resets){ $script:resets = [int]$kv.resets }
       if($kv.ptsSent){ $script:ptsSent = [int]$kv.ptsSent }
@@ -1122,19 +1130,32 @@ function Find-Gold($img){   # centro do bloco mais dourado da tela (Golden Tanta
   if($r[0] -eq 0 -and $r[1] -eq 0){ return $null }
   @{ X = $r[0]; Y = $r[1]; N = $r[2] }
 }
-function Hunt-Golden {   # botao DRAGOES: /tarkan2 e caca os Golden Tantalos ate $GoldMinutes. Chamar com o jogo na frente
-  Tag-Ciclo 'dragoes'; Log "dragoes: indo pro $GoldCmd"
-  if(-not (Send-Chat $GoldCmd)){ return }
-  Wait $WarpWaitSec
-  for($t = 1; $t -lt $WarpTries -and -not (Same-Map (Read-Map $null) $GoldMap); $t++){
-    Log "dragoes: nao cheguei em Tarkan, reenviando ($t/$WarpTries)"; $null = Send-Chat $GoldCmd; Wait $WarpWaitSec
-  }
-  if(-not (Same-Map (Read-Map $null) $GoldMap)){ Notify "MudinhoX" "Nao consegui chegar em '$GoldMap' com $GoldCmd."; return }
-  # Lorencia e CIDADE: clicar no play la abre o popup "precisa estar fora da cidade" (gotcha ja documentado).
-  # Sem helper, quem ataca e o proprio clique no mob - o loop abaixo reclica a cada varredura.
-  if($GoldHelper){ Start-Helper } else { Log "dragoes: mapa e cidade, nao ligo o helper (clico no mob direto)"; Close-Popup }
-  $fim = (Get-Date).AddMinutes($GoldMinutes); $achados = 0; $vazios = 0; $vistos = @{}; $seguidas = 0
-  while((Get-Date) -lt $fim -and -not $script:stop -and -not $script:restartCycle){
+function Ciclo-Dragoes {   # MODO DRAGOES: so caca. Nao checa inventario, nao checa atributos, nao reseta, nao da /darmr.
+  $script:restartCycle = $false
+  Hold-Focus
+  try {
+    Log "dragoes: indo pro $GoldCmd"
+    if(-not (Send-Chat $GoldCmd)){ Wait 10; return }
+    Wait $WarpWaitSec
+    for($t = 1; $t -lt $WarpTries -and -not (Same-Map (Read-Map $null) $GoldMap); $t++){
+      Log "dragoes: nao cheguei em '$GoldMap', reenviando ($t/$WarpTries)"; $null = Send-Chat $GoldCmd; Wait $WarpWaitSec
+    }
+    if(-not (Same-Map (Read-Map $null) $GoldMap)){
+      Notify "MudinhoX" "Nao consegui chegar em '$GoldMap' com $GoldCmd. Saindo do modo dragoes."
+      $script:modo = 'reset'; Save-Estado; return
+    }
+    # Lorencia e CIDADE: clicar no play la abre o popup "precisa estar fora da cidade" (gotcha ja documentado).
+    # Sem helper, quem ataca e o proprio clique no mob - o loop abaixo reclica a cada varredura.
+    if($GoldHelper){ Start-Helper } else { Log "dragoes: mapa e cidade, nao ligo o helper (clico no mob direto)"; Close-Popup }
+  } finally { Release-Focus }
+
+  $achados = 0; $vazios = 0; $vistos = @{}; $seguidas = 0
+  while($script:modo -eq 'dragoes' -and -not $script:stop -and -not $script:restartCycle){
+    Bater-Heartbeat
+    $script:ptsLastGain = Get-Date   # cacar nao distribui pontos: sem isto o watchdog de progresso dispararia sozinho
+    Pause-Gate
+    Hold-Focus
+    try {
     $img = Capture-Game
     if(-not $img){ Wait 2; continue }
     if(Handle-Captcha $img){ $img.Dispose(); continue }
@@ -1151,7 +1172,7 @@ function Hunt-Golden {   # botao DRAGOES: /tarkan2 e caca os Golden Tantalos ate
         Log "dragoes: achei alvo em $seguidas varreduras SEGUIDAS, cada uma num lugar - isso e o cenario dourado, nao mob. Parando."
         Notify "MudinhoX" "A caca esta casando com o cenario, nao com o mob. Calibre a cor com -TestGold. Parei."
         $null = Save-Shot 'gold_falso_positivo.png'
-        break
+        $script:modo = 'reset'; Save-Estado; break   # detector provado errado: sair do modo, senao volta a cacar cenario no proximo ciclo
       }
       $chave = "$($alvo.X),$($alvo.Y)"
       $vistos[$chave] = [int]$vistos[$chave] + 1
@@ -1159,7 +1180,7 @@ function Hunt-Golden {   # botao DRAGOES: /tarkan2 e caca os Golden Tantalos ate
         Log "dragoes: achei '$chave' $($vistos[$chave]) vezes - isso e cenario, nao mob. Parando (calibre `$GoldPix com -TestGold)."
         Notify "MudinhoX" "A caca esta batendo sempre no mesmo ponto ($chave): o filtro de cor precisa de calibracao. Parei."
         $null = Save-Shot 'gold_falso_positivo.png'
-        break
+        $script:modo = 'reset'; Save-Estado; break
       }
       Log "dragoes: dourado em $chave [$($alvo.N) px dourados], indo bater"
       $null = Click-Client $alvo.X $alvo.Y   # 1o clique leva o personagem ate o mob
@@ -1171,12 +1192,12 @@ function Hunt-Golden {   # botao DRAGOES: /tarkan2 e caca os Golden Tantalos ate
       Walk-Forward   # mapa grande e spawn variavel: anda pra um lado e procura de novo
       Wait $GoldRoamSec
     }
+    } finally { Release-Focus }
   }
-  Log "dragoes: fim da caca ($achados alvos), voltando pro farm"
-  $script:ptsLastGain = Get-Date   # cacar nao distribui pontos; sem zerar aqui o watchdog de progresso dispararia na volta (caca dura ate 20min, o watchdog corta em 12)
-  $script:restartCycle = $true
+  Log "dragoes: saindo do modo ($achados alvos nesta rodada)"
+  $script:ptsLastGain = Get-Date
 }
-$script:invDue = (Get-Date).AddSeconds($InvCheckSec); $script:mixNow = $false; $script:goldNow = $false; $script:semPlay = 0; $script:invFalhas = 0; $script:invDesligado = $false
+$script:invDue = (Get-Date).AddSeconds($InvCheckSec); $script:mixNow = $false; $script:semPlay = 0; $script:invFalhas = 0; $script:invDesligado = $false
 function Tick-Inventory {   # de tempos em tempos checa o inventario; cheio (ou botao MIXAR) -> vai mixar e reinicia o ciclo (volta pro spot)
   if(-not $script:mixNow){
     if(-not $InvGrid -or (Get-Date) -lt $script:invDue){ return }
@@ -1559,18 +1580,24 @@ try {   # preflight no start: 10s conferindo tudo evita a noite inteira perdida 
   if($pf){ Notify "MudinhoX" "$pf verificacao(oes) falharam no start - veja o log. O bot vai tentar rodar mesmo assim." }
 } catch { Log "preflight falhou: $_" }
 Load-Estado   # retoma fase/warmup/modo de onde parou (o warmup.flag abaixo ainda tem prioridade)
-if($script:ui -and $script:modo -eq 'joias'){   # botao tem que refletir o modo retomado do estado.txt
-  $script:btnMix.Text = 'MODO JOIAS (ligado)'; $script:btnMix.BackColor = 'ForestGreen'
-  Log "retomando em MODO JOIAS: farma em $WarpCmd ate encher, mixa no $MixCmd, repete"
+if($script:ui){   # botoes tem que refletir o modo retomado do estado.txt
+  if($script:modo -eq 'joias'){
+    $script:btnMix.Text = 'MODO JOIAS (ligado)'; $script:btnMix.BackColor = 'ForestGreen'
+    Log "retomando em MODO JOIAS: farma em $WarpCmd ate encher, mixa no $MixCmd, repete"
+  } elseif($script:modo -eq 'dragoes'){
+    $script:btnGold.Text = 'MODO DRAGOES (ligado)'; $script:btnGold.BackColor = 'ForestGreen'
+    Log "retomando em MODO DRAGOES: so caca em $GoldCmd"
+  }
 }
 if(Test-Path $WarmupFile){ Remove-Item $WarmupFile -ErrorAction SilentlyContinue; $script:phase = 'warmup'; $script:warmupCount = 0; Save-Estado; Log "iniciando em modo warmup (pos-MR manual): $WarmupCmd ate $WarmupResets resets" }
 while(-not $script:stop){   # envelope: se o cliente cair, o catch espera ele voltar e o ciclo recomeca aqui (antes o script terminava)
 try {
 while($true){
   Pause-Gate
-  if($script:modo -eq 'joias'){ Ciclo-Joias; continue }   # modo JOIAS: farma ate encher, mixa, volta a farmar. Nao reseta nem da MR.
+  if($script:modo -eq 'joias'){ Ciclo-Joias; continue }       # farma ate encher, mixa, repete. Sem reset/darmr.
+  if($script:modo -eq 'dragoes'){ Ciclo-Dragoes; continue }   # so caca. Sem inventario, sem atributos, sem reset/darmr.
   if($script:mixNow){ Hold-Focus; try { Tick-Inventory } finally { Release-Focus } }   # botao MIXAR JOIAS: atende ANTES do warp (senao so era visto la dentro do loop de farm, e o bot parecia ignorar o botao)
-  if($script:goldNow){ $script:goldNow = $false; $script:restartCycle = $false; Hold-Focus; try { Hunt-Golden } finally { Release-Focus } }   # botao DRAGOES DOURADOS
+
   $script:restartCycle = $false   # comecando um ciclo novo (botoes de fase ja aplicaram phase/forceMR)
   Hold-Focus; try { $warpOk = Warp-To-Spot; if($warpOk){ Start-Helper; $script:lvlChangedAt = Get-Date; if($script:forceMR){ $script:forceMR = $false; $script:statDue = Get-Date; Log "forcando distribuicao + MR" } } } finally { Release-Focus }
   if(-not $warpOk){ Wait 15; continue }
