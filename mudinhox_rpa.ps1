@@ -22,8 +22,10 @@ param([switch]$Check, [string]$TestImage, [string]$TestStatus = "", [switch]$Tes
 # pra caber quatro bots no mesmo primeiro plano, mas o que ele resolve de verdade e nao roubar a sua tela.
 
 # ---------- CONFIG (coordenadas relativas a area cliente do jogo, 1920x1009) ----------
-$TargetLevel   = 305     # level pra resetar. Nunca abaixo de $LevelMinReset (o servidor recusa).
-                         # 305 desde 11/09: esta conta tem FENRIR, que baixa a exigencia de reset em 45 levels (350 -> 305).
+$TargetLevel   = 315     # level pra resetar. Nunca abaixo de $LevelMinReset (o servidor recusa).
+                         # 315 desde 13/09: o FENRIR (que dava -45, alvo 305) foi VENDIDO; agora e HELLISH HORSE, -35.
+                         # O desconto vem do ITEM EQUIPADO, entao este numero muda quando a montaria muda - e por isso
+                         # o piso se re-testa sozinho (ver $ResetRetestResets) em vez de ficar cravado em lugar nenhum.
                          # Era 350 por decisao sua; o A/B de antes tinha apontado 380 (272925 vs 175938 pontos/h), mas os
                          # dois bracos rodaram em sequencia e nao intercalados, entao a comparacao nao era controlada.
                          # O que aquele A/B sugere e que alvo MENOR rende mais - o ciclo encurta mais do que os pontos
@@ -218,8 +220,10 @@ $UiLogMaxChars = 60000   # teto do log da janelinha (o TextBox crescia sem limit
 $AutoTune      = $false  # A/B do alvo DESLIGADO: o alvo agora e escolha sua ($TargetLevel), nao do experimento
 $AutoTuneAlvos = 350, 380   # alvos a testar. NAO usar abaixo de $LevelMinReset: o servidor recusa e o /resetar so vira reenvio ate o char passar do minimo sozinho
 $LevelMaximo   = 400     # teto de level do servidor ("voce esta no nivel maximo"). No modo joias o char fica parado nele, entao o detector de miss infinito nao pode usar o level la
-$LevelMinReset = 305     # level minimo pra resetar. Era 350, confirmado pela mensagem do servidor ("Voce precisa de estar
-                         # no level 350 para resetar!"); com FENRIR a conta reseta 45 levels antes, entao 305.
+$LevelMinReset = 315     # level minimo pra resetar. O servidor pede 350 ("Voce precisa de estar no level 350 para
+                         # resetar!") e a MONTARIA desconta: Fenrir dava -45 (305), o Hellish Horse de agora da -35 (315).
+                         # Valor so de partida: o que manda e a mensagem do servidor, que sobe o piso, e o reset aceito
+                         # de primeira, que o baixa. Trocar de montaria nao exige mexer aqui - o bot reaprende sozinho.
 $ResetRetestResets = 20  # PISO APRENDIDO NAO PODE SER DEFINITIVO. Quando o servidor recusa o alvo do CONFIG, o bot
                          # sobe o piso pro que a mensagem disser - e ate 12/09 ficava la pra sempre, gravado no
                          # estado.txt. Isso e errado pro caso que interessa aqui: o FENRIR baixa a exigencia em 45
@@ -407,9 +411,11 @@ function Log($m){
     # Texto encurtado junto com a janela: a versao longa nao cabia nos 284px e truncava justo no numero do fim.
     # RESETS no lugar dos pontos: "faltam 49806" nao diz nada sobre quanto falta esperar, e "~5 resets" diz -
     # e o numero e medido, nao suposto (ver Resets-Faltando). Com poucos resets medidos ainda sai '?'.
+    # Separador '·' e nao '|': a barra vertical vira uma cerca de tracinhos e puxa o olho pra si. E sem repetir
+    # "MR" antes da porcentagem - a barra dourada esta logo acima, nao ha o que confundir.
     $fr = Resets-Faltando
-    $script:contador.Text = ("{0} resets | {1} MR  -  MR {2:0.0}% | faltam {3}" -f `
-      $script:resetsSessao, $script:mrsSessao, ($pct * 100), $(if($null -ne $fr){ "~$fr resets" } else { '?' }))
+    $script:contador.Text = ("{0} resets  ·  {1} MR  ·  {2:0.0}%  ·  faltam {3}" -f `
+      $script:resetsSessao, $script:mrsSessao, ($pct * 100), $(if($null -ne $fr){ "~$fr" } else { '?' }))
     # o TextBox crescia sem limite: rodando dias seguidos a janela fica pesada. Corta pela metade quando passa do teto.
     if($script:logBox.TextLength -gt $UiLogMaxChars){ $script:logBox.Text = $script:logBox.Text.Substring($script:logBox.TextLength - [int]($UiLogMaxChars/2)) }
     $script:logBox.AppendText("$line`r`n"); [System.Windows.Forms.Application]::DoEvents()
@@ -488,87 +494,200 @@ function Canto-Da-Tela-Do-Jogo([int]$alturaJanela){
   # mesmo jeito. Entao ela fica onde nao ha nada pra ler.
   New-Object System.Drawing.Point(($wa.X + 10), ($wa.Y + $wa.Height - $alturaJanela - 10))
 }
-# ---------- PALETA DO HUD DO JOGO ----------
-# Tirada da propria HUD do MudinhoX: pedra quase preta, filete de bronze, ouro nos numeros. Nao e so enfeite -
-# a janelinha vive POR CIMA do jogo, e o contraste branco do WinForms padrao puxava o olho pra ela o tempo todo.
-# Constantes nomeadas porque cada cor aparece em 3-4 controles; literal repetido e onde tom errado se esconde.
-$HudFundo   = [System.Drawing.Color]::FromArgb(23,17,12)     # pedra
-$HudPoco    = [System.Drawing.Color]::FromArgb(13,9,6)       # fundo de trilho/caixa de log (mais fundo que a pedra)
-$HudBronze  = [System.Drawing.Color]::FromArgb(107,79,29)    # filete das bordas
-$HudOuro    = [System.Drawing.Color]::FromArgb(217,168,43)   # barra cheia, titulos
-$HudTexto   = [System.Drawing.Color]::FromArgb(232,217,160)  # creme dos numeros
-$HudLog     = [System.Drawing.Color]::FromArgb(200,184,136)  # log: creme apagado, pra nao competir com os numeros
-$HudBotao   = [System.Drawing.Color]::FromArgb(58,42,22)     # bronze escuro do botao
-$HudBotaoOn = [System.Drawing.Color]::FromArgb(42,58,22)     # verde-oliva do RETOMAR (pausado)
-$HudPerigo  = [System.Drawing.Color]::FromArgb(74,26,22)     # vermelho seco do PARAR
-function Hud-Botao($b,$cor){   # botao chapado com filete de bronze: o botao 3D do Windows destoa de tudo aqui
-  $b.FlatStyle = 'Flat'; $b.BackColor = $cor; $b.ForeColor = $HudTexto
-  $b.FlatAppearance.BorderColor = $HudBronze; $b.FlatAppearance.BorderSize = 1
-  $b.Font = New-Object System.Drawing.Font('Segoe UI', 7.5, [System.Drawing.FontStyle]::Bold)
+# ---------- PALETA E DESENHO DA HUD ----------
+# Copiada da HUD do proprio MudinhoX: pedra escura em degrade, moldura de bronze com cravos nos cantos, ouro nos
+# numeros, fonte SERIFADA. Nao e so enfeite - a janelinha vive POR CIMA do jogo, e retangulo chapado com Segoe UI
+# ao lado daquela HUD grita "programa de fora". O que da o ar do jogo e o RELEVO: nada la e chapado, tudo tem
+# luz em cima e sombra embaixo (placa saliente) ou o contrario (buraco escavado).
+# QUASE PRETO. A primeira versao saiu marrom-clara e parecia um tema de programa, nao a HUD: no jogo o painel e
+# escuro a ponto de sumir, e o OURO aparece SO onde ha informacao (a barra de XP, os numeros). O ouro espalhado
+# em moldura, cravos e texto e o que fazia a janela gritar. Regra daqui pra frente: pedra quase preta, um unico
+# filete de bronze, e o dourado reservado pra barra.
+$HudPedraTopo = [System.Drawing.Color]::FromArgb(28,23,17)    # degrade da pedra: um tom acima do preto em cima
+$HudPedraBase = [System.Drawing.Color]::FromArgb(9,7,5)       #                   preto embaixo
+$HudPoco      = [System.Drawing.Color]::FromArgb(5,4,3)       # fundo de buraco escavado (trilho, caixa de log)
+$HudBronzeEsc = [System.Drawing.Color]::FromArgb(24,18,9)     # sombra do metal
+$HudBronze    = [System.Drawing.Color]::FromArgb(92,72,32)    # metal da moldura (apagado: e contorno, nao enfeite)
+$HudOuro      = [System.Drawing.Color]::FromArgb(198,156,52)  # barra cheia - o unico dourado forte da janela
+$HudOuroClaro = [System.Drawing.Color]::FromArgb(224,192,116) # brilho no topo da barra
+$HudTitulo    = [System.Drawing.Color]::FromArgb(150,120,58)  # titulo: bronze, nao ouro - e rotulo, nao informacao
+$HudCreme     = [System.Drawing.Color]::FromArgb(198,182,146) # numeros
+$HudLog       = [System.Drawing.Color]::FromArgb(122,110,84)  # log: apagado, pra nao competir com os numeros
+$HudSangue    = [System.Drawing.Color]::FromArgb(46,15,11)    # PARAR
+$HudSangueCl  = [System.Drawing.Color]::FromArgb(84,28,19)
+$HudOliva     = [System.Drawing.Color]::FromArgb(24,38,15)    # RETOMAR (pausado)
+$HudOlivaCl   = [System.Drawing.Color]::FromArgb(46,70,28)
+$HudPlaca     = [System.Drawing.Color]::FromArgb(20,16,10)    # placa de botao normal
+$HudPlacaCl   = [System.Drawing.Color]::FromArgb(42,34,20)
+# Serifada: e o que mais separa "HUD de jogo" de "formulario do Windows". Palatino Linotype vem com o Windows;
+# se faltar, o WinForms cai numa serifada sozinho - que e exatamente o fallback que se quer.
+function Hud-Fonte([single]$tam,[string]$estilo='Bold'){ New-Object System.Drawing.Font('Palatino Linotype',$tam,[System.Drawing.FontStyle]$estilo) }
+function Hud-Grad($g,$r,$c1,$c2){   # degrade vertical
+  if($r.Width -le 0 -or $r.Height -le 0){ return }
+  $b = New-Object System.Drawing.Drawing2D.LinearGradientBrush($r,$c1,$c2,90.0)
+  $g.FillRectangle($b,$r); $b.Dispose()
 }
-function Set-Barra([double]$pct){   # a barra e DOIS paineis (trilho + preenchimento), nao um ProgressBar
-  # O ProgressBar do WinForms ignora BackColor/ForeColor quando ha visual styles: sai sempre o verde do Windows,
-  # que e a unica cor que a HUD do jogo nao tem em lugar nenhum. Dois paineis dao a cor certa e custam o mesmo.
-  if(-not $script:barraFill){ return }
-  $w = [int]($script:barraBg.Width * [Math]::Max(0.0, [Math]::Min(1.0, $pct)))
-  $script:barraFill.Width = $w; $script:barraFill.Visible = ($w -gt 0)
+function Hud-Relevo($g,$r,$claro,$escuro){   # luz em cima/esquerda, sombra embaixo/direita = placa SALIENTE
+  if($r.Width -le 1 -or $r.Height -le 1){ return }   # invertendo as cores, o mesmo desenho vira buraco ESCAVADO
+  $pc = New-Object System.Drawing.Pen($claro); $pe = New-Object System.Drawing.Pen($escuro)
+  $x2 = $r.Right - 1; $y2 = $r.Bottom - 1
+  $g.DrawLine($pc,$r.X,$r.Y,$x2,$r.Y); $g.DrawLine($pc,$r.X,$r.Y,$r.X,$y2)
+  $g.DrawLine($pe,$r.X,$y2,$x2,$y2);   $g.DrawLine($pe,$x2,$r.Y,$x2,$y2)
+  $pc.Dispose(); $pe.Dispose()
 }
+function Hud-Str($g,[string]$t,$fonte,$cor,[single]$x,[single]$y){   # texto com sombra dura atras
+  # Todo numero da HUD do jogo tem contorno escuro - e o que o faz legivel por cima de qualquer cenario, e o que
+  # faz falta quando nao esta la (o texto "flutua" e parece etiqueta de formulario).
+  $s = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(200,0,0,0))
+  $g.DrawString($t,$fonte,$s,($x+1),($y+1)); $s.Dispose()
+  $s = New-Object System.Drawing.SolidBrush($cor); $g.DrawString($t,$fonte,$s,$x,$y); $s.Dispose()
+}
+function Hud-StrEsp($g,[string]$t,$fonte,$cor,[single]$x,[single]$y,[single]$esp){   # letra a letra, espacada
+  # Titulo de jogo e espacado; GDI+ nao tem letter-spacing, entao desenha caractere por caractere.
+  # DEVOLVE onde parou: sem isso o proximo texto so podia ser posicionado por chute, e o "RPA" saiu por cima do
+  # "MUDINHOX" na primeira tentativa - a largura espacada nao da pra prever no olho.
+  $fmt = [System.Drawing.StringFormat]::GenericTypographic
+  foreach($ch in $t.ToCharArray()){
+    Hud-Str $g "$ch" $fonte $cor $x $y
+    $x += $g.MeasureString("$ch",$fonte,[System.Drawing.PointF]::Empty,$fmt).Width + $esp
+  }
+  $x
+}
+function Hud-Moldura($g,$r){   # moldura MINIMA: preto por fora, um filete de bronze por dentro. Nada mais.
+  # A primeira versao tinha moldura de 3 filetes e cravos de ouro nos cantos. Parecia mais uma borda de site
+  # "medieval" do que a HUD do jogo - la o painel simplesmente termina no escuro. Ornamento que nao carrega
+  # informacao e exatamente o que fazia a janela parecer feita por fora.
+  $pp = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(4,3,2))
+  $g.DrawRectangle($pp,$r.X,$r.Y,$r.Width-1,$r.Height-1); $pp.Dispose()
+  $pb = New-Object System.Drawing.Pen($HudBronzeEsc)
+  $g.DrawRectangle($pb,($r.X+1),($r.Y+1),($r.Width-3),($r.Height-3)); $pb.Dispose()
+}
+function Hud-Placa([string]$txt,[int]$x,[int]$y,[int]$w,[int]$h,$topo,$base){
+  # Botao = PLACA DE METAL saliente, nao retangulo chapado. O Button do WinForms entra so como casca (clique,
+  # hover, teclado) e o desenho e todo nosso: degrade, relevo e texto serifado com sombra.
+  $b = New-Object System.Windows.Forms.Button
+  $b.SetBounds($x,$y,$w,$h); $b.FlatStyle = 'Flat'; $b.FlatAppearance.BorderSize = 0
+  $b.BackColor = $base; $b.Text = ''; $b.TabStop = $false
+  $b.FlatAppearance.MouseOverBackColor = $base; $b.FlatAppearance.MouseDownBackColor = $base   # o hover e desenhado, nao pintado pelo WinForms
+  # O estado do desenho vai na Tag: o scriptblock do Paint roda depois, fora desta chamada, e nao enxerga os
+  # parametros dela. Sem isto os dois botoes sairiam com a cor do ultimo criado.
+  $b.Tag = @{ Texto = $txt; Topo = $topo; Base = $base; Aceso = $false }
+  $b.Add_Paint({
+    param($s,$e)
+    $g = $e.Graphics; $g.TextRenderingHint = 'AntiAlias'; $r = $s.ClientRectangle; $t = $s.Tag
+    $ct = $t.Topo
+    if($t.Aceso){ $ct = [System.Drawing.Color]::FromArgb([Math]::Min(255,$ct.R+34),[Math]::Min(255,$ct.G+34),[Math]::Min(255,$ct.B+34)) }
+    Hud-Grad $g $r $ct $t.Base
+    Hud-Relevo $g $r $HudBronze $HudBronzeEsc
+    $fo = Hud-Fonte 8.5
+    $m = $g.MeasureString($t.Texto,$fo)
+    Hud-Str $g $t.Texto $fo $HudCreme (($r.Width - $m.Width)/2) (($r.Height - $m.Height)/2)
+    $fo.Dispose()
+  })
+  $b.Add_MouseEnter({ param($s,$e) $s.Tag.Aceso = $true;  $s.Invalidate() })
+  $b.Add_MouseLeave({ param($s,$e) $s.Tag.Aceso = $false; $s.Invalidate() })
+  $b
+}
+function Set-Barra([double]$pct){   # barra do MR: guarda a fracao e repinta
+  # O ProgressBar do WinForms ignora BackColor/ForeColor com visual styles e sai sempre verde do Windows - a
+  # unica cor que a HUD do jogo nao tem em lugar nenhum. Aqui ela e desenhada no Paint do painel.
+  $script:barraPct = [Math]::Max(0.0,[Math]::Min(1.0,$pct))   # trava: fracao fora de 0..1 daria largura negativa
+  if($script:barraBox -and -not $script:barraBox.IsDisposed){ $script:barraBox.Invalidate() }
+}
+$script:barraPct = 0.0
 function Show-Ui {
   $f = New-Object System.Windows.Forms.Form
-  # Janelinha COMPACTA (302x212; era 400x380 com oito botoes). Nao e so estetica: o Capture-Raw pinta a area dela
-  # de PRETO em toda captura pra ela nao sujar o OCR, entao janela menor = menos tela do jogo cega, e o
-  # Fugir-Da-Area precisa move-la com menos frequencia.
-  # A moldura segue sendo a do Windows (FixedToolWindow) de proposito: sem ela some o X, e FECHAR A JANELA e o
-  # caminho de parada limpa do bot - matar o console pelo console ja deixou o estado do char inconsistente duas
-  # vezes (08/09 e 09/09). A HUD e a area de dentro; a barra de titulo do ToolWindow e fina e nao atrapalha.
-  $f.Text = 'MudinhoX RPA'
-  $f.Width = 302; $f.Height = 212; $f.TopMost = $true; $f.FormBorderStyle = 'FixedToolWindow'
-  $f.BackColor = $HudFundo; $f.ForeColor = $HudTexto
+  # Janelinha COMPACTA (300x200). Nao e so estetica: o Capture-Raw pinta a area dela de PRETO em toda captura pra
+  # ela nao sujar o OCR, entao janela menor = menos tela do jogo cega, e o Fugir-Da-Area precisa move-la menos.
+  # SEM MOLDURA DO WINDOWS: a barra de titulo cinza era o que mais entregava "isto nao e o jogo". Some com ela o
+  # X e o arrastar, entao os dois voltam aqui - PARAR fecha a janela (e o FormClosing faz a parada limpa), e o
+  # arrasto e o proprio mouse sobre a pedra. Fechar pelo console continua sendo o que NAO se deve fazer: mata o
+  # processo sem salvar o estado, e foi assim que o char ficou inconsistente duas vezes (08/09 e 09/09).
+  $f.Text = 'MudinhoX RPA'   # nao aparece mais na tela, mas e o que identifica a janela pro Windows
+  $f.Width = 300; $f.Height = 188; $f.TopMost = $true; $f.FormBorderStyle = 'None'
+  $f.BackColor = $HudPedraBase; $f.ForeColor = $HudCreme
   # AutoScaleMode 'None' ANTES da fonte: o padrao e 'Font', que reescala os controles filhos a partir da fonte do
   # formulario. Como a grade abaixo esta em pixel fixo, escala automatica so teria como estragar.
-  # (Isto e a JANELA DO BOT, nao a leitura do jogo - as coordenadas de leitura estao saindo uma a uma.)
   $f.AutoScaleMode = 'None'
-  $f.Font = New-Object System.Drawing.Font('Segoe UI', 7.5)
+  $f.Font = Hud-Fonte 8 'Regular'
   $f.StartPosition = 'Manual'; $f.Location = Canto-Da-Tela-Do-Jogo $f.Height
-  # O rotulo de status saiu: ele mostrava a ULTIMA linha de log, que a caixa de log logo abaixo ja mostra
-  # inteira - duas coisas dizendo o mesmo, e a versao dele truncava no meio da frase.
+  # Fundo: degrade de pedra + moldura + titulo espacado + filete separando o cabecalho.
+  $f.Add_Paint({
+    param($s,$e)
+    $g = $e.Graphics; $g.SmoothingMode = 'None'; $g.TextRenderingHint = 'AntiAlias'
+    $r = $s.ClientRectangle
+    Hud-Grad $g $r $HudPedraTopo $HudPedraBase
+    Hud-Moldura $g $r
+    # Titulo em BRONZE apagado e pequeno: e rotulo, nao informacao. Ouro aqui competia com a barra, que e a
+    # unica coisa da janela que vale olhar de longe. O "RPA" saiu junto - nao dizia nada que o titulo ja nao diga.
+    $null = Hud-StrEsp $g 'MUDINHOX' (Hud-Fonte 8) $HudTitulo 10 5 3.0
+    $pl = New-Object System.Drawing.Pen($HudBronzeEsc); $g.DrawLine($pl,9,21,($r.Width-10),21); $pl.Dispose()
+  })
+  # ARRASTAR pela pedra: sem barra de titulo, e o unico jeito de sair da frente de algo que voce quer ver.
+  # (O Fugir-Da-Area move a janela por conta propria quando ela tapa o que o bot precisa LER; isto e pra voce.)
+  $f.Add_MouseDown({ param($s,$e) if($e.Button -eq 'Left'){ $script:dragDe = [System.Windows.Forms.Cursor]::Position; $script:dragEm = $script:ui.Location } })
+  $f.Add_MouseMove({ param($s,$e)
+    if($script:dragDe){
+      $p = [System.Windows.Forms.Cursor]::Position
+      $script:ui.Location = New-Object System.Drawing.Point(($script:dragEm.X + $p.X - $script:dragDe.X), ($script:dragEm.Y + $p.Y - $script:dragDe.Y))
+    } })
+  $f.Add_MouseUp({ $script:dragDe = $null })
   # SO PAUSAR e PARAR. Os outros seis (TUDO+MR, Warmup, Normal, MIXAR JA, MODO JOIAS, MODO DRAGOES) sairam a
-  # pedido do usuario em 12/09. Nada do que eles faziam era necessario pro ciclo: o mix ja dispara sozinho pelo
-  # $MixEveryMin, a fase warmup/normal e decidida pelo proprio bot, e o modo dragoes foi removido inteiro.
-  # PARAR fica: sem ele so restaria fechar o console, que MATA o processo sem a parada limpa - e foi exatamente
-  # assim que o estado do char ficou inconsistente duas vezes (08/09 e 09/09).
-  # 140 e nao 142: com 142 o PARAR encostava na borda direita e o filete de bronze dele sumia (o esquerdo tem 6px
-  # de margem, entao a assimetria aparecia). 6 + 140 + 4 + 140 + 6 = 296, a largura util do ToolWindow.
-  $script:btnPause = New-Object System.Windows.Forms.Button; $script:btnPause.SetBounds(6,4,140,24); $script:btnPause.Text = 'PAUSAR'; Hud-Botao $script:btnPause $HudBotao
-  $btn = New-Object System.Windows.Forms.Button;             $btn.SetBounds(150,4,140,24);          $btn.Text = 'PARAR';             Hud-Botao $btn $HudPerigo
+  # pedido do usuario em 12/09: o mix ja dispara sozinho pelo $MixEveryMin, a fase e decidida pelo proprio bot,
+  # e o modo dragoes foi removido inteiro.
+  $script:btnPause = Hud-Placa 'PAUSAR' 10 27 136 21 $HudPlacaCl $HudPlaca
+  $btnParar        = Hud-Placa 'PARAR' 154 27 136 21 $HudSangueCl $HudSangue
   # Barra = caminho ate o proximo /darmr (os 4 atributos do zero ao cap), NAO "quantos resets faltam": reset e so
   # o meio de juntar pontos, e quantos cabem num MR muda com o alvo, com o spot e com a fase. Pontos e o que conta.
   # (A PROJECAO de resets aparece no texto abaixo, que e onde ela pode vir acompanhada do "~".)
-  $rotMR = New-Object System.Windows.Forms.Label; $rotMR.SetBounds(6,36,22,12); $rotMR.Text = 'MR'
-  $rotMR.ForeColor = $HudOuro; $rotMR.Font = New-Object System.Drawing.Font('Segoe UI', 7, [System.Drawing.FontStyle]::Bold)
-  # Trilho = painel de fora (filete de bronze, poco escuro); preenchimento = painel de dentro, ouro.
-  $script:barraBox = New-Object System.Windows.Forms.Panel; $script:barraBox.SetBounds(28,34,262,12)
-  $script:barraBox.BackColor = $HudBronze   # o filete: o painel de dentro deixa 1px dele aparecendo em volta
-  $script:barraBg = New-Object System.Windows.Forms.Panel; $script:barraBg.SetBounds(1,1,260,10); $script:barraBg.BackColor = $HudPoco
-  $script:barraFill = New-Object System.Windows.Forms.Panel; $script:barraFill.SetBounds(0,0,0,10); $script:barraFill.BackColor = $HudOuro; $script:barraFill.Visible = $false
-  $script:barraBg.Controls.Add($script:barraFill); $script:barraBox.Controls.Add($script:barraBg)
-  $script:contador = New-Object System.Windows.Forms.Label; $script:contador.SetBounds(6,51,284,14); $script:contador.Text = '0 resets | 0 MR'
-  $script:contador.ForeColor = $HudTexto; $script:contador.Font = New-Object System.Drawing.Font('Segoe UI', 7.5, [System.Drawing.FontStyle]::Bold)
-  # Caixa do log num poco mais fundo que a pedra, com filete de bronze em volta (mesmo truque do trilho).
-  $logBox = New-Object System.Windows.Forms.Panel; $logBox.SetBounds(6,68,284,110); $logBox.BackColor = $HudBronze
-  $script:logBox = New-Object System.Windows.Forms.TextBox; $script:logBox.SetBounds(1,1,282,108)
-  # SEM barra de rolagem: o scrollbar do WinForms nao aceita cor e sai branco do sistema - era, de longe, o que
-  # mais destoava da HUD. O que se perde e rolar umas linhas pra tras nesta caixinha de 110px; o historico de
-  # verdade esta no rpa.log, que e onde toda analise deste projeto acontece. O AppendText ja mantem a ultima
-  # linha visivel, entao a caixa segue mostrando o que o bot acabou de fazer.
+  $script:barraBox = New-Object System.Windows.Forms.Panel; $script:barraBox.SetBounds(10,54,280,9)
+  $script:barraBox.BackColor = $HudPedraBase
+  $script:barraBox.Add_Paint({
+    param($s,$e)
+    $g = $e.Graphics; $r = $s.ClientRectangle
+    # buraco escavado (relevo invertido) com o poco escuro dentro
+    $g.FillRectangle((New-Object System.Drawing.SolidBrush($HudPoco)),$r)
+    Hud-Relevo $g $r $HudBronzeEsc $HudBronze
+    $w = [int](($r.Width - 4) * $script:barraPct)
+    if($w -gt 0){
+      $fr = New-Object System.Drawing.Rectangle(2,2,$w,($r.Height-4))
+      # ouro claro em cima, ouro embaixo: a barra de XP do jogo e lustrosa, nao um bloco de cor
+      Hud-Grad $g $fr $HudOuroClaro $HudOuro
+      $pl = New-Object System.Drawing.Pen($HudOuroClaro); $g.DrawLine($pl,2,2,(1+$w),2); $pl.Dispose()
+    }
+    # SEM numero dentro da barra: creme sobre ouro nao se le, e a linha logo abaixo ja diz "MR 62.0%" - eram dois
+    # lugares mostrando o mesmo, e o pior deles ficava por cima do unico elemento colorido da janela.
+  })
+  $script:contador = New-Object System.Windows.Forms.Label; $script:contador.SetBounds(10,67,280,14); $script:contador.Text = '0 resets | 0 MR'
+  $script:contador.ForeColor = $HudCreme; $script:contador.BackColor = [System.Drawing.Color]::Transparent
+  $script:contador.Font = Hud-Fonte 8
+  $script:contador.TextAlign = 'MiddleCenter'
+  # Caixa do log num buraco escavado: painel desenha o relevo, o TextBox mora 3px pra dentro.
+  $poco = New-Object System.Windows.Forms.Panel; $poco.SetBounds(10,85,280,93); $poco.BackColor = $HudPoco
+  $poco.Add_Paint({ param($s,$e) Hud-Relevo $e.Graphics $s.ClientRectangle $HudBronzeEsc $HudBronze })
+  # SEM barra de rolagem: o scrollbar do WinForms nao aceita cor e sai branco do sistema - de longe o que mais
+  # destoava. O historico de verdade esta no rpa.log, que e onde toda analise deste projeto acontece, e o
+  # AppendText ja mantem a ultima linha visivel.
+  $script:logBox = New-Object System.Windows.Forms.TextBox; $script:logBox.SetBounds(3,3,274,87)
+  # TabStop off: sem moldura do Windows ele era o primeiro controle focavel da janela, pegava o foco ao abrir e
+  # aparecia com TODO o texto selecionado em azul do sistema - a cor mais fora de lugar possivel aqui.
+  $script:logBox.TabStop = $false
   $script:logBox.Multiline = $true; $script:logBox.ReadOnly = $true; $script:logBox.ScrollBars = 'None'
   $script:logBox.BorderStyle = 'None'; $script:logBox.BackColor = $HudPoco; $script:logBox.ForeColor = $HudLog
-  $script:logBox.Font = New-Object System.Drawing.Font('Consolas', 7.5)
-  $logBox.Controls.Add($script:logBox)
-  $script:btnPause.Add_Click({ $script:paused = -not $script:paused; $script:btnPause.Text = $(if($script:paused){ 'RETOMAR' } else { 'PAUSAR' }); $script:btnPause.BackColor = $(if($script:paused){ $HudBotaoOn } else { $HudBotao }); Log $(if($script:paused){ 'PAUSADO pelo usuario (clique RETOMAR pra voltar)' } else { 'retomado pelo usuario' }) })
-  $btn.Add_Click({ $script:stopReason = 'usuario'; $script:stop = $true })
-  $f.Add_FormClosing({ $script:stopReason = 'janela fechada'; $script:stop = $true })
-  $f.Controls.AddRange(@($script:btnPause,$btn,$rotMR,$script:barraBox,$script:contador,$logBox)); $f.Show(); $script:ui = $f
+  $script:logBox.Font = New-Object System.Drawing.Font('Consolas', 7)
+  $poco.Controls.Add($script:logBox)
+  $script:btnPause.Add_Click({
+    $script:paused = -not $script:paused
+    $script:btnPause.Tag.Texto = $(if($script:paused){ 'RETOMAR' } else { 'PAUSAR' })
+    $script:btnPause.Tag.Topo  = $(if($script:paused){ $HudOlivaCl } else { $HudPlacaCl })
+    $script:btnPause.Tag.Base  = $(if($script:paused){ $HudOliva }   else { $HudPlaca })
+    $script:btnPause.Invalidate()
+    Log $(if($script:paused){ 'PAUSADO pelo usuario (clique RETOMAR pra voltar)' } else { 'retomado pelo usuario' })
+  })
+  # PARAR = fechar a janela, a pedido: um caminho so de saida, e ele passa pelo FormClosing (parada limpa).
+  $btnParar.Add_Click({ $script:stopReason = 'usuario'; $script:stop = $true; $script:ui.Close() })
+  $f.Add_FormClosing({ if(-not $script:stop){ $script:stopReason = 'janela fechada'; $script:stop = $true } })
+  $f.Controls.AddRange(@($script:btnPause,$btnParar,$script:barraBox,$script:contador,$poco)); $f.Show(); $script:ui = $f
 }
 
 # ---------- janela do jogo / foco ----------
