@@ -29,8 +29,8 @@ $NoFocusRead   = $false  # $true: LE sem trazer o jogo pra frente (so pra jogo s
 $PollBgSec     = 60      # intervalo quando outra janela esta na frente (cada leitura rouba o foco por ~1s)
 $WarpCmd       = '/s18'   # comando de teleporte pro spot de farm normal (troque aqui se mudar de spot)
 $WarmupCmd     = '/losttower7'   # apos /darmr o personagem volta fraco em Lorencia: farma AQUI (Lost Tower 7) ate juntar os primeiros resets
-$WarmupResets  = 10          # quantos resets fazer no modo warmup (pos-darmr) antes de voltar ao spot normal ($WarpCmd)
-$WarmupTeste   = $true   # apos o /darmr, TESTA o spot normal antes de cair no warmup. Medido: o warmup e 73-78% do tempo do MR (220s por reset em Lost Tower contra 70-110s no Stadium, pelos mesmos ~6200 pontos por reset), e os ciclos de warmup nao aceleram ao longo dos 10 - ficam achatados em ~220s. Se o char aguenta o spot normal logo apos o MR, o warmup inteiro e desperdicio
+$WarmupResets  = 3           # quantos resets fazer no modo warmup (pos-darmr) antes de voltar ao spot normal ($WarpCmd). Era 10: medido, cada reset em Lost Tower custa ~220s contra 70-110s no Stadium, pelos mesmos ~6200 pontos - 10 resets la eram 73-78% do tempo do MR inteiro
+$WarmupTeste   = $false  # $true faz o bot TESTAR o spot normal logo apos o /darmr e pular o warmup se o char aguentar. Desligado a pedido do usuario, que prefere os $WarmupResets resets garantidos no Lost Tower antes de voltar pro /s18
 $WarmupTesteSec = 300    # o teste falha se o primeiro ciclo no spot normal passar disso (ciclo saudavel la e 70-110s; ate o Lost Tower fecha em ~220s). Estourou = char fraco demais, cai pro warmup
 $WarpMap       = 'stad'      # nome esperado do mapa do /s18 (Stadium), 4 primeiras letras. So conta "no spot" se o mapa bater com este
 $WarmupMap     = 'lost'      # nome esperado do mapa do /losttower7 (Lost Tower). Evita aceitar mapa errado (ex AIDA) como spot
@@ -1959,6 +1959,12 @@ try {   # preflight no start: 10s conferindo tudo evita a noite inteira perdida 
 } catch { Log "preflight falhou: $_" }
 try { Garantir-Watchdog } catch { Log "watchdog: $_" }   # se o bot morrer, alguem tem que traze-lo de volta
 Load-Estado   # retoma fase/warmup/modo de onde parou (o warmup.flag abaixo ainda tem prioridade)
+# Se o $WarmupResets do CONFIG baixou (10 -> 3) e o estado.txt guardou uma contagem maior, o char ja cumpriu a
+# cota: sai do warmup na hora, em vez de gastar mais um ciclo de ~220s no Lost Tower so pra descobrir isso.
+if($script:phase -eq 'warmup' -and $script:warmupCount -ge $WarmupResets){
+  $script:phase = 'normal'; Save-Estado
+  Log "warmup ja cumprido ($($script:warmupCount)/$WarmupResets pelo estado.txt) -> indo direto pro spot normal ($WarpCmd)"
+}
 if($script:ui){   # botoes tem que refletir o modo retomado do estado.txt
   if($script:modo -eq 'joias'){
     $script:btnMix.Text = 'MODO JOIAS (ligado)'; $script:btnMix.BackColor = 'ForestGreen'

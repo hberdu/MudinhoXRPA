@@ -465,3 +465,10 @@ nos comandos.
   zerava a config antes do loop rodar. Estado renomeado pra `$script:spotTeste`. Regressao no `test_estado.ps1`
   cobre a colisao (mexer no estado nao pode apagar a config), verificada renomeando de volta.
   Vale como regra pro projeto: **nunca usar o mesmo nome pra config e pra estado**, nem trocando a caixa.
+- **`$WarmupResets` 10 -> 3, por decisao do usuario** (19:30). Com os numeros medidos, o warmup cai de ~37-56 min
+  pra ~11 min por MR; o resto vai pro `/s18`, onde o ciclo custa 70-110s em vez de 220s. O teste automatico do
+  spot (`$WarmupTeste`) ficou **desligado**: o usuario prefere os 3 resets garantidos em Lost Tower a deixar o
+  bot decidir. O codigo do teste continua la, e um `$WarmupTeste = $true` religa.
+- Junto: se o `$WarmupResets` do CONFIG diminuir e o `estado.txt` tiver uma contagem maior (ex. `warmup=10`
+  gravado quando a cota era 10), o bot sai do warmup **no start**, em vez de gastar mais um ciclo de ~220s no
+  Lost Tower so pra descobrir que a cota ja estava cumprida.
