@@ -130,18 +130,20 @@ $InvCellLit    = 210      # soma R+G+B acima disso = pixel "com item" (celula va
 $InvCellMin    = 10       # N pixels claros na celula = ocupada
 $InvFreeMin    = 4        # menos que N celulas livres = inventario cheio -> vai mixar
 $InvCheckSec   = 300      # checa o inventario a cada N seg enquanto farma
-# Evento dos Dragoes Dourados: botao -> /tarkan2 -> procura mobs DOURADOS (Golden Tantalos) pela tela, anda ate eles e mata
-$GoldCmd       = '/tarkan2'
-$GoldMap       = 'tark'   # nome esperado do mapa (4 letras)
+# Evento dos Dragoes Dourados: botao -> /lorencia -> procura os Golden Dragon (mobs DOURADOS) pela tela, anda ate eles e mata.
+# O chat anuncia dois bichos diferentes: "Golden Dragon vivo(s) em Lorencia" e "Golden Tantalo vivo(s) em Tarkan". O alvo aqui e o DRAGAO, em Lorencia.
+$GoldCmd       = '/lorencia'
+$GoldMap       = 'lore'   # nome esperado do mapa (4 letras). Lorencia e CIDADE: ver $GoldHelper abaixo
 $GoldMinutes   = 20       # tempo maximo cacando; depois volta pro farm sozinho
 $GoldArea      = @{ X1 = 70; Y1 = 100; X2FromRight = 70; Y2FromBottom = 150 }   # area util da tela (fora do HUD, minimapa e chat)
-$GoldPix       = @{ RMin = 185; GMin = 140; BMax = 125; RmB = 70; RmG = 75 }    # pixel "dourado": vermelho e verde altos, azul baixo, e R-B grande (o chao de Tarkan e marrom fosco)
+$GoldPix       = @{ RMin = 185; GMin = 140; BMax = 125; RmB = 70; RmG = 75 }    # pixel "dourado": vermelho e verde altos, azul baixo, e R-B grande (NAO CALIBRADO: casou com o chao de Tarkan)
 $GoldCell      = 26       # agrega os pixels dourados em blocos de N px (o mob e um borrao, nao um pixel)
 $GoldBlobMin   = 30       # minimo de pixels dourados no bloco pra considerar que tem mob ali
 $GoldSelfR     = 90      # ignora esse raio em volta do centro (seu personagem tem fogo/asas). 150 escondia o mob colado em voce; o filtro de cor ja rejeita laranja. CALIBRAR com -TestGold
+$GoldHelper    = $false  # ligar o MU Helper na caca? Em CIDADE (Lorencia) nao da: clicar no play abre "precisa estar fora da cidade". Sem helper, o clique no mob e o ataque
 $GoldStepSec   = 2.0      # espera depois de mandar o personagem pro bloco dourado
 $GoldRepetMax  = 4       # mesma coordenada N vezes na caca = cenario, nao mob: para e avisa (no log de 31/08 foram 21 de 26 deteccoes no mesmo x)
-$GoldMaxSeguidas = 10    # alvo achado em N varreduras SEGUIDAS = cenario dourado (chao de Tarkan), nao mob. Mob e raro e some entre varreduras
+$GoldMaxSeguidas = 10    # alvo achado em N varreduras SEGUIDAS = cenario dourado, nao mob. Mob e raro e some entre varreduras
 $GoldRoamSec   = 4.0      # sem nada dourado na tela: anda pra um lado e procura de novo
 # ---------------------------------------------------------------------------------------
 
@@ -1043,8 +1045,10 @@ function Hunt-Golden {   # botao DRAGOES: /tarkan2 e caca os Golden Tantalos ate
   for($t = 1; $t -lt $WarpTries -and -not (Same-Map (Read-Map $null) $GoldMap); $t++){
     Log "dragoes: nao cheguei em Tarkan, reenviando ($t/$WarpTries)"; $null = Send-Chat $GoldCmd; Wait $WarpWaitSec
   }
-  if(-not (Same-Map (Read-Map $null) $GoldMap)){ Notify "MudinhoX" "Nao consegui chegar em Tarkan com $GoldCmd."; return }
-  Start-Helper   # o helper bate no que estiver perto; o bot so leva o personagem ate o mob dourado
+  if(-not (Same-Map (Read-Map $null) $GoldMap)){ Notify "MudinhoX" "Nao consegui chegar em '$GoldMap' com $GoldCmd."; return }
+  # Lorencia e CIDADE: clicar no play la abre o popup "precisa estar fora da cidade" (gotcha ja documentado).
+  # Sem helper, quem ataca e o proprio clique no mob - o loop abaixo reclica a cada varredura.
+  if($GoldHelper){ Start-Helper } else { Log "dragoes: mapa e cidade, nao ligo o helper (clico no mob direto)"; Close-Popup }
   $fim = (Get-Date).AddMinutes($GoldMinutes); $achados = 0; $vazios = 0; $vistos = @{}; $seguidas = 0
   while((Get-Date) -lt $fim -and -not $script:stop -and -not $script:restartCycle){
     $img = Capture-Game
@@ -1074,9 +1078,9 @@ function Hunt-Golden {   # botao DRAGOES: /tarkan2 e caca os Golden Tantalos ate
         break
       }
       Log "dragoes: dourado em $chave [$($alvo.N) px dourados], indo bater"
-      $null = Click-Client $alvo.X $alvo.Y
+      $null = Click-Client $alvo.X $alvo.Y   # 1o clique leva o personagem ate o mob
       Wait $GoldStepSec
-      Start-Helper
+      if($GoldHelper){ Start-Helper } else { $null = Click-Client $alvo.X $alvo.Y; Wait $GoldStepSec }   # sem helper, o 2o clique e o ataque
     } else {
       $vazios++; $seguidas = 0   # varredura limpa quebra a sequencia: mob de verdade some da tela entre um e outro
       if($vazios % 10 -eq 0){ Log "dragoes: nada dourado na tela ha $vazios varreduras, continuo procurando" }
