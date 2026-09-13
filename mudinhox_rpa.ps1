@@ -103,6 +103,10 @@ $MsgInvWords   = '(?i)(invent.rio.{0,12}cheio|espa.o insuficiente|inventory full
 $ClientEsperado = @{ W = 1920; H = 1009 }   # resolucao pra qual as coordenadas fixas foram calibradas; muda isso se recalibrar noutra
 $SemProgressoMin = 12    # sem ganhar UM ponto por N min = travou em algo que a gente ainda nao previu -> avisa e reinicia o ciclo
 $LogLevelDelta = 40      # so loga o level quando ele salta N (ou cai = reset). Com poll de 2s, logar todo tick so enche o arquivo
+$UiLogMaxChars = 60000   # teto do log da janelinha (o TextBox crescia sem limite rodando dias seguidos)
+$AutoTune      = $true   # o bot roda um A/B do alvo de level sozinho e fica com o melhor (compara PONTOS/H, nao resets/h)
+$AutoTuneAlvos = 350, 320   # alvos a testar, em ordem. Se o servidor exigir level minimo pra resetar, o alvo baixo rende pouco e perde sozinho
+$AutoTuneResets = 15     # resets por alvo antes de comparar
 $MetricsEvery  = 5       # a cada N resets loga resumo: resets/h, pontos/h e ETA do master reset
 $JitterPct     = 0.25    # varia +-25% os intervalos (stats, inventario, mensagens, poll). Valores dos stats seguem EXATOS - so o RITMO varia
 # Mix de joias: inventario cheio -> /mixer -> clica no NPC -> "Mixar Joias" -> clica cada tipo em VERDE -> volta pro farm
@@ -235,7 +239,12 @@ try { $script:logW = New-Object System.IO.StreamWriter([System.IO.FileStream]::n
 function Log($m){
   $line = "[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $m; Write-Host $line
   if($script:logW){ try { $script:logW.WriteLine($line) } catch {} } else { try { Add-Content -Path $LogFile -Value $line -Encoding UTF8 } catch {} }
-  if($script:ui -and -not $script:ui.IsDisposed){ $script:status.Text = $m; $script:logBox.AppendText("$line`r`n"); [System.Windows.Forms.Application]::DoEvents() }
+  if($script:ui -and -not $script:ui.IsDisposed){
+    $script:status.Text = $m
+    # o TextBox crescia sem limite: rodando dias seguidos a janela fica pesada. Corta pela metade quando passa do teto.
+    if($script:logBox.TextLength -gt $UiLogMaxChars){ $script:logBox.Text = $script:logBox.Text.Substring($script:logBox.TextLength - [int]($UiLogMaxChars/2)) }
+    $script:logBox.AppendText("$line`r`n"); [System.Windows.Forms.Application]::DoEvents()
+  }
 }
 function Check-Stop { if(-not $script:stop -and (Test-Path $StopFile)){ $script:stop = $true; Remove-Item $StopFile -ErrorAction SilentlyContinue }; if($script:stop){ Log "parado pelo usuario"; if($script:logW){ $script:logW.Dispose() }; if($script:ui){ $script:ui.Dispose() }; exit } }
 function Pause-Gate {   # congela o bot enquanto PAUSADO e LIBERA o foco pra voce mixar joias no NPC; re-adquire ao retomar
@@ -450,7 +459,9 @@ function Save-Estado {   # fase/warmup E as metricas do MR. Medir um MR leva hor
       "runStart=$($script:runStart.Ticks)"
       "mrs=$($script:mrs)"
       "mrStart=$($script:mrStart.Ticks)"
-      "ciclos=$(@($script:ciclos) -join ',')"
+      "ciclos=$(@($script:ciclos) -join ",")"
+      "alvo=$TargetLevel"
+      "tuneOn=$(if($script:tuneOn){1}else{0})"
     ) | Set-Content -Path $EstadoFile -Encoding ASCII
   } catch {}
 }
@@ -470,7 +481,9 @@ function Load-Estado {
       if($kv.mrs){ $script:mrs = [int]$kv.mrs }
       if($kv.runStart){ $script:runStart = [datetime]::new([long]$kv.runStart) }
       if($kv.mrStart){ $script:mrStart = [datetime]::new([long]$kv.mrStart) }
-      if($kv.ciclos){ $script:ciclos = @($kv.ciclos -split ',' | ? { $_ } | % { [int]$_ }) }
+      if($kv.ciclos){ $script:ciclos = @($kv.ciclos -split "," | ? { $_ }) }
+      if($kv.alvo){ $script:TargetLevel = [int]$kv.alvo }
+      if($kv.tuneOn -eq "0"){ $script:tuneOn = $false; Log "autotune ja concluido antes: alvo $($script:TargetLevel)" }
     }
     Log "estado retomado: fase $($script:phase), warmup $($script:warmupCount)/$WarmupResets, $($script:resets) resets e $($script:ptsSent) pontos acumulados neste MR"
   } catch { Log "estado.txt ilegivel, comecando do zero: $_" }
@@ -735,14 +748,20 @@ function Ocr-Status($img){   # palavras do painel de status. Usa o recorte apren
     $script:statBox = $null; Log "status: recorte nao serviu mais, voltando pro OCR da tela toda"
   }
   $w = @((Ocr-Bitmap $img).Lines | % { $_.Words })
-  if(Status-Open $w){   # aprende o recorte: caixa que envolve os rotulos + Pts, com folga
-    $r = $w | ? { $_.Text -match '(?i)^(pont|energia|vitalidade|agilidade|for|str|agi|ene|v(?!elo).*dade)' -or $_.Text -match '^\d{1,6}$' } | % { $_.BoundingRect }
-    if($r.Count -ge 5){
+  if(Status-Open $w){   # aprende o recorte a partir dos ROTULOS so.
+    # Incluir "qualquer numero" pegava numeros soltos do HUD/chat e o recorte saia com 1378x775 (72% da tela):
+    # nao economizava nada e ficava ancorado no lugar errado. Agora so os rotulos definem a caixa, e a largura
+    # e estendida a direita o suficiente pro numero caber.
+    $r = @($w | ? { $_.Text -match '(?i)^(pont|energia|vitalidade|agilidade|for|str|agi|ene|v(?!elo).*dade)' } | % { $_.BoundingRect })
+    if($r.Count -ge 4){
       $x1 = ($r | % { $_.X } | measure -Minimum).Minimum; $x2 = ($r | % { $_.X + $_.Width } | measure -Maximum).Maximum
       $y1 = ($r | % { $_.Y } | measure -Minimum).Minimum; $y2 = ($r | % { $_.Y + $_.Height } | measure -Maximum).Maximum
-      $x = [Math]::Max(0, [int]$x1 - 30); $y = [Math]::Max(0, [int]$y1 - 20)
-      $ww = [Math]::Min($img.Width - $x, [int]($x2 - $x1) + 60); $hh = [Math]::Min($img.Height - $y, [int]($y2 - $y1) + 40)
-      if($ww -gt 80 -and $hh -gt 80 -and $ww -lt $img.Width * 0.8){ $script:statBox = @{ X = $x; Y = $y; W = $ww; H = $hh }; Log "status: recorte aprendido ($x,$y ${ww}x${hh}) - proximas leituras nao usam a tela toda" }
+      $x = [Math]::Max(0, [int]$x1 - 20); $y = [Math]::Max(0, [int]$y1 - 25)
+      $ww = [Math]::Min($img.Width - $x, [int]($x2 - $x1) + 300)   # +300 pro numero a direita do rotulo
+      $hh = [Math]::Min($img.Height - $y, [int]($y2 - $y1) + 50)
+      if($ww -gt 120 -and $hh -gt 80 -and $ww -lt $img.Width * 0.45 -and $hh -lt $img.Height * 0.7){
+        $script:statBox = @{ X = $x; Y = $y; W = $ww; H = $hh }; Log "status: recorte aprendido ($x,$y ${ww}x${hh}) - proximas leituras nao usam a tela toda"
+      } else { Log "status: recorte candidato ${ww}x${hh} nao faz sentido (rotulos espalhados), seguindo com OCR global" }
     }
   }
   $w
@@ -1138,6 +1157,30 @@ function Tick-Msgs($img){   # le as mensagens do jogo de vez em quando. A caca a
   if($m -match $MsgGoldWords){ Log "evento dos dragoes no chat (use o botao DRAGOES DOURADOS se quiser ir)" }
   elseif($m -match $MsgInvWords){ Log "jogo avisou inventario cheio -> vou mixar"; $script:mixNow = $true }
 }
+$script:tuneOn = $AutoTune; $script:tuneArm = 0; $script:tuneResets = 0; $script:tunePts = 0; $script:tuneStart = Get-Date; $script:tuneRes = @()
+if($script:tuneOn){ $script:TargetLevel = $AutoTuneAlvos[0] }   # comeca pelo primeiro alvo da lista (Load-Estado sobrepoe se o A/B ja terminou antes)
+function Tick-AutoTune {   # $TargetLevel sempre foi chute. Em vez de pedir experimento manual, o bot roda o A/B sozinho.
+  # Compara PONTOS/H (nao resets/h): resetar mais cedo da mais resets, mas pode dar menos pontos por reset.
+  if(-not $script:tuneOn){ return }
+  $script:tuneResets++
+  if($script:tuneResets -lt $AutoTuneResets){ return }
+  $h = ((Get-Date) - $script:tuneStart).TotalHours
+  $ph = if($h -gt 0){ [int](($script:ptsSent - $script:tunePts) / $h) } else { 0 }
+  $script:tuneRes += ,@($TargetLevel, $ph)
+  Log "autotune: alvo $TargetLevel rendeu $ph pontos/h em $($script:tuneResets) resets"
+  $script:tuneArm++
+  if($script:tuneArm -lt $AutoTuneAlvos.Count){
+    $script:TargetLevel = $AutoTuneAlvos[$script:tuneArm]
+    $script:tuneResets = 0; $script:tunePts = $script:ptsSent; $script:tuneStart = Get-Date
+    Log "autotune: testando agora alvo $($script:TargetLevel) por $AutoTuneResets resets"
+  } else {
+    $melhor = @($script:tuneRes | sort { $_[1] } -Descending)[0]
+    $script:TargetLevel = $melhor[0]; $script:tuneOn = $false
+    Log ("autotune: FIM. " + (@($script:tuneRes | % { "$($_[0])=$($_[1])pts/h" }) -join ' vs ') + " -> ficando com alvo $($melhor[0])")
+    Notify "MudinhoX" "Auto-tune: melhor alvo de level e $($melhor[0]) ($($melhor[1]) pontos/h)."
+    Save-Estado
+  }
+}
 $script:ptsLastGain = Get-Date
 function Tick-Progresso {   # rede de seguranca GERAL: o travamento de 2h passou porque nada vigiava o RESULTADO.
   # $ResetStuckMin cobre so o loop de reset; isto cobre qualquer modo de falha em que o bot "roda" sem produzir nada.
@@ -1208,7 +1251,9 @@ function Run-Preflight([bool]$comSpot){   # valida os subsistemas de leitura no 
       $img.Dispose()
     }
     $st = Read-Status
-    Ok 'le os 4 atributos + pontos' ($null -ne $st) 'Read-Status falhou (janela C nao abriu ou OCR nao leu)'
+    Ok 'le os 4 atributos' ($null -ne $st) 'Read-Status falhou (janela C nao abriu ou OCR nao leu)'
+    # Pts era conferido junto e passava com -1: sem os pontos o bot nao distribui nada, entao e falha propria
+    Ok 'le os pontos disponiveis' ($st -and [int]$st.Pts -ge 0) 'rotulo "Pontos" nao foi lido (Pts=-1)'
     if($st){ Log "       F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) Pts=$($st.Pts) | faltam $(Points-Needed $st) pro cap" }
     $free = Inv-Free
     Ok 'le o inventario' ($free -ge 0) 'Inv-Free devolveu -1 (tecla V ou $InvGrid)'
@@ -1423,6 +1468,7 @@ while($true){
   $script:tagsCiclo = @()   # ciclo novo comeca sem etiqueta
   $script:ultimoReset = $agora
   Log "reset feito, recomecando"
+  Tick-AutoTune
   Save-Estado   # metricas do MR sobrevivem a reinicio do bot (medir um MR leva horas)
   if(($script:resets % $MetricsEvery) -eq 0){ Metrics }
   $null = Wait-Map '' 8   # espera o mapa RENDERIZAR (o jogo ignora teclas durante o teleporte); segue assim que ler, em vez de dormir 8s

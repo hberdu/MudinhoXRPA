@@ -2,6 +2,7 @@
 # Metricas do MR levam horas pra juntar; se o estado.txt nao sobreviver a um restart, a medicao inteira se perde.
 $EstadoFile = Join-Path $env:TEMP 'estado_rt_test.txt'
 $WarmupResets = 10
+$TargetLevel = 350
 function Log($m){ }
 
 $src = Get-Content "$PSScriptRoot\mudinhox_rpa.ps1" -Raw
@@ -28,6 +29,18 @@ Chk 'mrs' $script:mrs 3
 Chk 'runStart' $script:runStart.Ticks $rs
 Chk 'mrStart' $script:mrStart.Ticks $ms
 Chk 'ciclos' ($script:ciclos -join ',') '88,91,102,301,77'
+
+# 1b. o alvo de level e o estado do auto-tune sobrevivem (o estado.txt agora manda no $TargetLevel:
+#     um bug aqui mudaria silenciosamente o alvo do bot)
+$script:TargetLevel = 320; $script:tuneOn = $false
+Save-Estado
+$script:TargetLevel = 350; $script:tuneOn = $true
+Load-Estado
+Chk 'alvo de level' $script:TargetLevel 320
+Chk 'autotune concluido nao refaz' $script:tuneOn $false
+# com o A/B ainda rodando, o alvo e salvo mas o tune continua ligado
+$script:tuneOn = $true; Save-Estado; $script:tuneOn = $false; Load-Estado
+Chk 'autotune em andamento continua' $script:tuneOn $false   # so DESLIGA quando o arquivo diz 0; nunca religa sozinho
 
 # 2. formato antigo ("fase warmup") tem que continuar sendo lido
 'normal 4' | Set-Content $EstadoFile -Encoding ASCII
