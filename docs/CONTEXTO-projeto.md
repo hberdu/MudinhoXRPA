@@ -183,3 +183,11 @@ Rodada 10, 2026-09-01 02:25 - prints do usuario destravaram mix e caca:
 - Correcao: `Chat-Open` varre a FAIXA `YFromBottomMin=80..YFromBottomMax=130` (passo 4 em x, a borda e linha continua) e exige **2 linhas vermelhas** (topo e base). Tolera o deslocamento.
 - Fixture `chat_ABERTO.png` + 2 testes no `-TestVisao`: detecta a caixa aberta, e nao inventa caixa na tela de servidor.
 - **Licao**: coordenada de UI fixa neste jogo quebra. Ja aconteceu com o level/chat (mudanca de resolucao), com o painel de status (janela deslocada) e agora com a caixa de chat. Onde der, usar FAIXA + confirmacao, nao pixel exato.
+
+**LEVEL MINIMO PRA RESETAR = 350, confirmado pela MENSAGEM DO SERVIDOR (2026-09-01 03:04):**
+- O `Log-GameMsg` (lido na faixa `$MsgBox`) capturou em texto: **"Você precisa de estar no level 350 para resetar!"**. Isso encerra a duvida sobre `$TargetLevel`, que era chute desde o inicio do projeto — nao e mais inferencia por contagem de reenvios, e o proprio jogo dizendo.
+- Consequencia: o braco de 320 do auto-tune testava valor IMPOSSIVEL. O `/resetar` era recusado e so virava reenvio ate o char passar de 350 sozinho. E o `204560 pontos/h` que eu citei como "320 esta ganhando" era o numero CUMULATIVO da sessao, nao o do braco - leitura minha errada.
+- Correcoes: `$LevelMinReset` (350) e piso, `$AutoTuneAlvos` virou `350, 380` (testar pra CIMA, nao pra baixo), e o alvo do auto-tune e sempre `Max(alvo, $LevelMinReset)`.
+- **O bot APRENDE o piso sozinho**: se a mensagem casar com `level (\d+) para resetar`, ele sobe `$TargetLevel`, grava `minReset` no estado.txt e descarta o braco invalido do auto-tune. Se o servidor mudar a regra, o bot se ajusta sem ninguem editar config.
+- Outra mensagem capturada: "voce esta no nivel maximo" (level 400 = teto do servidor).
+- Validacao do `Chat-Open` em 2a amostra independente (print de 03:06:04): logica velha 0 vermelhos nas linhas 111/87 -> diz FECHADA; logica nova acha bordas em 118,117,93,92 -> diz ABERTA. Fixture `chat_ABERTO_2.png` no `-TestVisao`.

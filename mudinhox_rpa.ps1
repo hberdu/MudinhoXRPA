@@ -19,7 +19,7 @@
 param([switch]$Check, [string]$TestImage, [switch]$TestInv, [switch]$TestMix, [switch]$TestNpc, [switch]$TestGold, [switch]$TestVisao, [switch]$Preflight, [switch]$TestStatMin)
 
 # ---------- CONFIG (coordenadas relativas a area cliente do jogo, 1920x1009) ----------
-$TargetLevel   = 350
+$TargetLevel   = 350     # level pra resetar. Nunca abaixo de $LevelMinReset (o servidor recusa)
 $PlayBtn       = @{ X = 77;   Y = 33 }                     # centro do botao play/pause (canto sup. esquerdo)
 $LevelBox      = @{ X = 1080; W = 140; H = 40; YFromBottom = 82 }    # numero do level na barra inferior; Y medido a partir da BASE da area cliente (aguenta resolucao/altura diferente)
 $PollSec       = 6       # intervalo de leitura do level com o jogo na frente
@@ -105,7 +105,8 @@ $SemProgressoMin = 12    # sem ganhar UM ponto por N min = travou em algo que a 
 $LogLevelDelta = 40      # so loga o level quando ele salta N (ou cai = reset). Com poll de 2s, logar todo tick so enche o arquivo
 $UiLogMaxChars = 60000   # teto do log da janelinha (o TextBox crescia sem limite rodando dias seguidos)
 $AutoTune      = $true   # o bot roda um A/B do alvo de level sozinho e fica com o melhor (compara PONTOS/H, nao resets/h)
-$AutoTuneAlvos = 350, 320   # alvos a testar, em ordem. Se o servidor exigir level minimo pra resetar, o alvo baixo rende pouco e perde sozinho
+$AutoTuneAlvos = 350, 380   # alvos a testar. NAO usar abaixo de $LevelMinReset: o servidor recusa e o /resetar so vira reenvio ate o char passar do minimo sozinho
+$LevelMinReset = 350     # level minimo pra resetar. CONFIRMADO pela mensagem do servidor: "Voce precisa de estar no level 350 para resetar!". O bot re-aprende isso sozinho se mudar
 $AutoTuneResets = 15     # resets por alvo antes de comparar
 $MetricsEvery  = 5       # a cada N resets loga resumo: resets/h, pontos/h e ETA do master reset
 $JitterPct     = 0.25    # varia +-25% os intervalos (stats, inventario, mensagens, poll). Valores dos stats seguem EXATOS - so o RITMO varia
@@ -478,6 +479,7 @@ function Save-Estado {   # fase/warmup E as metricas do MR. Medir um MR leva hor
       "ciclos=$(@($script:ciclos) -join ",")"
       "alvo=$TargetLevel"
       "tuneOn=$(if($script:tuneOn){1}else{0})"
+      "minReset=$($script:LevelMinReset)"
     ) | Set-Content -Path $EstadoFile -Encoding ASCII
   } catch {}
 }
@@ -500,6 +502,7 @@ function Load-Estado {
       if($kv.ciclos){ $script:ciclos = @($kv.ciclos -split "," | ? { $_ }) }
       if($kv.alvo){ $script:TargetLevel = [int]$kv.alvo }
       if($kv.tuneOn -eq "0"){ $script:tuneOn = $false; Log "autotune ja concluido antes: alvo $($script:TargetLevel)" }
+      if($kv.minReset){ $script:LevelMinReset = [int]$kv.minReset }
     }
     Log "estado retomado: fase $($script:phase), warmup $($script:warmupCount)/$WarmupResets, $($script:resets) resets e $($script:ptsSent) pontos acumulados neste MR"
   } catch { Log "estado.txt ilegivel, comecando do zero: $_" }
@@ -1187,7 +1190,7 @@ function Tick-Msgs($img){   # le as mensagens do jogo de vez em quando. A caca a
   elseif($m -match $MsgInvWords){ Log "jogo avisou inventario cheio -> vou mixar"; $script:mixNow = $true }
 }
 $script:tuneOn = $AutoTune; $script:tuneArm = 0; $script:tuneResets = 0; $script:tunePts = 0; $script:tuneStart = Get-Date; $script:tuneRes = @()
-if($script:tuneOn){ $script:TargetLevel = $AutoTuneAlvos[0] }   # comeca pelo primeiro alvo da lista (Load-Estado sobrepoe se o A/B ja terminou antes)
+if($script:tuneOn){ $script:TargetLevel = [Math]::Max($AutoTuneAlvos[0], $LevelMinReset) }   # comeca pelo primeiro alvo da lista (Load-Estado sobrepoe se o A/B ja terminou antes)
 function Tick-AutoTune {   # $TargetLevel sempre foi chute. Em vez de pedir experimento manual, o bot roda o A/B sozinho.
   # Compara PONTOS/H (nao resets/h): resetar mais cedo da mais resets, mas pode dar menos pontos por reset.
   if(-not $script:tuneOn){ return }
@@ -1199,7 +1202,7 @@ function Tick-AutoTune {   # $TargetLevel sempre foi chute. Em vez de pedir expe
   Log "autotune: alvo $TargetLevel rendeu $ph pontos/h em $($script:tuneResets) resets"
   $script:tuneArm++
   if($script:tuneArm -lt $AutoTuneAlvos.Count){
-    $script:TargetLevel = $AutoTuneAlvos[$script:tuneArm]
+    $script:TargetLevel = [Math]::Max($AutoTuneAlvos[$script:tuneArm], $script:LevelMinReset)   # nunca abaixo do minimo que o servidor exige
     $script:tuneResets = 0; $script:tunePts = $script:ptsSent; $script:tuneStart = Get-Date
     Log "autotune: testando agora alvo $($script:TargetLevel) por $AutoTuneResets resets"
   } else {
@@ -1345,8 +1348,10 @@ if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guard
   # REGRESSAO da causa raiz do "nao consegui ler o status": neste print a caixa de chat esta ABERTA, mas as bordas
   # vermelhas estao em 117/92 a partir da base - as duas linhas fixas antigas (111/87) davam ZERO e o bot achava
   # que estava fechada, entao o C do status virava letra dentro do chat.
-  $i = Fx 'chat_ABERTO.png'
-  if($i){ Ok 'Chat-Open detecta a caixa aberta' (Chat-Open $i) 'disse fechada com a caixa aberta (o C viraria letra no chat)'; $i.Dispose() }
+  foreach($fx in 'chat_ABERTO.png','chat_ABERTO_2.png'){   # duas amostras independentes; nas duas as bordas ficaram em 117-118 e 92-93
+    $i = Fx $fx
+    if($i){ Ok "Chat-Open detecta a caixa aberta ($fx)" (Chat-Open $i) 'disse fechada com a caixa aberta (o C viraria letra no chat)'; $i.Dispose() }
+  }
   $i = Fx 'tela_servidor.png'
   if($i){ Ok 'Chat-Open nao inventa caixa onde nao tem' (-not (Chat-Open $i)) 'achou chat aberto na tela de servidor'; $i.Dispose() }
   $i = Fx 'tela_servidor.png'
@@ -1494,7 +1499,20 @@ while($true){
           if(-not $resetOk -and ((Get-Date) - $sent).TotalSeconds -ge $ResetWaitSec){
             $resends++
             Tag-Ciclo "reset"; Log "reset nao aconteceu (level: $(if($null -ne $lvl){$lvl}else{'ilegivel'}), mapa: '$mapa'), reenviando ($resends)"   # loga O QUE ELE VE: sem isso nao da pra saber se e o /resetar ou a LEITURA que falhou
-            if($resends -eq 1){ $null = Log-GameMsg $img "apos /resetar"; $null = Save-Shot 'reset_travado.png' }   # le a resposta do servidor e fotografa no PRIMEIRO erro (o jogo pode cair antes da 3a tentativa)
+            if($resends -eq 1){
+              $msg = Log-GameMsg $img "apos /resetar"; $null = Save-Shot 'reset_travado.png'
+              # O servidor diz o motivo em texto: "Voce precisa de estar no level 350 para resetar!".
+              # Em vez de deixar o alvo num valor impossivel (e reenviar /resetar ate o char passar de 350 sozinho),
+              # aprende o piso da propria mensagem e corrige o alvo - inclusive cancelando um braco invalido do auto-tune.
+              if($msg -match '(?i)level\s*(\d{2,4})\s*para\s*resetar'){
+                $min = [int]$Matches[1]
+                if($TargetLevel -lt $min){
+                  Log "servidor exige level $min pra resetar (alvo estava $TargetLevel): subindo o alvo"
+                  $script:TargetLevel = $min; $script:LevelMinReset = $min; Save-Estado
+                  if($script:tuneOn){ Log "autotune: alvo abaixo do minimo do servidor, descartando este braco"; $script:tuneResets = $AutoTuneResets - 1 }
+                }
+              }
+            }
             if($resends -eq ($ResetRetries + 1)){ Notify "MudinhoX" "Reset nao aconteceu 3x (level: $(if($null -ne $lvl){$lvl}else{'ilegivel'}), mapa: '$mapa'). Print em captcha\reset_travado.png"; $warned = Get-Date }
             elseif($resends -gt $ResetRetries -and (-not $warned -or ((Get-Date) - $warned).TotalSeconds -ge $RenotifySec)){ Notify "MudinhoX" "Reset ainda nao aconteceu (level: $(if($null -ne $lvl){$lvl}else{'ilegivel'}), mapa: '$mapa')."; $warned = Get-Date }
             if(Send-Chat "/resetar"){ $sent = Get-Date }   # NUNCA para de tentar: antes desistia apos 2 reenvios e so re-avisava, ficando preso por horas
