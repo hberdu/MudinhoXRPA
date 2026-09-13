@@ -176,3 +176,10 @@ Rodada 10, 2026-09-01 02:25 - prints do usuario destravaram mix e caca:
 - Bug de escape: `"\$Var"` NAO escapa em PowerShell (sai `\` + valor). O certo e crase: `` "`$Var" ``. Corrigido em 5 mensagens.
 - **Um `sed` meu injetou um `X` literal no script e derrubou o bot as 02:18** (`O termo "X" nao e reconhecido...`). Cuidado com `s|...|X|` como no-op em sed.
 - **`Ocr-Status` com "recorte aprendido" REMOVIDO** (2026-09-01 02:32), por medicao e nao por gosto: OCR da tela inteira custa 88ms, o recorte ~30ms, e isso roda UMA vez a cada 15s = 0.4% de um core. Nao pagava a complexidade; aprendia caixa errada (1378x775, 72% da tela, na 1a versao) e, quando o recorte envelhecia, custava um OCR A MAIS (recorte falho + global). Em 214 leituras, aprendeu 2x e falhou 1x. Fui eu que construi isso na "rodada de 6 melhorias" ja classificando como "ganho de velocidade, nao de correcao" — com o numero na mao, a decisao certa foi apagar.
+
+**CAUSA RAIZ do "stats: nao consegui ler o status" (2026-09-01 02:35) - achada pelo print que o proprio bot salvou:**
+- `Chat-Open` checava DUAS LINHAS EXATAS (`Y1FromBottom=111`, `Y2FromBottom=87`). Medido no `captcha\status_falhou.png`: nessas duas linhas havia **0 pixels vermelhos**; as bordas reais estavam em **117-118 e 92-93**. A caixa desceu ~6px (layout com o campo "Whisper").
+- Cadeia: `Chat-Open` sempre dizia "fechada" -> `Close-Chat` nunca fechava -> o `C` do `Read-Status` era digitado como **LETRA dentro do chat** -> a janela de status nunca abria. Explica a falha de ~25% que perseguiu a sessao inteira, e as 6 tentativas seguidas falhando.
+- Correcao: `Chat-Open` varre a FAIXA `YFromBottomMin=80..YFromBottomMax=130` (passo 4 em x, a borda e linha continua) e exige **2 linhas vermelhas** (topo e base). Tolera o deslocamento.
+- Fixture `chat_ABERTO.png` + 2 testes no `-TestVisao`: detecta a caixa aberta, e nao inventa caixa na tela de servidor.
+- **Licao**: coordenada de UI fixa neste jogo quebra. Ja aconteceu com o level/chat (mudanca de resolucao), com o painel de status (janela deslocada) e agora com a caixa de chat. Onde der, usar FAIXA + confirmacao, nao pixel exato.

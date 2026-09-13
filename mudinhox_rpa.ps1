@@ -66,7 +66,7 @@ $LoginBtn      = @{ X = 960; Y = 940 }    # botao pra entrar com o personagem ap
 $LoginWords    = 'Entrar|Conectar|Iniciar|Jogar|Selecionar|Enter|Start|Login'   # tela de selecao de PERSONAGEM
 $LoginServerWords = '(?i)server vip gold'   # tela de selecao de SERVIDOR: regex do botao a clicar (ex 'Server Principal'). Vazio = nao clica, avisa
 $LoginDangerWords = '(?i)(criar nova conta|create account|^sair$|delete)'   # se isso esta na tela, NUNCA clicar em coordenada chutada
-$ChatBox       = @{ X1 = 870; X2 = 1130; Y1FromBottom = 111; Y2FromBottom = 87 }   # bordas vermelhas da caixa de chat aberta; Y medido a partir da BASE da area cliente
+$ChatBox       = @{ X1 = 870; X2 = 1130; YFromBottomMin = 80; YFromBottomMax = 130 }   # bordas vermelhas da caixa de chat aberta. FAIXA, nao linha fixa: a caixa desloca alguns px conforme o layout
 $StallSec      = 40      # no spot com level parado N seg (miss infinito) -> pausa e religa o helper. 75 gastava tempo demais so PRA DETECTAR (disparou 5x numa noite)
 $CityWords     = 'lorencia|noria|devias|elbeland|lorenmarket|karutan|elveland'   # mapas-cidade onde NAO se farma (personagem cai aqui apos reset). Qualquer outro mapa = spot de farm (ex Stadium do /s18)
 # teleporte confirmado quando o mapa e um spot de farm (nao-cidade). $farmMap guarda o ultimo spot.
@@ -373,15 +373,24 @@ function Type-Text([string]$s){   # $KeyHoldMs de hold + $KeyGapMs de gap por te
     if($shift){ [W]::keybd_event(0x10,0x2A,2,[UIntPtr]::Zero) }
   }
 }
-function Chat-Open($img){   # caixa de chat aberta = bordas vermelhas no topo e na base (Enter alterna abre/fecha, entao precisa saber o estado)
+function Chat-Open($img){   # caixa de chat aberta = bordas vermelhas em cima e embaixo (Enter alterna, entao o estado PRECISA estar certo)
+  # Antes checava DUAS linhas exatas (111 e 87 a partir da base). Medido num print de falha real: as bordas estavam
+  # em 117-118 e 92-93 - a caixa desceu ~6px e as duas linhas fixas deram ZERO vermelho. Com isso Chat-Open dizia
+  # "fechada" com a caixa aberta, o Close-Chat nao fechava, e o C do status virava LETRA dentro do chat.
+  # Era a causa do "nao consegui ler o status" a sessao inteira. Agora varre a FAIXA e conta linhas vermelhas.
   $own = -not $img; if($own){ $img = Capture-Raw }
-  $ok = $true
-  foreach($yFromB in $ChatBox.Y1FromBottom,$ChatBox.Y2FromBottom){
-    $y = $img.Height - $yFromB   # relativo a base da area cliente
-    $red = 0; for($x = $ChatBox.X1; $x -le $ChatBox.X2; $x++){ $p = $img.GetPixel($x,$y); if($p.R -gt 150 -and $p.G -lt 100 -and $p.B -lt 100){ $red++ } }
-    if($red -lt ($ChatBox.X2-$ChatBox.X1)/2){ $ok = $false }
+  $largura = $ChatBox.X2 - $ChatBox.X1; $linhas = 0
+  for($yb = $ChatBox.YFromBottomMax; $yb -ge $ChatBox.YFromBottomMin; $yb--){
+    $y = $img.Height - $yb
+    if($y -lt 0 -or $y -ge $img.Height){ continue }
+    $red = 0
+    for($x = $ChatBox.X1; $x -le $ChatBox.X2; $x += 4){   # passo 4: a borda e linha continua, nao precisa de todo pixel
+      $p = $img.GetPixel($x,$y); if($p.R -gt 150 -and $p.G -lt 100 -and $p.B -lt 100){ $red += 4 }
+    }
+    if($red -gt $largura/2){ $linhas++ }
   }
-  if($own){ $img.Dispose() }; $ok
+  if($own){ $img.Dispose() }
+  $linhas -ge 2   # borda de cima + borda de baixo
 }
 function Close-Chat { if(Chat-Open){ Clear-ChatLine; Press-Vk 0x0D; Start-Sleep -Milliseconds 200 } }   # apaga residuo e fecha (Enter vazio fecha); chamar com o jogo na frente
 function Send-Chat([string]$text){   # $false se o jogo nao ficou na frente (nao digita em outra janela)
@@ -1333,6 +1342,13 @@ if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guard
     foreach($j in $MixJewels){ Ok "rotulo $($j.Name) reconhecido" ([bool]($ws | ? { $_.Text -match $j.Pat })) 'nenhuma palavra casou' }
     $i.Dispose()
   }
+  # REGRESSAO da causa raiz do "nao consegui ler o status": neste print a caixa de chat esta ABERTA, mas as bordas
+  # vermelhas estao em 117/92 a partir da base - as duas linhas fixas antigas (111/87) davam ZERO e o bot achava
+  # que estava fechada, entao o C do status virava letra dentro do chat.
+  $i = Fx 'chat_ABERTO.png'
+  if($i){ Ok 'Chat-Open detecta a caixa aberta' (Chat-Open $i) 'disse fechada com a caixa aberta (o C viraria letra no chat)'; $i.Dispose() }
+  $i = Fx 'tela_servidor.png'
+  if($i){ Ok 'Chat-Open nao inventa caixa onde nao tem' (-not (Chat-Open $i)) 'achou chat aberto na tela de servidor'; $i.Dispose() }
   $i = Fx 'tela_servidor.png'
   if($i){
     $b = Login-Btn $i
