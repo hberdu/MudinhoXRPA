@@ -136,6 +136,10 @@ $InvCellLit    = 210      # soma R+G+B acima disso = pixel "com item" (celula va
 $InvCellMin    = 10       # N pixels claros na celula = ocupada
 $InvFreeMin    = 4        # menos que N celulas livres = inventario cheio -> vai mixar
 $JoiasFarmMax  = 25      # modo JOIAS: se nao detectar inventario cheio em N min, vai mixar mesmo assim
+$InvUsarMenu   = $true   # se a tecla nao abrir o inventario, tenta pelo MENU do jogo (botao de 3 barras no topo direito)
+$InvMenuBtn    = @{ X = 1888; Y = 23 }   # botao de 3 barras (menu) no canto superior direito, area cliente
+$InvMenuAncora = '(?i)^(shop|personagem|guild|mercado|invent)'   # se nenhuma dessas palavras aparece, o menu NAO abriu: nao clica
+$InvMenuWords  = '(?i)^invent'   # item do menu que abre o inventario
 $InvMaxFalhas  = 3       # apos N falhas seguidas de abrir o inventario, desiste (nao fica apertando tecla desconhecida no personagem)
 $InvCheckSec   = 300      # checa o inventario a cada N seg enquanto farma
 # Evento dos Dragoes Dourados: botao -> /lorencia -> procura os Golden Dragon (mobs DOURADOS) pela tela, anda ate eles e mata.
@@ -1013,6 +1017,27 @@ function Inv-Open($img){   # a janela do inventario esta MESMO aberta? Sem isso 
   $script:invZenTxt = ($t -replace '\s+',' ').Trim()   # guarda o que leu: diferencia "janela nao abriu" de "abriu mas o Zen nao esta onde eu procuro"
   [bool]($t -match '(?i)zen')
 }
+function Abrir-Inv-PeloMenu {   # caminho alternativo: a tecla configurada nao abre o inventario neste cliente, mas o
+  # menu do jogo (botao de 3 barras no topo direito) tem um item "Inventario". Mesmo padrao do NPC do mix:
+  # clica, CONFIRMA por OCR que o menu abriu, so entao clica no item. Nunca clica no escuro.
+  Log "inventario: tentando pelo menu do jogo (a tecla nao abriu)"
+  $null = Click-Client $InvMenuBtn.X $InvMenuBtn.Y -KeepFocus
+  Wait 1.5
+  $img = Capture-Raw
+  $ws = Screen-Words $img
+  $ok = [bool]($ws | ? { $_.Text -match $InvMenuAncora })   # o menu tem varios itens conhecidos; se nenhum aparece, nao e o menu
+  $item = $ws | ? { $_.Text -match $InvMenuWords } | select -First 1
+  $img.Dispose()
+  if(-not $ok -or -not $item){
+    Log "inventario: o menu nao abriu (ou nao achei o item). Fechando com ESC."
+    Close-Popup; return $false
+  }
+  $c = Word-Center $item
+  Log "inventario: clicando em '$($item.Text)' ($($c.X),$($c.Y))"
+  $null = Click-Client $c.X $c.Y -KeepFocus
+  Wait 1.5
+  $true
+}
 function Inv-Free {   # abre o inventario (V), conta celulas livres, fecha. -1 se nao calibrado, nao abriu ou nao deu pra ler
   if(-not $InvGrid -or $script:invDesligado){ return -1 }
   $prev = Focus-Game; if(-not $script:gameFg){ Restore-Focus $prev; return -1 }
@@ -1027,6 +1052,13 @@ function Inv-Free {   # abre o inventario (V), conta celulas livres, fecha. -1 s
     $img = Capture-Raw
     if($script:capOk -and (Inv-Open $img)){ $map = Inv-Occupancy $img }
     $img.Dispose()
+  }
+  if(-not $map -and $InvUsarMenu){   # a tecla nao abriu: tenta pelo menu do jogo antes de desistir
+    if(Abrir-Inv-PeloMenu){
+      $img = Capture-Raw
+      if($script:capOk -and (Inv-Open $img)){ $map = Inv-Occupancy $img; Log "inventario: abriu pelo menu" }
+      $img.Dispose()
+    }
   }
   if($map){ Press-Vk $InvKey $HotkeyHoldMs; Start-Sleep -Milliseconds 200 }   # fecha
   Restore-Focus $prev
