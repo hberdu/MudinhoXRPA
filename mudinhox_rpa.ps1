@@ -10,11 +10,13 @@
          powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestImage x.png    (testa solver num print salvo)
          powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestInv          (com o inventario ABERTO: salva print e mostra as celulas ocupadas)
          powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestMix          (com o modal de mix ABERTO: mostra o que o OCR le e a cor de cada opcao)
-         powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestNpc          (no /mixer, mouse em cima do Lahap: mostra a coordenada dele)
+         powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestGold         (com um Golden Tantalos na tela: marca o que o detector achou)
+         powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestVisao        (regressao das funcoes de leitura contra os prints de fixtures\)
+         powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -Preflight        (NO SPOT, em PowerShell ADMIN: valida level/mapa/status/inventario de uma vez)
   Requisito: o jogo precisa estar visivel na hora da leitura. Se outra janela estiver na frente, o bot traz o jogo
   por ~1s, le, e devolve o foco pra janela que voce estava usando (nesse caso le a cada 60s em vez de 10s).
 #>
-param([switch]$Check, [string]$TestImage, [switch]$TestInv, [switch]$TestMix, [switch]$TestNpc, [switch]$TestGold, [switch]$TestVisao)
+param([switch]$Check, [string]$TestImage, [switch]$TestInv, [switch]$TestMix, [switch]$TestNpc, [switch]$TestGold, [switch]$TestVisao, [switch]$Preflight)
 
 # ---------- CONFIG (coordenadas relativas a area cliente do jogo, 1920x1009) ----------
 $TargetLevel   = 350
@@ -83,6 +85,8 @@ $CapRowDy      = 80, 210                      # 2 linhas de opcoes
 $CapColDx      = -260, -130, 0, 130, 260      # 5 colunas
 $CapConfirmDy  = 355                          # botao Confirmar
 $CapMaxTries   = 2       # errou N vezes -> para de tentar (nao arrisca a proxima)
+$CapKeepShots  = 40      # quantos prints de captcha manter. Sem isso a pasta (dentro do OneDrive) chegou a 4.9GB / 2640 arquivos
+$CapCiclosMax  = 200     # quantas duracoes de ciclo guardar pra mediana (array em PowerShell realoca a cada +=)
 $CapKillGame   = $false  # $true volta a regra antiga (fecha o mudx.exe e encerra). $false = pausa e espera voce
 $CapSelHalf    = 61                           # distancia do centro ate a borda vermelha (3px) da opcao selecionada; varre +-5px
 $WalkDist      = 140                          # apos /icarus anda ~4 passos (pixels a partir do centro) numa direcao aleatoria a cada chegada, antes do play
@@ -97,6 +101,7 @@ $MsgGoldWords  = '(?i)(golden tantalo|drago.?es dourados|invas.o de drag)'   # e
 $MsgInvWords   = '(?i)(invent.rio.{0,12}cheio|espa.o insuficiente|inventory full)'   # inventario cheio -> vai mixar
 $ClientEsperado = @{ W = 1920; H = 1009 }   # resolucao pra qual as coordenadas fixas foram calibradas; muda isso se recalibrar noutra
 $SemProgressoMin = 12    # sem ganhar UM ponto por N min = travou em algo que a gente ainda nao previu -> avisa e reinicia o ciclo
+$LogLevelDelta = 40      # so loga o level quando ele salta N (ou cai = reset). Com poll de 2s, logar todo tick so enche o arquivo
 $MetricsEvery  = 5       # a cada N resets loga resumo: resets/h, pontos/h e ETA do master reset
 $JitterPct     = 0.25    # varia +-25% os intervalos (stats, inventario, mensagens, poll). Valores dos stats seguem EXATOS - so o RITMO varia
 # Mix de joias: inventario cheio -> /mixer -> clica no NPC -> "Mixar Joias" -> clica cada tipo em VERDE -> volta pro farm
@@ -531,6 +536,8 @@ function Option-Selected($img,[int]$x,[int]$y){   # borda vermelha (selecao) no 
 }
 function Save-CaptchaShot($img){
   New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null
+  # cada print tem 2-4MB e a pasta esta DENTRO do OneDrive: sem poda isso virou 4.9GB / 2640 arquivos sincronizando pra nuvem
+  try { Get-ChildItem $CaptchaShotDir -Filter 'captcha_*.png' -EA SilentlyContinue | sort LastWriteTime -Descending | select -Skip $CapKeepShots | Remove-Item -Force -EA SilentlyContinue } catch {}
   $f = Join-Path $CaptchaShotDir ("captcha_{0}.png" -f (Get-Date -Format 'yyyyMMdd_HHmmss')); $img.Save($f); Log "print salvo: $f"
 }
 $script:capTries = 0; $script:capNotified = $null
@@ -592,7 +599,7 @@ if($Check){
 
 # ---------- admin ----------
 # O jogo roda como administrador: o Windows descarta teclado/mouse sintetico vindo de processo comum (UIPI). Entao roda elevado.
-if(-not (Is-Admin) -and -not ($TestInv -or $TestMix -or $TestNpc -or $TestGold -or $TestVisao)){   # -TestInv/-TestMix so LEEM a tela: nao precisam de admin (e elevar abriria janela oculta, sem saida no terminal)
+if(-not (Is-Admin) -and -not ($TestInv -or $TestMix -or $TestNpc -or $TestGold -or $TestVisao -or $Preflight)){   # -TestInv/-TestMix so LEEM a tela: nao precisam de admin (e elevar abriria janela oculta, sem saida no terminal)
   try { Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`"" }
   catch { [System.Windows.Forms.MessageBox]::Show("Precisa rodar como administrador: o jogo roda como admin e senao o Windows bloqueia o teclado/mouse do bot. Abra de novo e aceite o UAC.", 'MudinhoX RPA') | Out-Null }
   exit
@@ -662,7 +669,7 @@ function Tick-Stats {   # so roda enquanto upa (nunca durante captcha)
   Distribute-Points
   $script:statDue = (Get-Date).AddSeconds((Jit $StatEverySec))
 }
-$script:lvlPrev = $null; $script:lvlChangedAt = Get-Date
+$script:lvlPrev = $null; $script:lvlChangedAt = Get-Date; $script:lvlLogged = $null
 function Check-Progress([int]$lvl, $img){   # level parado: se saiu do spot, re-teleporta (retorna $false p/ reiniciar o ciclo); se esta no spot parado, religa helper (miss infinito). $true = segue normal
   if($lvl -ne $script:lvlPrev){ $script:lvlPrev = $lvl; $script:lvlChangedAt = Get-Date; return $true }
   if(((Get-Date) - $script:lvlChangedAt).TotalSeconds -lt $StallSec){ return $true }
@@ -1026,6 +1033,7 @@ function Hunt-Golden {   # botao DRAGOES: /tarkan2 e caca os Golden Tantalos ate
     }
   }
   Log "dragoes: fim da caca ($achados alvos), voltando pro farm"
+  $script:ptsLastGain = Get-Date   # cacar nao distribui pontos; sem zerar aqui o watchdog de progresso dispararia na volta (caca dura ate 20min, o watchdog corta em 12)
   $script:restartCycle = $true
 }
 $script:invDue = (Get-Date).AddSeconds($InvCheckSec); $script:mixNow = $false; $script:goldNow = $false; $script:semPlay = 0
@@ -1040,6 +1048,7 @@ function Tick-Inventory {   # de tempos em tempos checa o inventario; cheio (ou 
   }
   $script:mixNow = $false; $script:invDue = (Get-Date).AddSeconds((Jit $InvCheckSec))
   $null = Mix-Jewels
+  $script:ptsLastGain = Get-Date   # mixar tambem nao distribui pontos: nao deixa o watchdog de progresso contar esse tempo
   $script:restartCycle = $true   # volta pro spot pelo caminho normal (warp + andar + play)
 }
 function Jit([double]$sec){ $sec * (1 + (Get-Random -Minimum (-$JitterPct) -Maximum $JitterPct)) }   # varia o RITMO (nunca os valores dos stats, que precisam ser exatos)
@@ -1138,6 +1147,44 @@ if($TestNpc){   # de /mixer no jogo e deixe o mouse EM CIMA do Lahap: mostra a c
   }
   Log "TestNpc: use a coordenada que apareceu com CONFERE em `$MixNpcPos = @{ X=..; Y=.. }"
   exit
+}
+if($Preflight){   # valida TODOS os subsistemas de leitura no jogo de verdade, antes de deixar o bot rodando sozinho a noite toda.
+  # Diferente do -Check: este APERTA teclas (C e V) porque a janela de status e o inventario sao a parte que mais falha.
+  $script:falhas = 0
+  function Ok([string]$nome,$cond,[string]$detalhe){ if($cond){ Log "  OK   $nome" } else { $script:falhas++; Log "  FALHOU $nome -> $detalhe" } }
+  Log "Preflight: o personagem precisa estar NO SPOT de farm, logado e sem janela aberta"
+  if((Game-IsAdmin) -and -not (Is-Admin)){ Log "  FALHOU admin -> o jogo roda elevado e este processo nao; o Windows vai ignorar teclado/mouse"; $script:falhas++ }
+  else { Log "  OK   privilegios" }
+
+  $h0 = Get-Game; $c0 = New-Object W+RECT; [W]::GetClientRect($h0,[ref]$c0) | Out-Null
+  Ok 'resolucao bate com a calibracao' ($c0.R -eq $ClientEsperado.W -and $c0.B -eq $ClientEsperado.H) "$($c0.R)x$($c0.B), esperado $($ClientEsperado.W)x$($ClientEsperado.H)"
+
+  Hold-Focus
+  try {
+    $img = Capture-Game
+    Ok 'consegue capturar a tela do jogo' ($img -and $script:capOk) 'capturou outra janela ou o jogo nao veio pra frente'
+    if($img){
+      $lvl = Read-Level $img
+      Ok 'le o level' ($null -ne $lvl) 'Read-Level devolveu nada'
+      Ok 'reconhece o botao play' ((Get-HelperState $img) -ne 'unknown') 'botao play irreconhecivel'
+      $mapa = Read-Map $img
+      Ok 'le o nome do mapa' ([bool]$mapa) 'minimapa recolhido ou tapado pela janela do bot?'
+      Ok 'esta no spot da fase atual' (Same-Map $mapa (Spot-Map)) "mapa '$mapa', esperado '$(Spot-Map)'"
+      Ok 'nenhum captcha na tela' (-not (Find-Captcha $img)) 'tem captcha aberto agora'
+      $img.Dispose()
+    }
+    $st = Read-Status
+    Ok 'le os 4 atributos + pontos' ($null -ne $st) 'Read-Status falhou (janela C nao abriu ou OCR nao leu)'
+    if($st){ Log "       F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) Pts=$($st.Pts) | faltam $(Points-Needed $st) pro cap" }
+    $free = Inv-Free
+    Ok 'le o inventario' ($free -ge 0) 'Inv-Free devolveu -1 (tecla V ou $InvGrid)'
+    if($free -ge 0){ Log "       $free celulas livres (mixa abaixo de $InvFreeMin)" }
+    $m = Read-Msgs $null
+    Log $(if($m){ "  OK   le a faixa de mensagens: '$m'" } else { "  (faixa de mensagens vazia agora - normal se o chat esta quieto)" })
+  } finally { Release-Focus }
+
+  Log $(if($script:falhas){ "Preflight: $($script:falhas) FALHA(S) - resolva antes de deixar rodando sozinho" } else { 'Preflight: tudo OK, pode deixar rodando' })
+  exit $(if($script:falhas){ 1 } else { 0 })
 }
 if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guardados em fixtures\ (nao precisa do jogo aberto)
   $falhas = 0
@@ -1244,7 +1291,11 @@ while($true){
             continue
           }
           $lvl = Read-Level $img
-          if($null -ne $lvl){ if(-not (Check-Progress $lvl $img)){ $img.Dispose(); continue }; Log "level: $lvl" }
+          if($null -ne $lvl){
+            if(-not (Check-Progress $lvl $img)){ $img.Dispose(); continue }
+            # perto do alvo o poll e de 2s: logar todo tick enche o arquivo e atrapalha achar problema. So loga salto real ou queda (reset)
+            if($null -eq $script:lvlLogged -or $lvl -lt $script:lvlLogged -or ($lvl - $script:lvlLogged) -ge $LogLevelDelta){ Log "level: $lvl"; $script:lvlLogged = $lvl }
+          }
           Tick-Stats; Tick-Inventory; Tick-Msgs $img; Tick-Progresso; Tick-Human
         }
         $img.Dispose()
@@ -1297,7 +1348,7 @@ while($true){
   if($script:restartCycle){ continue }   # botao mudou a fase no meio do reset: recomeca o ciclo (nao conta este reset)
   $script:resets++
   $agora = Get-Date
-  if($script:ultimoReset){ $script:ciclos += [int]($agora - $script:ultimoReset).TotalSeconds }   # duracao do ciclo, pra mediana e pro tail
+  if($script:ultimoReset){ $script:ciclos = @(@($script:ciclos) + [int]($agora - $script:ultimoReset).TotalSeconds | select -Last $CapCiclosMax) }   # duracao do ciclo, pra mediana e pro tail
   $script:ultimoReset = $agora
   Log "reset feito, recomecando"
   Save-Estado   # metricas do MR sobrevivem a reinicio do bot (medir um MR leva horas)

@@ -36,6 +36,14 @@ powershell -ExecutionPolicy Bypass -File .\test_stats.ps1                       
 powershell -ExecutionPolicy Bypass -File .\test_estado.ps1                               # self-check do estado persistido (métricas sobrevivem a restart)
 ```
 
+**Antes de deixar rodando sozinho a noite toda** — com o personagem **no spot** e num PowerShell **como administrador** (sem admin o Windows descarta as teclas `C`/`V` e o teste falha por isso):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -Preflight
+```
+
+Valida numa tacada: privilégios, resolução, captura, level, botão play, mapa, spot correto, captcha, os 4 atributos, inventário e a faixa de mensagens. Sai com código 1 se algo falhar.
+
 ## Ainda por calibrar
 
 - **Lista de jóias verde/vermelho**: falta o print da tela que abre *depois* de clicar em "Mixar Jóias". Rode `-TestMix` com ela aberta.
