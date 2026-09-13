@@ -33,6 +33,7 @@ powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestNpc            
 powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestGold                     # com um Golden Tantalos na tela: marca em verde o que o detector achou
 powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestVisao                    # regressão das funções de leitura de tela (usa os prints de fixtures\)
 powershell -ExecutionPolicy Bypass -File .\test_stats.ps1                                # self-check da distribuição em etapas (não toca no jogo)
+powershell -ExecutionPolicy Bypass -File .\test_estado.ps1                               # self-check do estado persistido (métricas sobrevivem a restart)
 ```
 
 ## Ainda por calibrar
@@ -52,6 +53,7 @@ O mix acha o resto por OCR. Se algum texto não bater com `$MixMenuWords` / `$Mi
 - `$MetricsEvery` (5): a cada N resets loga `pontos/h`, ETA do MR e a **mediana** do ciclo + quanto do tempo vazou nos ciclos lentos.
 - `$MsgBox`: faixa de mensagens do jogo que o bot lê (respostas do servidor, aviso de inventário cheio, evento dos dragões).
 - `$ClientEsperado` (1920x1009): resolução da calibração. Se a janela do jogo mudar de tamanho, o bot avisa no start.
+- `$SemProgressoMin` (12): sem distribuir um ponto sequer por N min, o bot assume que travou, avisa e reinicia o ciclo.
 - O jogo precisa estar visível na leitura. Se outra janela estiver na frente, o bot traz o jogo por ~1s, lê e devolve o foco (aí lê a cada 60s em vez de 10s). Se o Windows negar o foco, ele pula em vez de digitar no lugar errado.
 
 ## Medindo o master reset

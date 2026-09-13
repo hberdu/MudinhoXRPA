@@ -96,6 +96,7 @@ $MsgCheckSec   = 20      # le as mensagens a cada N seg (recorte pequeno, usa a 
 $MsgGoldWords  = '(?i)(golden tantalo|drago.?es dourados|invas.o de drag)'   # evento -> vai cacar sozinho
 $MsgInvWords   = '(?i)(invent.rio.{0,12}cheio|espa.o insuficiente|inventory full)'   # inventario cheio -> vai mixar
 $ClientEsperado = @{ W = 1920; H = 1009 }   # resolucao pra qual as coordenadas fixas foram calibradas; muda isso se recalibrar noutra
+$SemProgressoMin = 12    # sem ganhar UM ponto por N min = travou em algo que a gente ainda nao previu -> avisa e reinicia o ciclo
 $MetricsEvery  = 5       # a cada N resets loga resumo: resets/h, pontos/h e ETA do master reset
 $JitterPct     = 0.25    # varia +-25% os intervalos (stats, inventario, mensagens, poll). Valores dos stats seguem EXATOS - so o RITMO varia
 # Mix de joias: inventario cheio -> /mixer -> clica no NPC -> "Mixar Joias" -> clica cada tipo em VERDE -> volta pro farm
@@ -127,7 +128,7 @@ $GoldArea      = @{ X1 = 70; Y1 = 100; X2FromRight = 70; Y2FromBottom = 150 }   
 $GoldPix       = @{ RMin = 185; GMin = 140; BMax = 125; RmB = 70; RmG = 75 }    # pixel "dourado": vermelho e verde altos, azul baixo, e R-B grande (o chao de Tarkan e marrom fosco)
 $GoldCell      = 26       # agrega os pixels dourados em blocos de N px (o mob e um borrao, nao um pixel)
 $GoldBlobMin   = 30       # minimo de pixels dourados no bloco pra considerar que tem mob ali
-$GoldSelfR     = 150      # ignora esse raio em volta do centro: e o SEU personagem (efeitos de fogo/asas dao falso positivo)
+$GoldSelfR     = 90      # ignora esse raio em volta do centro (seu personagem tem fogo/asas). 150 escondia o mob colado em voce; o filtro de cor ja rejeita laranja. CALIBRAR com -TestGold
 $GoldStepSec   = 2.0      # espera depois de mandar o personagem pro bloco dourado
 $GoldRoamSec   = 4.0      # sem nada dourado na tela: anda pra um lado e procura de novo
 # ---------------------------------------------------------------------------------------
@@ -234,6 +235,7 @@ function Pause-Gate {   # congela o bot enquanto PAUSADO e LIBERA o foco pra voc
   if(-not $script:paused){ return }
   $wasHeld = $script:focusHeld; if($wasHeld){ Release-Focus }   # solta o jogo pra voce interagir
   while($script:paused -and -not $script:stop){ if($script:ui){ [System.Windows.Forms.Application]::DoEvents() }; Check-Stop; Start-Sleep -Milliseconds 200 }
+  $script:ptsLastGain = Get-Date   # tempo pausado nao conta como "sem progresso" (senao o watchdog dispara na hora que voce retoma)
   if($wasHeld -and -not $script:stop){ Hold-Focus }   # retomou: re-traz o jogo pro bloco continuar
 }
 function Wait([double]$sec){   # Start-Sleep que mantem a janelinha viva e obedece PARAR/PAUSAR
@@ -431,15 +433,40 @@ function Save-Shot([string]$nome){   # print pra diagnostico (chamar com o jogo 
   $f = Join-Path $CaptchaShotDir $nome; $img.Save($f); $img.Dispose(); $f
 }
 $script:farmMap = ''; $script:phase = 'normal'; $script:warmupCount = 0; $script:restartCycle = $false; $script:forceMR = $false
-function Save-Estado {   # guarda fase/contagem entre reinicios (sem isso todo restart voltava pro 'normal' e perdia o warmup em andamento)
-  try { "$($script:phase) $($script:warmupCount)" | Set-Content -Path $EstadoFile -Encoding ASCII } catch {}
+function Save-Estado {   # fase/warmup E as metricas do MR. Medir um MR leva horas e reiniciar o bot zerava tudo.
+  try {
+    @(
+      "fase=$($script:phase)"
+      "warmup=$($script:warmupCount)"
+      "resets=$($script:resets)"
+      "ptsSent=$($script:ptsSent)"
+      "runStart=$($script:runStart.Ticks)"
+      "mrs=$($script:mrs)"
+      "mrStart=$($script:mrStart.Ticks)"
+      "ciclos=$(@($script:ciclos) -join ',')"
+    ) | Set-Content -Path $EstadoFile -Encoding ASCII
+  } catch {}
 }
 function Load-Estado {
   if(-not (Test-Path $EstadoFile)){ return }
   try {
-    $p = (Get-Content $EstadoFile -Raw).Trim() -split '\s+'
-    if($p[0] -in 'normal','warmup'){ $script:phase = $p[0]; $script:warmupCount = [int]$p[1]; Log "estado retomado: fase $($script:phase), warmup $($script:warmupCount)/$WarmupResets" }
-  } catch {}
+    $txt = (Get-Content $EstadoFile -Raw).Trim()
+    if($txt -notmatch '='){   # formato antigo "fase warmup"
+      $p = $txt -split '\s+'
+      if($p[0] -in 'normal','warmup'){ $script:phase = $p[0]; $script:warmupCount = [int]$p[1] }
+    } else {
+      $kv = @{}; foreach($l in ($txt -split "`r?`n")){ if($l -match '^(\w+)=(.*)$'){ $kv[$Matches[1]] = $Matches[2] } }
+      if($kv.fase -in 'normal','warmup'){ $script:phase = $kv.fase }
+      if($kv.warmup){ $script:warmupCount = [int]$kv.warmup }
+      if($kv.resets){ $script:resets = [int]$kv.resets }
+      if($kv.ptsSent){ $script:ptsSent = [int]$kv.ptsSent }
+      if($kv.mrs){ $script:mrs = [int]$kv.mrs }
+      if($kv.runStart){ $script:runStart = [datetime]::new([long]$kv.runStart) }
+      if($kv.mrStart){ $script:mrStart = [datetime]::new([long]$kv.mrStart) }
+      if($kv.ciclos){ $script:ciclos = @($kv.ciclos -split ',' | ? { $_ } | % { [int]$_ }) }
+    }
+    Log "estado retomado: fase $($script:phase), warmup $($script:warmupCount)/$WarmupResets, $($script:resets) resets e $($script:ptsSent) pontos acumulados neste MR"
+  } catch { Log "estado.txt ilegivel, comecando do zero: $_" }
 }
 function Same-Map($a,$b){ $a -and $b -and $a.Substring(0,[Math]::Min(4,$a.Length)) -eq $b.Substring(0,[Math]::Min(4,$b.Length)) }   # mesmo mapa pelos 4 primeiros caracteres (tolera ruido do OCR nas coords/fim)
 function Close-Popup { Press-Vk 0x1B; Start-Sleep -Milliseconds 300; Press-Vk 0x1B }   # ESC fecha popups do jogo (ex "precisa estar fora da cidade" apos /darmr)
@@ -623,7 +650,10 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
       return
     }
     Log "stats: plano ($($plano.Count) comandos): $($plano -join ' | ')"
-    foreach($cmd in $plano){ if($script:stop -or -not (Send-Chat $cmd)){ break }; $script:ptsSent += [int](($cmd -split ' ')[1]) }   # acumula pra metrica de pontos/h
+    foreach($cmd in $plano){   # acumula pra metrica de pontos/h e marca que houve progresso
+      if($script:stop -or -not (Send-Chat $cmd)){ break }
+      $script:ptsSent += [int](($cmd -split ' ')[1]); $script:ptsLastGain = Get-Date
+    }
     Wait $StatRoundSec
   }
 }
@@ -749,13 +779,16 @@ function Login-Btn($img){   # onde clicar pra voltar pro jogo, ou $null. DOIS si
   if($perigo){ return @{ X = -1; Y = -1; Perigo = $true } }   # reconheci a tela mas NAO sei onde clicar: melhor avisar que chutar
   $null
 }
+$script:viuLogin = $false
 function Enter-Game([string]$motivo){   # clica pra entrar com o personagem ate o botao play aparecer. $true se voltou pro jogo
   Log "tela de login detectada ($motivo): tentando entrar de novo"
+  $script:viuLogin = $false   # o Master-Reset usa isto pra saber se o personagem REALMENTE saiu do jogo
   for($i = 0; $i -lt 12 -and -not $script:stop; $i++){
     $img = Capture-Game
     if($img -and (Get-HelperState $img) -ne 'unknown'){ $img.Dispose(); Log "de volta no jogo"; return $true }
     $btn = if($img){ Login-Btn $img } else { $null }
     if($img){ $img.Dispose() }
+    if($btn){ $script:viuLogin = $true }   # confirmou que estava FORA do jogo (nao so que o play sumiu por um loading)
     if($btn -and $btn.X -lt 0){   # reconheci a tela (tem "CRIAR NOVA CONTA"/"Sair") mas nao sei em que botao clicar: JAMAIS chutar coordenada aqui
       Notify "MudinhoX" "Estou na tela de servidor/login e nao sei qual botao clicar. Entra manualmente (ou ajuste \$LoginServerWords)."
       Wait 30; continue
@@ -769,10 +802,29 @@ function Enter-Game([string]$motivo){   # clica pra entrar com o personagem ate 
   Notify "MudinhoX" "Nao consegui entrar de novo na tela de login ($motivo). Da uma olhada."; $false
 }
 function Master-Reset {   # atributos cheios: /darmr -> tela de selecao -> clica pra entrar com o personagem -> volta pro loop
+  # CONFIRMA com uma 2a leitura antes de mandar: um erro de OCR nos 4 atributos dispara /darmr a toa, e como
+  # a leitura seguinte repete o erro isso vira LOOP de /darmr recusado (ja aconteceu neste projeto).
+  $conf = Read-Status
+  if(-not $conf){ Log "/darmr: nao consegui reler o status pra confirmar, deixo pro proximo tick"; return }
+  if((Points-Needed $conf) -gt 0){ Log "/darmr CANCELADO: a releitura mostra F=$($conf.For) A=$($conf.Agi) V=$($conf.Vit) E=$($conf.Ene) (a 1a leitura estava errada)"; return }
   if(-not (Send-Chat "/darmr")){ return }
   Notify "MudinhoX" "Atributos no maximo: mandei /darmr. Tentando entrar de novo com o personagem."
   Wait 10
   if(Enter-Game '/darmr'){
+    # Enter-Game devolve $true assim que ve o botao play - e isso tambem e verdade quando o /darmr foi RECUSADO
+    # e o personagem nunca saiu do jogo. Sem esta checagem o bot contava MR falso, zerava as metricas e ia pro warmup.
+    Wait 5
+    $depois = Read-Status
+    if($depois -and (Points-Needed $depois) -le 0){
+      Log "== /darmr NAO APLICOU: atributos continuam cheios (F=$($depois.For) A=$($depois.Agi) V=$($depois.Vit) E=$($depois.Ene)) =="
+      Notify "MudinhoX" "O /darmr nao aplicou (atributos continuam no maximo). Da uma olhada."
+      $null = Save-Shot 'darmr_recusado.png'
+      return   # nao conta MR, nao zera metrica, nao vai pro warmup
+    }
+    if(-not $depois -and -not $script:viuLogin){   # nao deu pra ler E nunca vi tela de login: provavelmente nao aplicou
+      Log "/darmr: nao vi tela de login nem consegui ler o status - NAO vou contar como master reset"
+      return
+    }
     $script:mrs++
     $dur = [Math]::Round(((Get-Date) - $script:mrStart).TotalHours, 2); $script:mrStart = Get-Date
     Log "== MASTER RESET #$($script:mrs) FEITO (levou ${dur}h, $($script:resets) resets) =="   # o marco que interessa
@@ -1042,6 +1094,15 @@ function Tick-Msgs($img){   # le as mensagens do jogo de vez em quando. A caca a
   if($m -match $MsgGoldWords){ Log "evento dos dragoes no chat (use o botao DRAGOES DOURADOS se quiser ir)" }
   elseif($m -match $MsgInvWords){ Log "jogo avisou inventario cheio -> vou mixar"; $script:mixNow = $true }
 }
+$script:ptsLastGain = Get-Date
+function Tick-Progresso {   # rede de seguranca GERAL: o travamento de 2h passou porque nada vigiava o RESULTADO.
+  # $ResetStuckMin cobre so o loop de reset; isto cobre qualquer modo de falha em que o bot "roda" sem produzir nada.
+  if(((Get-Date) - $script:ptsLastGain).TotalMinutes -lt $SemProgressoMin){ return }
+  $script:ptsLastGain = Get-Date
+  Log "SEM PROGRESSO ha $SemProgressoMin min (nenhum ponto distribuido): reiniciando o ciclo"
+  Notify "MudinhoX" "Sem ganhar pontos ha $SemProgressoMin min. Reiniciando o ciclo - da uma olhada se repetir."
+  $script:restartCycle = $true
+}
 function Poll-Interval {   # perto do alvo le rapido: o level sobe ~150 entre leituras e o reset saia com 400 em vez de 350
   if($null -ne $script:lvlPrev -and $script:lvlPrev -ge ($TargetLevel * $PollNearFrom)){ return $PollNearSec }
   if($NoFocusRead -or $script:gameWasFg){ $PollSec } else { $PollBgSec }
@@ -1184,7 +1245,7 @@ while($true){
           }
           $lvl = Read-Level $img
           if($null -ne $lvl){ if(-not (Check-Progress $lvl $img)){ $img.Dispose(); continue }; Log "level: $lvl" }
-          Tick-Stats; Tick-Inventory; Tick-Msgs $img; Tick-Human
+          Tick-Stats; Tick-Inventory; Tick-Msgs $img; Tick-Progresso; Tick-Human
         }
         $img.Dispose()
       }
@@ -1239,6 +1300,7 @@ while($true){
   if($script:ultimoReset){ $script:ciclos += [int]($agora - $script:ultimoReset).TotalSeconds }   # duracao do ciclo, pra mediana e pro tail
   $script:ultimoReset = $agora
   Log "reset feito, recomecando"
+  Save-Estado   # metricas do MR sobrevivem a reinicio do bot (medir um MR leva horas)
   if(($script:resets % $MetricsEvery) -eq 0){ Metrics }
   $null = Wait-Map '' 8   # espera o mapa RENDERIZAR (o jogo ignora teclas durante o teleporte); segue assim que ler, em vez de dormir 8s
   if($script:phase -eq 'warmup'){
