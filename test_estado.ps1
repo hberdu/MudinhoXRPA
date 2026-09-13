@@ -33,6 +33,27 @@ Chk 'tempo ativo' $script:ativoSeg 4200
 Chk 'joias mixadas' $script:joiasMix 37
 Chk 'ciclos de joias' $script:joiasCiclos 9
 
+# 1c. progresso do A/B sobrevive (sem isto o experimento NUNCA fecha: 15 resets por braco, e cada
+#     restart zerava o contador - no log de 11h so o 1o braco chegou ao fim)
+$script:tuneOn = $true; $script:tuneArm = 1; $script:tuneResets = 9; $script:tunePts = 45000
+$script:tuneAtivo0 = 1234.0; $script:tuneRes = @(,@(350,160794))
+Save-Estado
+$script:tuneArm = 0; $script:tuneResets = 0; $script:tunePts = 0; $script:tuneAtivo0 = 0.0; $script:tuneRes = @()
+Load-Estado
+Chk 'braco do A/B' $script:tuneArm 1
+Chk 'resets do braco' $script:tuneResets 9
+Chk 'pontos do braco' $script:tunePts 45000
+Chk 'tempo ativo do braco' $script:tuneAtivo0 1234
+Chk 'resultado do braco 1' "$($script:tuneRes[0][0])=$($script:tuneRes[0][1])" '350=160794'
+# dois bracos ja medidos
+$script:tuneRes = @(@(350,160794),@(380,171000)); Save-Estado; $script:tuneRes = @(); Load-Estado
+Chk 'dois resultados' (@($script:tuneRes | % { "$($_[0]):$($_[1])" }) -join '|') '350:160794|380:171000'
+# nenhum braco medido ainda: a chave sai vazia e o loader MANTEM o que esta em memoria (mesma regra do 'modo'),
+# que no start e @() - o que importa e nao quebrar nem inventar resultado
+$script:tuneRes = @(); Save-Estado; $script:tuneRes = @(); Load-Estado
+Chk 'sem braco medido nao inventa resultado' $script:tuneRes.Count 0
+Chk 'lista vazia continua vazia' $script:tuneRes.Count 0
+
 # 1b. o alvo de level e o estado do auto-tune sobrevivem (o estado.txt agora manda no $TargetLevel:
 #     um bug aqui mudaria silenciosamente o alvo do bot)
 $script:TargetLevel = 320; $script:tuneOn = $false

@@ -81,6 +81,8 @@ $HeartbeatFile = Join-Path $PSScriptRoot 'heartbeat.txt'   # o bot bate aqui a c
 $AtivoGapMax   = 120     # buraco maior que N seg entre voltas = o bot esteve PARADO; nao conta como tempo ativo nas metricas
 $HeartbeatVivoSec = 180  # heartbeat mais novo que isso = tem bot vivo (impede duas instancias no mesmo jogo)
 $SemProgressoMax = 3     # apos N ciclos seguidos sem progresso, o bot REINICIA A SI MESMO (ja elevado: nao pede UAC de novo)
+$AutoWatchdog  = $true   # instala a Tarefa Agendada de vigia no start (o bot ja roda elevado; sem ela, morrer = ficar parado ate voce ver)
+$WatchdogTask  = 'MudinhoX RPA Watchdog'
 $EstadoFile    = Join-Path $PSScriptRoot 'estado.txt'   # fase + contagem de warmup, pra sobreviver a reinicio do bot
 $LogMaxMB      = 5       # rpa.log maior que isso no start vira .bak (a pasta sincroniza no OneDrive)
 $LogKeepBaks   = 5       # quantos .bak manter
@@ -372,6 +374,23 @@ function Show-Ui {
 
 # ---------- janela do jogo / foco ----------
 function Is-Admin { ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) }
+function Garantir-Watchdog {
+  # O bot ja roda ELEVADO aqui (se elevou sozinho no start), entao pode criar a Tarefa Agendada - que e o unico
+  # jeito de ele voltar sozinho depois de morrer. Existia o instalar-watchdog.cmd, mas dependia de voce lembrar
+  # de rodar como admin: nao foi rodado, e o log tem 6h de silencio (03:27 -> 09:09) mais 4 quedas pelo `X`.
+  # Pra desligar: $AutoWatchdog = $false aqui em cima, ou   schtasks /delete /tn "MudinhoX RPA Watchdog" /f
+  if(-not $AutoWatchdog -or -not (Is-Admin)){ return }
+  $wd = Join-Path $PSScriptRoot 'watchdog.ps1'
+  if(-not (Test-Path $wd)){ return }
+  $null = schtasks /query /tn "$WatchdogTask" 2>&1
+  if($LASTEXITCODE -eq 0){ return }   # ja instalada
+  $cmd = "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \`"$wd\`""
+  $out = schtasks /create /tn "$WatchdogTask" /tr "$cmd" /sc minute /mo 3 /rl HIGHEST /f 2>&1
+  if($LASTEXITCODE -eq 0){
+    Log "watchdog instalado (tarefa '$WatchdogTask', a cada 3 min). Ele relanca o bot se ele morrer ou travar."
+    Notify "MudinhoX" "Instalei o watchdog (Tarefa Agendada a cada 3 min). Pra tirar: schtasks /delete /tn `"$WatchdogTask`" /f"
+  } else { Log "nao consegui instalar o watchdog: $out" }
+}
 function Game-IsAdmin { -not (Get-Process mudx -ErrorAction SilentlyContinue | select -First 1).Path }   # processo elevado nao expoe o Path pra processo comum
 $script:gameH = [IntPtr]::Zero
 function Get-Game {   # handle da janela do jogo, EM CACHE: Get-Process enumera todos os processos do Windows e isto e chamado ~6x por comando
@@ -568,6 +587,15 @@ function Save-Estado {   # fase/warmup E as metricas do MR. Medir um MR leva hor
       "ciclos=$(@($script:ciclos) -join ",")"
       "alvo=$TargetLevel"
       "tuneOn=$(if($script:tuneOn){1}else{0})"
+      # Progresso do A/B. Sem isto o experimento NUNCA termina: cada restart zerava o contador do braco, e com
+      # 15 resets por braco e o bot caindo de tempos em tempos, o log de 11h so registrou o 1o braco fechando.
+      "tuneArm=$($script:tuneArm)"
+      "tuneResets=$($script:tuneResets)"
+      "tunePts=$($script:tunePts)"
+      "tuneAtivo0=$([int]$script:tuneAtivo0)"
+      # @(...) e o ? antes do %: `$null | %{}` roda o bloco UMA vez com $_ nulo, e $_[0] em $null lanca
+      # "Cannot index into a null array" - o try/catch do Save-Estado engolia e o estado.txt inteiro nao era escrito.
+      "tuneRes=$(@(@($script:tuneRes) | ? { $_ } | % { "$($_[0]):$($_[1])" }) -join '|')"
       "minReset=$($script:LevelMinReset)"
     ) | Set-Content -Path $EstadoFile -Encoding ASCII
   } catch {}
@@ -595,6 +623,11 @@ function Load-Estado {
       if($kv.ciclos){ $script:ciclos = @($kv.ciclos -split "," | ? { $_ }) }
       if($kv.alvo){ $script:TargetLevel = [int]$kv.alvo }
       if($kv.tuneOn -eq "0"){ $script:tuneOn = $false; Log "autotune ja concluido antes: alvo $($script:TargetLevel)" }
+      if($kv.tuneArm){ $script:tuneArm = [int]$kv.tuneArm }
+      if($kv.tuneResets){ $script:tuneResets = [int]$kv.tuneResets }
+      if($kv.tunePts){ $script:tunePts = [int]$kv.tunePts }
+      if($kv.tuneAtivo0){ $script:tuneAtivo0 = [double]$kv.tuneAtivo0 }
+      if($kv.tuneRes){ $script:tuneRes = @($kv.tuneRes -split '\|' | ? { $_ -match '^(\d+):(-?\d+)$' } | % { ,@([int]$Matches[1], [int]$Matches[2]) }) }
       if($kv.minReset){ $script:LevelMinReset = [int]$kv.minReset }
     }
     Log "estado retomado: fase $($script:phase), warmup $($script:warmupCount)/$WarmupResets, $($script:resets) resets e $($script:ptsSent) pontos acumulados neste MR"
@@ -1429,6 +1462,7 @@ function Tick-AutoTune {   # $TargetLevel sempre foi chute. Em vez de pedir expe
     $script:TargetLevel = [Math]::Max($AutoTuneAlvos[$script:tuneArm], $script:LevelMinReset)   # nunca abaixo do minimo que o servidor exige
     $script:tuneResets = 0; $script:tunePts = $script:ptsSent; $script:tuneAtivo0 = $script:ativoSeg
     Log "autotune: testando agora alvo $($script:TargetLevel) por $AutoTuneResets resets"
+    Save-Estado   # grava o braco fechado NA HORA: se o bot cair antes do proximo reset, o resultado nao se perde
   } else {
     $melhor = @($script:tuneRes | sort { $_[1] } -Descending)[0]
     $script:TargetLevel = $melhor[0]; $script:tuneOn = $false
@@ -1767,6 +1801,7 @@ try {   # preflight no start: 10s conferindo tudo evita a noite inteira perdida 
   $pf = Run-Preflight $false
   if($pf){ Notify "MudinhoX" "$pf verificacao(oes) falharam no start - veja o log. O bot vai tentar rodar mesmo assim." }
 } catch { Log "preflight falhou: $_" }
+try { Garantir-Watchdog } catch { Log "watchdog: $_" }   # se o bot morrer, alguem tem que traze-lo de volta
 Load-Estado   # retoma fase/warmup/modo de onde parou (o warmup.flag abaixo ainda tem prioridade)
 if($script:ui){   # botoes tem que refletir o modo retomado do estado.txt
   if($script:modo -eq 'joias'){

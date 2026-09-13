@@ -320,3 +320,23 @@ Contagens sobre a sessao inteira do `rpa.log`:
 - **Ainda sem explicacao: o warp saindo de Lorencia falha na 1a tentativa.** A linha que lia a resposta do
   servidor era justamente a que o `X` tinha destruido — por isso nunca houve diagnostico. Restaurada; o proximo
   `nao teleportou` ja loga o `jogo diz (apos /s18): ...`.
+
+## 2026-09-01 - o auto-tune nunca terminou (e por que)
+
+- No log: `[02:53:42] autotune: alvo 350 rendeu 160794 pontos/h em 15 resets` seguido de
+  `autotune: testando agora alvo 320 por 15 resets` — e **nunca** um `autotune: FIM`. Onze horas depois o
+  `estado.txt` estava em `alvo=350 tuneOn=1`, ou seja, de volta ao **primeiro** braco.
+- Causa: `$tuneArm/$tuneResets/$tunePts/$tuneAtivo0/$tuneRes` nao iam pro `estado.txt`. Cada restart zerava o
+  contador do braco. Com 15 resets por braco e o bot caindo de tempos em tempos (4 quedas pelo `X` + 6h de
+  outage no mesmo dia), **o A/B era matematicamente incapaz de fechar**. O resultado pratico: o `$TargetLevel`
+  ficava parado no braco em teste, sem nunca comparar nada.
+- Corrigido: os cinco campos entram no `estado.txt` (`tuneRes` serializado como `350:160794|380:171000`), e o
+  bot grava NA HORA que um braco fecha, em vez de so no fim do experimento. Regressao no `test_estado.ps1`.
+- **Bug de tabela achado ao escrever o teste:** `$null | % { $_[0] }` roda o bloco UMA vez com `$_` nulo e
+  `$null[0]` lanca "Cannot index into a null array". Como o `Save-Estado` inteiro e um `try{}catch{}`, isso
+  fazia o **estado.txt nao ser escrito** — silenciosamente. Ficou `@(@($x) | ? { $_ } | % { ... })`.
+- **O bot agora instala o watchdog sozinho** (`Garantir-Watchdog`, `$AutoWatchdog`). Ele ja roda elevado, entao
+  `schtasks /create ... /rl HIGHEST` funciona sem UAC extra. O `instalar-watchdog.cmd` dependia de voce lembrar
+  de rodar como admin — nao foi rodado (`schtasks /query` confirma: tarefa inexistente), e o preco foi 6h de
+  silencio no log e quatro quedas sem ninguem pra levantar. Desliga com `$AutoWatchdog = $false` ou
+  `schtasks /delete /tn "MudinhoX RPA Watchdog" /f`.

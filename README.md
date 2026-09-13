@@ -23,6 +23,7 @@ Loop automático: `/s18` -> play (MU Helper) -> espera level 350 -> `/resetar` -
 Duplo clique em **`MudinhoX RPA.cmd`** com o jogo aberto. Pede permissão de administrador (o jogo roda como admin; sem isso o Windows ignora o teclado/mouse do bot). Abre uma janelinha com log e botão **PARAR** (ou feche a janela). Também para se criar um arquivo `stop.flag` na pasta.
 
 Log completo em `rpa.log`. Prints de captcha e da última janela de status em `captcha\`.
+- **Watchdog automático**: rodando como administrador (o normal — o bot se eleva sozinho), ele **instala a Tarefa Agendada de vigia no start**, se ainda não existir. Ela roda a cada 3 min e relança o bot se ele morrer ou travar; respeita o `stop.flag`. O `instalar-watchdog.cmd` virou opcional. Pra desligar: `$AutoWatchdog = $false` no CONFIG, ou `schtasks /delete /tn "MudinhoX RPA Watchdog" /f`.
 
 Modos de teste (não clicam em nada):
 
