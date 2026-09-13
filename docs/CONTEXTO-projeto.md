@@ -137,3 +137,10 @@ Rodada 6, 2026-08-31 23:45 (auditoria achou 3 defeitos, 2 deles introduzidos nas
 - **`$script:ciclos` crescia sem limite**: `+=` em array PowerShell realoca a cada item (O(n^2)) e a lista inteira ia pro estado.txt a cada reset. Capado em `$CapCiclosMax` = 200.
 - **`-Preflight`**: valida TODOS os subsistemas no jogo real antes de deixar rodando sozinho (privilegios, resolucao, captura, level, play, mapa, spot, captcha, 4 atributos, inventario, mensagens). Diferente do `-Check`, ele APERTA C e V, que e a parte que mais falha. Exit code 1 se algo falhar. Na 1a execucao ja mostrou o encadeamento certo: sem admin -> UIPI descarta C/V -> status e inventario falham.
 - `$LogLevelDelta` = 40: com poll de 2s perto do alvo, logar `level: N` a cada tick enchia o arquivo e atrapalhava diagnostico. So loga salto >= 40 ou queda (reset).
+
+Rodada 7, 2026-08-31 23:50:
+- **Etiqueta de causa por ciclo** (`Tag-Ciclo`): a metrica do tail dizia QUANTO tempo vazava, nao ONDE. Cada ciclo agora carrega o que deu errado nele e a linha vira `40% do tempo perdido -> captcha 22%, warp 12%, stall 6%`. O excesso sobre a mediana e dividido entre as causas daquele ciclo; ciclo lento sem etiqueta vira `?`. 7 pontos de etiqueta: captcha, status, stall, warp (2x), mix, dragoes. Formato do `$script:ciclos` virou "segundos" OU "segundos:tag+tag" — `CicloSeg`/`CicloTags` aceitam os dois (o estado.txt antigo so tinha numeros).
+- **ESC antes de andar no miss infinito**: `Check-Progress` so pausava/andava/despausava. Se o que travou foi uma janela aberta por acidente, andar nao resolve — `Close-Popup` resolve. Uma linha.
+- **`Podar-Shots` tambem no start**: a poda so rodava quando um captcha aparecia; sem captcha, os 4.9GB ficavam la. Agora tambem no boot, e loga quantos MB liberou.
+- **Preflight no start do bot** (`Run-Preflight $false`, sem checar spot porque o bot ainda vai warpar): 10s conferindo tudo evita a noite perdida por algo obvio. NAO bloqueia, so avisa. O `-Preflight` manual continua checando o spot tambem.
+- `test_ciclos.ps1`: mediana ignorando etiquetas, divisao da culpa, ciclo sem etiqueta virando '?', Tag-Ciclo sem duplicata, formato antigo.

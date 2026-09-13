@@ -534,10 +534,15 @@ function Option-Selected($img,[int]$x,[int]$y){   # borda vermelha (selecao) no 
   foreach($dy in -5..5){ $red = 0; foreach($dx in -50..50){ $p = $img.GetPixel($x+$dx, $y-$CapSelHalf+$dy); if($p.R -gt 150 -and $p.G -lt 100 -and $p.B -lt 100){ $red++ } }; if($red -gt $best){ $best = $red } }
   $best -gt 60
 }
+function Podar-Shots {   # cada print tem 2-4MB e a pasta esta DENTRO do OneDrive: sem poda virou 4.9GB / 2640 arquivos sincronizando pra nuvem
+  try {
+    $velhos = @(Get-ChildItem $CaptchaShotDir -Filter 'captcha_*.png' -EA SilentlyContinue | sort LastWriteTime -Descending | select -Skip $CapKeepShots)
+    if($velhos.Count){ $mb = [int](($velhos | measure Length -Sum).Sum / 1MB); $velhos | Remove-Item -Force -EA SilentlyContinue; Log "podei $($velhos.Count) prints de captcha antigos (${mb}MB)" }
+  } catch {}
+}
 function Save-CaptchaShot($img){
   New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null
-  # cada print tem 2-4MB e a pasta esta DENTRO do OneDrive: sem poda isso virou 4.9GB / 2640 arquivos sincronizando pra nuvem
-  try { Get-ChildItem $CaptchaShotDir -Filter 'captcha_*.png' -EA SilentlyContinue | sort LastWriteTime -Descending | select -Skip $CapKeepShots | Remove-Item -Force -EA SilentlyContinue } catch {}
+  Podar-Shots
   $f = Join-Path $CaptchaShotDir ("captcha_{0}.png" -f (Get-Date -Format 'yyyyMMdd_HHmmss')); $img.Save($f); Log "print salvo: $f"
 }
 $script:capTries = 0; $script:capNotified = $null
@@ -562,7 +567,7 @@ function Handle-Captcha($img){   # $true se captcha esta na tela (tentou resolve
     }
     return $true
   }
-  Save-CaptchaShot $img
+  Tag-Ciclo 'captcha'; Save-CaptchaShot $img
   $r = Solve-Captcha $img $a
   if($r -eq 'enviado'){ $script:capTries++; Log "captcha: tentativa $($script:capTries) enviada"; Wait 5; return $true }
   if($r -ne 'enviado' -and (-not $script:capNotified -or ((Get-Date) - $script:capNotified).TotalSeconds -ge $RenotifySec)){
@@ -640,7 +645,7 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
   $prevP = -1; $stuck = 0
   for($guard = 0; $guard -lt 8 -and -not $script:stop; $guard++){   # cada volta = 1 leitura de status + o plano inteiro; 8 volta e sobra
     $st = Read-Status
-    if(-not $st){ Log "stats: nao consegui ler o status"; return }
+    if(-not $st){ Tag-Ciclo 'status'; Log "stats: nao consegui ler o status"; return }
     $script:ptsNeeded = Points-Needed $st
     if($script:ptsNeeded -le 0){ if($script:phase -eq 'warmup'){ Log "stats: atributos no maximo durante o warmup, seguindo sem /darmr"; return }; Log "stats: F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) -> TODOS no maximo, /darmr"; Master-Reset; return }
     $p = [int]$st['Pts']; $script:ptsLeft = $p
@@ -675,7 +680,9 @@ function Check-Progress([int]$lvl, $img){   # level parado: se saiu do spot, re-
   if(((Get-Date) - $script:lvlChangedAt).TotalSeconds -lt $StallSec){ return $true }
   $script:lvlChangedAt = Get-Date
   if(-not (In-Farm $img)){ Log "level parado e fora do spot: re-teleportando"; if(Warp-To-Spot){ Start-Helper }; return $false }
-  Log "level parado ha $StallSec s no spot (miss infinito): pausa + anda + despausa"
+  Log "level parado ha $StallSec s no spot (miss infinito): ESC + pausa + anda + despausa"
+  Tag-Ciclo 'stall'
+  Close-Popup   # se o que travou foi uma janela/modal aberta por acidente, andar nao resolve - ESC resolve
   $null = Click-Client $PlayBtn.X $PlayBtn.Y; Wait 2   # pausa o helper
   Walk-Forward                                          # anda um pouco (desbuga o miss infinito)
   Start-Helper; $true                                   # religa o ataque
@@ -865,10 +872,10 @@ function Warp-To-Spot {   # teleporta pro spot da fase atual (warmup=/losttower7
     $now = Wait-Map $want $WarpWaitSec   # chega e segue; nao dorme os 9s inteiros
     if(Same-Map $now $want){ $script:farmMap = $now; Log "no spot (mapa: $now, fase: $($script:phase))"; return $true }   # chegou no spot certo
     if($now){
-      Log "nao teleportou pro spot certo (mapa: '$now', esperado '$want', antes '$before'), tentativa $t/$WarpTries ($cmd)"
-      if($t -eq 1){ $null = Log-GameMsg $null "apos $cmd"; $null = Save-Shot 'warp_falhou.png' }   # le a resposta do servidor e fotografa na PRIMEIRA falha (a mensagem some rapido)
+      Tag-Ciclo 'warp'; Log "nao teleportou pro spot certo (mapa: '$now', esperado '$want', antes '$before'), tentativa $t/$WarpTries ($cmd)"
+X   # le a resposta do servidor e fotografa na PRIMEIRA falha (a mensagem some rapido)
     }
-    else { $cego++; Log "NAO CONSEGUI LER o nome do mapa (minimapa recolhido ou tapado?), tentativa $t/$WarpTries ($cmd)" }
+    else { $cego++; Tag-Ciclo 'warp'; Log "NAO CONSEGUI LER o nome do mapa (minimapa recolhido ou tapado?), tentativa $t/$WarpTries ($cmd)" }
   }
   if($cego -ge $WarpTries){   # nunca deu pra ler: o problema e a LEITURA, nao o teleporte. Reenviar /s18 nao resolve nada.
     $f = Save-Shot 'mapa_ilegivel.png'
@@ -957,7 +964,7 @@ function Hover-Npc {   # passa o mouse por $MixNpcPos (e uns vizinhos) ate o nom
 }
 function Mix-Jewels {   # /mixer -> clica no NPC -> "Mixar Joias" -> clica cada tipo VERDE (espera $MixWaitSec entre eles) ate sobrar so vermelho. $true se mixou
   if(-not $MixNpcPos){ Notify "MudinhoX" "Nao sei onde o NPC do mix fica: rode -TestNpc e preencha \$MixNpcPos."; return $false }
-  Log "mix: indo pro $MixCmd"
+  Tag-Ciclo 'mix'; Log "mix: indo pro $MixCmd"
   if(-not (Send-Chat $MixCmd)){ return $false }
   Wait $WarpWaitSec
   $prev = Focus-Game; if(-not $script:gameFg){ Restore-Focus $prev; return $false }
@@ -1005,7 +1012,7 @@ function Find-Gold($img){   # centro do bloco mais dourado da tela (Golden Tanta
   @{ X = $r[0]; Y = $r[1]; N = $r[2] }
 }
 function Hunt-Golden {   # botao DRAGOES: /tarkan2 e caca os Golden Tantalos ate $GoldMinutes. Chamar com o jogo na frente
-  Log "dragoes: indo pro $GoldCmd"
+  Tag-Ciclo 'dragoes'; Log "dragoes: indo pro $GoldCmd"
   if(-not (Send-Chat $GoldCmd)){ return }
   Wait $WarpWaitSec
   for($t = 1; $t -lt $WarpTries -and -not (Same-Map (Read-Map $null) $GoldMap); $t++){
@@ -1054,7 +1061,11 @@ function Tick-Inventory {   # de tempos em tempos checa o inventario; cheio (ou 
 function Jit([double]$sec){ $sec * (1 + (Get-Random -Minimum (-$JitterPct) -Maximum $JitterPct)) }   # varia o RITMO (nunca os valores dos stats, que precisam ser exatos)
 $script:runStart = Get-Date; $script:resets = 0; $script:ptsSent = 0; $script:ptsNeeded = -1
 $script:mrs = 0; $script:mrStart = Get-Date; $script:resumo = ''; $script:ciclos = @(); $script:ultimoReset = $null
-function Mediana($a){ if(-not $a -or $a.Count -eq 0){ return 0 }; $s = @($a | sort); [int]$s[[int]($s.Count/2)] }
+$script:tagsCiclo = @()
+function Tag-Ciclo([string]$t){ if($script:tagsCiclo -notcontains $t){ $script:tagsCiclo += $t } }   # o que atrapalhou o ciclo atual
+function CicloSeg($c){ [int](("$c" -split ':')[0]) }        # ciclo e "segundos" ou "segundos:tag+tag"
+function CicloTags($c){ $p = "$c" -split ':'; if($p.Count -gt 1){ $p[1] } else { '' } }
+function Mediana($a){ if(-not $a -or $a.Count -eq 0){ return 0 }; $s = @(@($a | % { CicloSeg $_ }) | sort); [int]$s[[int]($s.Count/2)] }
 function Metrics {   # o objetivo e o /darmr, nao o reset: o numero que importa e PONTOS/HORA e o ETA do MR. Reset e so o meio.
   $h = ((Get-Date) - $script:runStart).TotalHours
   if($h -le 0.01){ return }
@@ -1069,12 +1080,21 @@ function Metrics {   # o objetivo e o /darmr, nao o reset: o numero que importa 
   # O que decide o ETA do MR nao e o ciclo bom, e quanto tempo vaza nos ruins (69% do tempo numa noite medida).
   if($script:ciclos.Count -ge 4){
     $med = Mediana $script:ciclos
-    $lentos = @($script:ciclos | ? { $_ -gt ($med * 1.5) })
-    $total = (@($script:ciclos) | measure -Sum).Sum
-    $perdido = if($lentos.Count){ (@($lentos | % { $_ - $med }) | measure -Sum).Sum } else { 0 }
+    $lentos = @($script:ciclos | ? { (CicloSeg $_) -gt ($med * 1.5) })
+    $total = (@($script:ciclos | % { CicloSeg $_ }) | measure -Sum).Sum
+    $perdido = if($lentos.Count){ (@($lentos | % { (CicloSeg $_) - $med }) | measure -Sum).Sum } else { 0 }
     $pctT = if($total -gt 0){ [int]($perdido * 100 / $total) } else { 0 }
-    Log ("   ciclo mediano {0}s | {1}/{2} ciclos lentos (>{3}s) | {4}% do tempo perdido neles | fase {5}" -f `
-         $med, $lentos.Count, $script:ciclos.Count, [int]($med*1.5), $pctT, $script:phase)
+    # POR QUE vazou: sem isto a metrica diz que se perde tempo, mas nao onde atacar
+    $porCausa = @{}
+    foreach($c in $lentos){
+      $extra = (CicloSeg $c) - $med
+      $tags = @((CicloTags $c) -split '\+' | ? { $_ })
+      if(-not $tags.Count){ $tags = @('?') }
+      foreach($t in $tags){ $porCausa[$t] = [int]$porCausa[$t] + [int]($extra / $tags.Count) }   # divide o excesso entre as causas do ciclo
+    }
+    $culpa = (@($porCausa.GetEnumerator() | sort Value -Descending | % { "{0} {1}%" -f $_.Key, [int]($_.Value * 100 / [Math]::Max(1,$total)) }) -join ', ')
+    Log ("   ciclo mediano {0}s | {1}/{2} lentos (>{3}s) | {4}% do tempo perdido neles{5} | fase {6}" -f `
+         $med, $lentos.Count, $script:ciclos.Count, [int]($med*1.5), $pctT, $(if($culpa){ " -> $culpa" }else{''}), $script:phase)
   }
   if($script:ui -and -not $script:ui.IsDisposed){ $script:ui.Text = "MudinhoX RPA - $($script:resumo)" }
 }
@@ -1148,12 +1168,12 @@ if($TestNpc){   # de /mixer no jogo e deixe o mouse EM CIMA do Lahap: mostra a c
   Log "TestNpc: use a coordenada que apareceu com CONFERE em `$MixNpcPos = @{ X=..; Y=.. }"
   exit
 }
-if($Preflight){   # valida TODOS os subsistemas de leitura no jogo de verdade, antes de deixar o bot rodando sozinho a noite toda.
-  # Diferente do -Check: este APERTA teclas (C e V) porque a janela de status e o inventario sao a parte que mais falha.
+function Run-Preflight([bool]$comSpot){   # valida os subsistemas de leitura no jogo de verdade. Devolve quantas falhas.
+  # Diferente do -Check: este APERTA teclas (C e V), que e a parte que mais falha. Rodado no start (sem checar spot,
+  # porque o bot ainda vai warpar) e sob demanda com -Preflight (checando spot).
   $script:falhas = 0
   function Ok([string]$nome,$cond,[string]$detalhe){ if($cond){ Log "  OK   $nome" } else { $script:falhas++; Log "  FALHOU $nome -> $detalhe" } }
-  Log "Preflight: o personagem precisa estar NO SPOT de farm, logado e sem janela aberta"
-  if((Game-IsAdmin) -and -not (Is-Admin)){ Log "  FALHOU admin -> o jogo roda elevado e este processo nao; o Windows vai ignorar teclado/mouse"; $script:falhas++ }
+  if((Game-IsAdmin) -and -not (Is-Admin)){ Log "  FALHOU privilegios -> o jogo roda elevado e este processo nao; o Windows vai ignorar teclado/mouse"; $script:falhas++ }
   else { Log "  OK   privilegios" }
 
   $h0 = Get-Game; $c0 = New-Object W+RECT; [W]::GetClientRect($h0,[ref]$c0) | Out-Null
@@ -1164,12 +1184,11 @@ if($Preflight){   # valida TODOS os subsistemas de leitura no jogo de verdade, a
     $img = Capture-Game
     Ok 'consegue capturar a tela do jogo' ($img -and $script:capOk) 'capturou outra janela ou o jogo nao veio pra frente'
     if($img){
-      $lvl = Read-Level $img
-      Ok 'le o level' ($null -ne $lvl) 'Read-Level devolveu nada'
-      Ok 'reconhece o botao play' ((Get-HelperState $img) -ne 'unknown') 'botao play irreconhecivel'
+      Ok 'le o level' ($null -ne (Read-Level $img)) 'Read-Level devolveu nada'
+      Ok 'reconhece o botao play' ((Get-HelperState $img) -ne 'unknown') 'botao play irreconhecivel (fora do jogo? tela de login?)'
       $mapa = Read-Map $img
       Ok 'le o nome do mapa' ([bool]$mapa) 'minimapa recolhido ou tapado pela janela do bot?'
-      Ok 'esta no spot da fase atual' (Same-Map $mapa (Spot-Map)) "mapa '$mapa', esperado '$(Spot-Map)'"
+      if($comSpot){ Ok 'esta no spot da fase atual' (Same-Map $mapa (Spot-Map)) "mapa '$mapa', esperado '$(Spot-Map)'" }
       Ok 'nenhum captcha na tela' (-not (Find-Captcha $img)) 'tem captcha aberto agora'
       $img.Dispose()
     }
@@ -1182,9 +1201,13 @@ if($Preflight){   # valida TODOS os subsistemas de leitura no jogo de verdade, a
     $m = Read-Msgs $null
     Log $(if($m){ "  OK   le a faixa de mensagens: '$m'" } else { "  (faixa de mensagens vazia agora - normal se o chat esta quieto)" })
   } finally { Release-Focus }
-
-  Log $(if($script:falhas){ "Preflight: $($script:falhas) FALHA(S) - resolva antes de deixar rodando sozinho" } else { 'Preflight: tudo OK, pode deixar rodando' })
-  exit $(if($script:falhas){ 1 } else { 0 })
+  $script:falhas
+}
+if($Preflight){
+  Log "Preflight: o personagem precisa estar NO SPOT de farm, logado e sem janela aberta"
+  $f = Run-Preflight $true
+  Log $(if($f){ "Preflight: $f FALHA(S) - resolva antes de deixar rodando sozinho" } else { 'Preflight: tudo OK, pode deixar rodando' })
+  exit $(if($f){ 1 } else { 0 })
 }
 if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guardados em fixtures\ (nao precisa do jogo aberto)
   $falhas = 0
@@ -1262,6 +1285,11 @@ try {   # TODA coordenada calibrada ($InvGrid, $MixNpcPos, $MapLabel, $LevelBox.
     Notify "MudinhoX" "Resolucao mudou ($($c0.R)x$($c0.B), esperado $($ClientEsperado.W)x$($ClientEsperado.H)). Inventario e mix podem falhar."
   } else { Log "area cliente $($c0.R)x$($c0.B) confere com a calibracao" }
 } catch { Log "nao consegui medir a area cliente: $_" }
+try {   # preflight no start: 10s conferindo tudo evita a noite inteira perdida por algo obvio. Nao BLOQUEIA (o spot nem e checado, o bot ainda vai warpar)
+  Log "preflight de inicializacao:"
+  $pf = Run-Preflight $false
+  if($pf){ Notify "MudinhoX" "$pf verificacao(oes) falharam no start - veja o log. O bot vai tentar rodar mesmo assim." }
+} catch { Log "preflight falhou: $_" }
 Load-Estado   # retoma fase/warmup de onde parou (o warmup.flag abaixo ainda tem prioridade)
 if(Test-Path $WarmupFile){ Remove-Item $WarmupFile -ErrorAction SilentlyContinue; $script:phase = 'warmup'; $script:warmupCount = 0; Save-Estado; Log "iniciando em modo warmup (pos-MR manual): $WarmupCmd ate $WarmupResets resets" }
 while(-not $script:stop){   # envelope: se o cliente cair, o catch espera ele voltar e o ciclo recomeca aqui (antes o script terminava)
@@ -1330,7 +1358,7 @@ while($true){
           if($null -ne $lvl -and $lvl -lt $TargetLevel){ $resetOk = $true }
           if(-not $resetOk -and ((Get-Date) - $sent).TotalSeconds -ge $ResetWaitSec){
             $resends++
-            Log "reset nao aconteceu (level: $(if($null -ne $lvl){$lvl}else{'ilegivel'}), mapa: '$mapa'), reenviando ($resends)"   # loga O QUE ELE VE: sem isso nao da pra saber se e o /resetar ou a LEITURA que falhou
+            Tag-Ciclo "reset"; Log "reset nao aconteceu (level: $(if($null -ne $lvl){$lvl}else{'ilegivel'}), mapa: '$mapa'), reenviando ($resends)"   # loga O QUE ELE VE: sem isso nao da pra saber se e o /resetar ou a LEITURA que falhou
             if($resends -eq 1){ $null = Log-GameMsg $img "apos /resetar"; $null = Save-Shot 'reset_travado.png' }   # le a resposta do servidor e fotografa no PRIMEIRO erro (o jogo pode cair antes da 3a tentativa)
             if($resends -eq ($ResetRetries + 1)){ Notify "MudinhoX" "Reset nao aconteceu 3x (level: $(if($null -ne $lvl){$lvl}else{'ilegivel'}), mapa: '$mapa'). Print em captcha\reset_travado.png"; $warned = Get-Date }
             elseif($resends -gt $ResetRetries -and (-not $warned -or ((Get-Date) - $warned).TotalSeconds -ge $RenotifySec)){ Notify "MudinhoX" "Reset ainda nao aconteceu (level: $(if($null -ne $lvl){$lvl}else{'ilegivel'}), mapa: '$mapa')."; $warned = Get-Date }
@@ -1348,7 +1376,8 @@ while($true){
   if($script:restartCycle){ continue }   # botao mudou a fase no meio do reset: recomeca o ciclo (nao conta este reset)
   $script:resets++
   $agora = Get-Date
-  if($script:ultimoReset){ $script:ciclos = @(@($script:ciclos) + [int]($agora - $script:ultimoReset).TotalSeconds | select -Last $CapCiclosMax) }   # duracao do ciclo, pra mediana e pro tail
+  if($script:ultimoReset){ $seg = [int]($agora - $script:ultimoReset).TotalSeconds; $tg = ($script:tagsCiclo -join "+"); $script:ciclos = @(@($script:ciclos) + $(if($tg){"${seg}:$tg"}else{"$seg"}) | select -Last $CapCiclosMax) }
+  $script:tagsCiclo = @()   # ciclo novo comeca sem etiqueta
   $script:ultimoReset = $agora
   Log "reset feito, recomecando"
   Save-Estado   # metricas do MR sobrevivem a reinicio do bot (medir um MR leva horas)
