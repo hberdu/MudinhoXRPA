@@ -206,7 +206,10 @@ if($Slot -gt 0){
 }
 # Mensagens do jogo (faixa acima da caixa de chat). O servidor responde tudo por texto e o bot ignorava:
 # "Voce adicionou N pontos", "Bem-vindo(a) a Lorencia", "Resta ainda N Golden Tantalo vivo(s)".
-$MsgBox        = @{ X = 760; W = 400; Y1FromBottom = 250; Y2FromBottom = 135 }
+                          # Faixa das mensagens em FRACAO da area cliente (era $MsgBox em pixel: X=760 W=400,
+                          # 250..135 da base - so valia em 1920x1009). Uniao medida dos dois layouts com folga:
+                          # desktop x 0.40-0.60 / y 0.13-0.25 da base, web x 0.32-0.68 / y 0.19-0.30.
+$MsgFaixa      = @{ X1 = 0.25; X2 = 0.75; Y1FromBottom = 0.35; Y2FromBottom = 0.08 }
 $MsgCheckSec   = 20      # le as mensagens a cada N seg (recorte pequeno, usa a captura que ja existe)
 $MsgInvWords   = '(?i)(invent.rio.{0,12}cheio|espa.o insuficiente|inventory full)'   # inventario cheio -> vai mixar
 $ClientEsperado = @{ W = 1920; H = 1009 }   # resolucao pra qual as coordenadas fixas foram calibradas; muda isso se recalibrar noutra
@@ -446,7 +449,7 @@ function Canto-Da-Tela-Do-Jogo([int]$alturaJanela){
   if(-not $t){ $t = [System.Windows.Forms.Screen]::PrimaryScreen }
   $wa = $t.WorkingArea
   # MULTIBOX: as janelinhas em CASCATA, todas dentro do canto inferior esquerdo. Nao lado a lado: a 3a e a 4a
-  # cairiam em cima do $MsgBox e do $ChatBox (e, na epoca, do level, que ainda era coordenada fixa). Mascarar a janela dos
+  # cairiam em cima da faixa de mensagens e do $ChatBox (e, na epoca, do level). Mascarar a janela dos
   # outros slots (ver Outras-Janelinhas) impede LER LIXO, mas ler PRETO tambem nao serve - o Read-Level ia
   # falhar do mesmo jeito. Entao elas ficam onde nao ha nada pra ler.
   # Passo de 28px: da pra ver as 4 barras de titulo (e saber qual e qual) sem sair da area segura. A 4a termina
@@ -1986,7 +1989,7 @@ function Tick-Inventory {   # aviso do jogo, teto de tempo (ou botao MIXAR AGORA
   # livres com 20px de diferenca na ancora. Sobrou o gatilho confiavel: a mensagem do proprio jogo. Inv-Free
   # continua existindo pro -Preflight e pro -TestInv, onde o numero e so informativo.
   # ...so que a mensagem NUNCA chegou: 0 ocorrencias de "inventario cheio" em 42 mil linhas de rpa.log, e no
-  # mesmo periodo 68 pausas manuais suas pra mixar na mao. A faixa do $MsgBox e dominada por chat de jogador
+  # mesmo periodo 68 pausas manuais suas pra mixar na mao. A faixa de mensagens e dominada por chat de jogador
   # (anuncio de troca), e o aviso de inventario cheio nao cai la. O modo joias ja tinha o teto de tempo
   # ($JoiasFarmMax) justamente por isso; o ciclo normal ficou sem gatilho nenhum. Agora tem o mesmo teto.
   if($MixEveryMin -gt 0 -and -not $script:mixNow -and ((Get-Date) - $script:mixLast).TotalMinutes -ge $MixEveryMin){
@@ -2050,13 +2053,24 @@ function Metrics {   # o objetivo e o /darmr, nao o reset: o numero que importa 
   if($script:ui -and -not $script:ui.IsDisposed){ $script:ui.Text = "MudinhoX RPA - $($script:resumo)" }
 }
 function Read-Msgs($img){   # texto da faixa de mensagens do jogo (o servidor responde tudo por ali e o bot ignorava)
+  # FRACAO da area cliente, nao pixel. As mensagens nao tem ancora pra procurar por texto (sao texto solto, e o
+  # que se quer e justamente descobrir o que esta escrito), entao o jeito de nao cravar coordenada e descrever
+  # ONDE ELAS FICAM em proporcao: faixa central-baixa, acima da barra inferior.
+  # Medido nos dois layouts: desktop x 0.40-0.60 / y 0.13-0.25 da base; web x 0.32-0.68 / y 0.19-0.30.
+  # A faixa abaixo e a uniao dos dois com folga. Ler texto a mais nao atrapalha - todo chamador casa por regex,
+  # e a faixa ja vivia cheia de anuncio de jogador mesmo na versao estreita.
   $own = -not $img; if($own){ $img = Capture-Game }; if(-not $img){ return '' }
-  $y = $img.Height - $MsgBox.Y1FromBottom; $h = $MsgBox.Y1FromBottom - $MsgBox.Y2FromBottom
   $t = ''
-  if($y -ge 0 -and $h -gt 0 -and ($MsgBox.X + $MsgBox.W) -le $img.Width){
-    $c = Crop-Bitmap $img $MsgBox.X $y $MsgBox.W $h 2
-    $t = (Ocr-Bitmap $c).Text; $c.Dispose()
-  }
+  try {
+    $x = [int]($img.Width  * $MsgFaixa.X1)
+    $w = [int]($img.Width  * ($MsgFaixa.X2 - $MsgFaixa.X1))
+    $y = [int]($img.Height * (1 - $MsgFaixa.Y1FromBottom))
+    $h = [int]($img.Height * ($MsgFaixa.Y1FromBottom - $MsgFaixa.Y2FromBottom))
+    if($w -gt 0 -and $h -gt 0 -and ($x + $w) -le $img.Width -and ($y + $h) -le $img.Height){
+      $c = Crop-Bitmap $img $x $y $w $h 2
+      $t = (Ocr-Bitmap $c).Text; $c.Dispose()
+    }
+  } catch { $t = '' }
   if($own){ $img.Dispose() }
   ($t -replace '\s+',' ').Trim()
 }
@@ -2452,6 +2466,20 @@ if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guard
       Ok "$($cal.Q): sem calibracao, Read-Level nao inventa" ($null -eq (Read-Level $i)) "devolveu '$(Read-Level $i)' sem caixa calibrada"
     }
     $script:lvlBox = $null
+    $i.Dispose()
+  }
+  # FAIXA DE MENSAGENS em fracao, nao em pixel. Sem ancora possivel (o que se quer e justamente descobrir o que
+  # esta escrito), entao o jeito de nao cravar coordenada e descrever ONDE ELAS FICAM em proporcao. Os dois
+  # layouts tem que cair dentro da mesma faixa - e o que estes casos provam.
+  # Padrao TOLERANTE de proposito: o OCR mastiga a fonte pequena do desktop ('Rosta ainda 5 Goldon Dra') e sai
+  # limpo na web ('Resta ainda 6 Golden Dragon vivo(s) em Devias!'). Casar os dois prova que a faixa em fracao
+  # pega a mensagem de verdade nos dois layouts - que e o ponto. Os chamadores ja casam por regex tolerante.
+  foreach($msg in @(@{ F='web_hud.png';            P='(?i)r[eo]sta ainda'; Q='web'     },
+                    @{ F='lorencia_modal_mix.png'; P='(?i)r[eo]sta ainda'; Q='desktop' })){
+    $i = Fx $msg.F
+    if(-not $i){ continue }
+    $t = Read-Msgs $i
+    Ok "$($msg.Q): le a faixa de mensagens" ($t -match $msg.P) "leu '$($t.Substring(0,[Math]::Min(70,$t.Length)))'"
     $i.Dispose()
   }
   $i = Fx 'inventario_FECHADO.png'
