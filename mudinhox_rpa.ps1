@@ -48,7 +48,9 @@ $NoFocusRead   = $true   # JOGO NOUTRO MONITOR, sempre visivel. Liga o modo "nao
 $PollBgSec     = 60      # intervalo quando outra janela esta na frente (cada leitura rouba o foco por ~1s)
 # ---------- QUAL JANELA E O JOGO ----------
 $GameProc      = 'mudx'   # processo do cliente DESKTOP. Usado quando $GameTitle esta vazio.
-$GameTitle     = ''       # VERSAO WEB (game.mudinhox.com.br): regex do TITULO da janela, ex '(?i)mudinhox'.
+$GameTitle     = '(?i)\[GAME\]\s*MudinhoX'   # VERSAO WEB: a aba se chama "[GAME] MudinhoX". Ancorar no "[GAME]" importa:
+                          # ha OUTRAS abas com "MudinhoX" no titulo (o site do servidor, por exemplo), e casar com
+                          # elas faria o bot mirar a janela errada. Vazio = cliente desktop, por $GameProc.
                           # Preenchido = procura por titulo em QUALQUER processo (o jogo vira uma aba do Chrome,
                           # entao o processo e 'chrome' e o nome do processo nao identifica mais nada).
                           # Vazio = comportamento de sempre, por nome de processo.
@@ -139,7 +141,11 @@ $StallReads    = 3       # N LEITURAS seguidas com o level identico. E o sinal f
 $StallMinSec   = 15      # ...e pelo menos N seg. Piso de seguranca pra logo apos o reset, quando o char esta fraco e demora mesmo pra subir um level. Era 40 fixo (antes 75): 40s x 113 disparos = ~75 min so esperando pra perceber
 $CityWords     = 'lorencia|noria|devias|elbeland|lorenmarket|karutan|elveland'   # mapas-cidade onde NAO se farma (personagem cai aqui apos reset). Qualquer outro mapa = spot de farm (ex Stadium do /s18)
 # teleporte confirmado quando o mapa e um spot de farm (nao-cidade). $farmMap guarda o ultimo spot.
-$MapLabel      = @{ X = 1690; Y = 68; W = 230; H = 30 }   # rotulo do minimapa
+                          # $MapLabel REMOVIDO em 12/09: o rotulo do minimapa nao e mais procurado por coordenada.
+                          # O Read-Map acha ele pelo padrao "numero,numero" (a coordenada do char no minimapa, que
+                          # nada mais na tela tem) e pega o nome do mapa a esquerda - entao funciona em 1920x1009
+                          # e em 1024x720 sem nenhum ajuste. A caixa achada fica em cache ($script:mapaBox) pra
+                          # nao pagar OCR de tela cheia a cada leitura, e se invalida sozinha quando para de servir.
 $WarpTries     = 4       # reenvia o comando de warp ate N vezes se o mapa nao mudar, depois avisa e segue
 $PlayTries     = 3       # clica no play ate N vezes; se nao ligar, para de clicar (nao insiste cego)
 $HumanMinSec   = 120; $HumanMaxSec = 420   # a cada X seg (aleatorio) faz algo "humano": anda um pouco, abre/fecha janela, mexe o mouse
@@ -839,15 +845,48 @@ function Crop-Bitmap($src,[int]$x,[int]$y,[int]$w,[int]$h,[int]$scale=1,[int]$pa
 # OCR do Windows e caprichoso com numeros curtos (x8 sem margem le quase tudo mas falha em "400"; x4 com margem le 400 mas
 # confunde 7 com 1). Le nas 4 variantes e vota; empate = ordem abaixo (mais confiavel primeiro).
 $LevelOcrVariants = @( @{S=8;Pad=0;Inv=$false}, @{S=8;Pad=40;Inv=$true}, @{S=4;Pad=40;Inv=$false}, @{S=4;Pad=0;Inv=$false} )
+# O rotulo do minimapa e "Nome X,Y" (ex "Lorencia 132,125"). A COORDENADA e a ancora: nenhuma outra coisa na
+# tela tem a forma "numero,numero" grudada. Achando ela, o nome do mapa e a palavra a ESQUERDA na mesma linha -
+# mesma ideia do Parse-Attrs, que acha "Forca" e pega o numero a direita.
+# Assim o rotulo e encontrado ONDE ELE ESTIVER: serve pro cliente desktop em 1920x1009 e pra aba do Chrome em
+# 1024x720, sem $MapLabel cravado e sem recalibrar quando a janela muda de tamanho.
+$script:mapaBox = $null   # onde o rotulo foi achado da ultima vez (evita OCR de tela cheia a cada leitura)
+function Achar-Rotulo-Mapa($img){   # devolve @{Nome; Box} ou $null. OCR da tela toda - caro, entao o chamador cacheia
+  $ws = @((Ocr-Bitmap $img).Lines | % { $_.Words })
+  # topo primeiro: o minimapa fica em cima e uma mensagem de chat com "12,5" cairia embaixo
+  foreach($co in ($ws | ? { $_.Text -match '^\d{1,4},\d{1,4}$' } | sort { $_.BoundingRect.Y })){
+    $yc = $co.BoundingRect.Y + $co.BoundingRect.Height/2
+    $nome = $ws | ? {
+        $_.Text -match '^[A-Za-z]{3,}$' -and $_.BoundingRect.X -lt $co.BoundingRect.X -and
+        [Math]::Abs(($_.BoundingRect.Y + $_.BoundingRect.Height/2) - $yc) -lt ($co.BoundingRect.Height + 6)
+      } | sort { -$_.BoundingRect.X } | select -First 1   # a palavra imediatamente a esquerda
+    if($nome){
+      $r = $nome.BoundingRect
+      return @{ Nome = ($nome.Text -replace '[^A-Za-z]','').ToLower()
+                Box  = @{ X = [int]$r.X - 8; Y = [int]$r.Y - 6; W = [int]$r.Width + 60; H = [int]$r.Height + 12 } }
+    }
+  }
+  $null
+}
 function Read-Map($img){   # nome do mapa (rotulo do minimapa) em minusculo, ou '' se nao leu. Com $img=$null captura sozinho
   $own = -not $img; if($own){ $img = Capture-Game }; if(-not $img){ return '' }
   $out = ''
-  foreach($v in @( @{ X=$MapLabel.X; Y=$MapLabel.Y; W=$MapLabel.W; H=$MapLabel.H; S=4 },                              # faixa exata do rotulo
-                   @{ X=$MapLabel.X-110; Y=[Math]::Max(0,$MapLabel.Y-25); W=$MapLabel.W+110; H=$MapLabel.H+50; S=3 } )){  # faixa larga: salva quando o painel desloca um pouco
-    $c = Crop-Bitmap $img $v.X $v.Y $v.W $v.H $v.S
-    $out = ((Ocr-Bitmap $c).Text -replace '[^A-Za-z]','').ToLower(); $c.Dispose()
-    if($out){ break }
-  }
+  try {
+    # 1) caixa que ja funcionou: recorte pequeno, barato. E o caminho normal.
+    if($script:mapaBox){
+      $b = $script:mapaBox
+      if($b.X -ge 0 -and $b.Y -ge 0 -and ($b.X + $b.W) -le $img.Width -and ($b.Y + $b.H) -le $img.Height){
+        $c = Crop-Bitmap $img $b.X $b.Y $b.W $b.H 4
+        $out = ((Ocr-Bitmap $c).Text -replace '[^A-Za-z]','').ToLower(); $c.Dispose()
+      }
+      if(-not $out){ $script:mapaBox = $null }   # mudou de lugar (ou janela redimensionada): procura de novo
+    }
+    # 2) nao tinha caixa, ou ela parou de servir: acha o rotulo na tela inteira e GUARDA onde estava
+    if(-not $out){
+      $achou = Achar-Rotulo-Mapa $img
+      if($achou){ $out = $achou.Nome; $script:mapaBox = $achou.Box }
+    }
+  } catch { $out = '' }
   if($own){ $img.Dispose() }
   if(-not $out){ Unblock-MapLabel }   # nao leu nada: pode ser a JANELA DO BOT em cima do rotulo (Capture-Raw pinta ela de preto)
   $out
@@ -867,9 +906,18 @@ function Fugir-Da-Area([int]$x,[int]$y,[int]$w,[int]$h,[string]$oque){   # a jan
   $false
 }
 function Unblock-Areas {   # chamado quando uma leitura falha, e no start
-  $null = Fugir-Da-Area $MapLabel.X $MapLabel.Y $MapLabel.W $MapLabel.H 'rotulo do minimapa'
-  # A grade do inventario nao tem posicao fixa, entao aqui vale a metade direita da tela, que e onde ela ja apareceu.
-  $null = Fugir-Da-Area 560 300 1060 420 'area onde o inventario costuma abrir'
+  # Rotulo do minimapa: usa ONDE ELE FOI ACHADO (Read-Map guarda em $script:mapaBox). Antes era o $MapLabel
+  # cravado, que so valia em 1920x1009 - na aba do Chrome em 1024x720 apontaria pro lugar errado.
+  if($script:mapaBox){ $b = $script:mapaBox; $null = Fugir-Da-Area $b.X $b.Y $b.W $b.H 'rotulo do minimapa' }
+  # A grade do inventario nao tem posicao fixa e nao ha ancora enquanto ela esta FECHADA, entao aqui e a regiao
+  # onde ela costuma abrir - mas em FRACAO da area cliente, nao em pixel. Da os mesmos ~(560,300,1060,420) em
+  # 1920x1009 e acompanha sozinho qualquer outro tamanho de janela.
+  try {
+    $c = New-Object W+RECT; [W]::GetClientRect((Get-Game),[ref]$c) | Out-Null
+    if($c.R -gt 0 -and $c.B -gt 0){
+      $null = Fugir-Da-Area ([int]($c.R*0.29)) ([int]($c.B*0.30)) ([int]($c.R*0.55)) ([int]($c.B*0.42)) 'area onde o inventario costuma abrir'
+    }
+  } catch {}
 }
 function Unblock-MapLabel { Unblock-Areas }   # nome antigo, mantido pelos chamadores
 function Save-Shot([string]$nome){   # print pra diagnostico (chamar com o jogo na frente)
@@ -2472,6 +2520,11 @@ if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guard
     $v = Parse-Attrs $w
     Ok 'web: le os 4 atributos' (@('For','Agi','Vit','Ene' | ? { -not $v.ContainsKey($_) }).Count -eq 0) "faltou: $(@('For','Agi','Vit','Ene' | ? { -not $v.ContainsKey($_) }) -join ',')"
     Ok 'web: le os PONTOS do botao mastigado' ((Get-Points $w) -eq 244) "Get-Points devolveu $(Get-Points $w), esperado 244"
+    # O MESMO Read-Map que le o desktop em 1920x1009 tem que ler a aba do Chrome em 1024x720, sem coordenada
+    # cravada: ele acha o rotulo pela coordenada do minimapa ("132,125") e pega o nome a esquerda.
+    # E importante que este teste rode DEPOIS do fixture desktop: a caixa cacheada la nao serve aqui, entao
+    # este caso tambem exercita o auto-conserto (cache invalido -> procura de novo).
+    Ok 'web: Read-Map acha o mapa noutro layout' ((Read-Map $i) -match '^lorencia') "leu '$(Read-Map $i)'"
     $i.Dispose()
   }
   $i = Fx 'inventario_FECHADO.png'
