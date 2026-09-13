@@ -36,6 +36,7 @@ powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestGold           
 powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestVisao                    # regressão das funções de leitura de tela (usa os prints de fixtures\)
 powershell -ExecutionPolicy Bypass -File .\test_stats.ps1                                # self-check da distribuição em etapas (não toca no jogo)
 powershell -ExecutionPolicy Bypass -File .\test_estado.ps1                               # self-check do estado persistido (métricas sobrevivem a restart)
+powershell -ExecutionPolicy Bypass -File .\test_lint.ps1                                 # caca comando inexistente na AST (o `X` solto que matou o bot 2x)
 ```
 
 **Antes de deixar rodando sozinho a noite toda** — com o personagem **no spot** e num PowerShell **como administrador** (sem admin o Windows descarta as teclas `C`/`V` e o teste falha por isso):

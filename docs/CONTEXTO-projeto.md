@@ -261,3 +261,24 @@ Rodada 13, 2026-09-01 10:25 — 1o MIX REAL funcionou, e revelou 2 bugs:
 - **`Achar-Ate` generico.** Tres lugares repetiam o mesmo laco "tira o cursor, captura, procura o texto, tenta de
   novo": menu do mix, icone do inventario e o botao CONFIRMAR. Viraram um helper so. O padrao ja tinha custado
   bug antes (uma leitura unica falha porque o dialogo aparece com atraso variavel) — agora e um lugar so.
+
+## 2026-09-01 13:25 - o `X` solto matou o bot DE NOVO (agora tem lint)
+
+- Crash: `ERRO: O termo 'X' nao e reconhecido como nome de cmdlet...`, logo depois de
+  `nao teleportou pro spot certo (mapa: 'lorencia', esperado 'stad'), tentativa 1/4`.
+- Causa: a linha 985 do `Warp-To-Spot` estava assim — so o `X` e o comentario orfao:
+  ```
+  X   # le a resposta do servidor e fotografa na PRIMEIRA falha (a mensagem some rapido)
+  ```
+  O codigo real (`if($t -eq 1){ $null = Log-GameMsg $null "apos $cmd"; $null = Save-Shot 'warp_falhou.png' }`)
+  tinha sido destruido por um `sed` meu; restaurei do commit `a004d75`.
+- **Por que passou por todos os testes:** o PowerShell so descobre que um comando nao existe **quando executa
+  aquela linha**. O parser aceita `X` (e um nome de comando valido, so nao existe). E a linha so roda no ramo
+  raro "teleportou pro mapa errado". `-TestVisao`, `test_stats`, `test_estado`, `test_ciclos` e a checagem de
+  sintaxe passaram todos com o bug dentro. Foi a **segunda** vez (a primeira as 02:18 do mesmo dia).
+- **Correcao do bug CLASSE, nao do sintoma:** `test_lint.ps1` percorre a AST de `mudinhox_rpa.ps1` e
+  `watchdog.ps1` e cobra que todo nome de comando literal exista (funcao do proprio arquivo, cmdlet, alias ou
+  executavel). Roda em ~1s. Verifiquei que ele PEGA o bug: injetei `X` de volta, o lint acusou
+  `COMANDO INEXISTENTE ... linha 986: 'X'`, restaurei e voltou a passar. Rodar sempre antes de deixar a noite.
+- Licao ja conhecida, agora com ferramenta: **`sed` com regex frouxa em cima deste arquivo e perigoso.** Se o
+  padrao nao casar exatamente, ele apaga o que nao devia e o estrago fica num ramo que so roda de madrugada.

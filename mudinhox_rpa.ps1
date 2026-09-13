@@ -982,7 +982,7 @@ function Warp-To-Spot {   # teleporta pro spot da fase atual (warmup=/losttower7
     if(Same-Map $now $want){ $script:farmMap = $now; Log "no spot (mapa: $now, fase: $($script:phase))"; return $true }   # chegou no spot certo
     if($now){
       Tag-Ciclo 'warp'; Log "nao teleportou pro spot certo (mapa: '$now', esperado '$want', antes '$before'), tentativa $t/$WarpTries ($cmd)"
-X   # le a resposta do servidor e fotografa na PRIMEIRA falha (a mensagem some rapido)
+      if($t -eq 1){ $null = Log-GameMsg $null "apos $cmd"; $null = Save-Shot 'warp_falhou.png' }   # le a resposta do servidor e fotografa na PRIMEIRA falha (a mensagem some rapido)
     }
     else { $cego++; Tag-Ciclo 'warp'; Log "NAO CONSEGUI LER o nome do mapa (minimapa recolhido ou tapado?), tentativa $t/$WarpTries ($cmd)" }
   }
