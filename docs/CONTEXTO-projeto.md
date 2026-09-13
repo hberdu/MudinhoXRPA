@@ -202,3 +202,10 @@ Rodada 11, 2026-09-01 09:10 — "garantir que o bot nao fique parado":
 - **MASTER RESET #1 saiu**: `== MASTER RESET #1 FEITO (levou 0.33h, 4 resets) ==` as 02:30:04, ja com a validacao nova (rele o status depois de entrar e confirma que os atributos zeraram, pra nao contar MR falso).
 - **A tecla V NAO abre o inventario neste cliente.** Com a janela do bot ja fora do caminho (retangulo preto sumiu do print), a area continua mostrando o mapa. O cliente do MudinhoX tem menu proprio (Shop/Inventario/Personagem/Guild...), entao o atalho e outro. `$InvKey` esta esperando o valor certo — NAO sair testando teclas, hotkey errada dispara habilidade.
 - **Gotcha de analise**: o `rpa.log` nao tem data, so hora, e mistura dias. Um `grep '^\[09:2'` pega ontem E hoje. Usar `tail` ou os `.bak` datados.
+
+Rodada 12, 2026-09-01 09:45 — **MODO JOIAS** (pedido do usuario):
+- `$script:modo` = `'reset'` (ciclo normal) ou `'joias'`. O botao MIXAR JOIAS virou ALTERNADOR de modo (texto/cor mudam), e o botao "Normal /s18" tambem sai do modo joias. Persiste no estado.txt.
+- `Ciclo-Joias`: warp `$WarpCmd` -> helper -> farma ate encher -> `Mix-Jewels` -> repete. **Sem `/resetar` e sem `/darmr`** (o `Distribute-Points` bloqueia o darmr quando modo=joias, mas SEGUE distribuindo pontos, que continuam vindo do level).
+- Deteccao de "cheio": (1) mensagem do jogo (`$MsgInvWords` liga `$mixNow`), (2) contagem de celulas — **so a cada `$InvCheckSec`**, nao a cada leitura (abrir/fechar o inventario a cada poll de 6s seria absurdo; corrigi isso antes de commitar), (3) fallback por tempo `$JoiasFarmMax` (25 min), necessario porque a tecla do inventario ainda esta errada.
+- **Print antes de cada mix** (`captcha\mix_<timestamp>_<Joia>.png`), igual ao captcha: fica o registro de qual opcao estava verde e onde o bot clicou. Pedido explicito do usuario pra poder validar.
+- `test_estado.ps1` cobre o modo: round-trip nos dois valores e arquivo sem o campo (mantem o da memoria, nao vira lixo).

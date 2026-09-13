@@ -135,6 +135,7 @@ $InvGrid       = @{ X = 1317; Y = 408; Cell = 34.4; Cols = 8; Rows = 8 }   # gra
 $InvCellLit    = 210      # soma R+G+B acima disso = pixel "com item" (celula vazia e escura)
 $InvCellMin    = 10       # N pixels claros na celula = ocupada
 $InvFreeMin    = 4        # menos que N celulas livres = inventario cheio -> vai mixar
+$JoiasFarmMax  = 25      # modo JOIAS: se nao detectar inventario cheio em N min, vai mixar mesmo assim
 $InvMaxFalhas  = 3       # apos N falhas seguidas de abrir o inventario, desiste (nao fica apertando tecla desconhecida no personagem)
 $InvCheckSec   = 300      # checa o inventario a cada N seg enquanto farma
 # Evento dos Dragoes Dourados: botao -> /lorencia -> procura os Golden Dragon (mobs DOURADOS) pela tela, anda ate eles e mata.
@@ -304,15 +305,22 @@ function Show-Ui {
   $script:btnWarmup = New-Object System.Windows.Forms.Button; $script:btnWarmup.SetBounds(10,40,122,32);  $script:btnWarmup.Text = "Warmup LT7`n(10 resets)"; $script:btnWarmup.BackColor = 'SteelBlue'
   $script:btnNormal = New-Object System.Windows.Forms.Button; $script:btnNormal.SetBounds(137,40,122,32); $script:btnNormal.Text = "Normal /s18`n(ate MT)"; $script:btnNormal.BackColor = 'MediumSeaGreen'
   $script:btnMR     = New-Object System.Windows.Forms.Button; $script:btnMR.SetBounds(264,40,120,32);     $script:btnMR.Text = "Atribuir tudo`n+ MR"; $script:btnMR.BackColor = 'MediumPurple'
-  $script:btnMix    = New-Object System.Windows.Forms.Button; $script:btnMix.SetBounds(10,76,122,26);    $script:btnMix.Text = 'MIXAR JOIAS'; $script:btnMix.BackColor = 'DarkCyan'
+  $script:btnMix    = New-Object System.Windows.Forms.Button; $script:btnMix.SetBounds(10,76,122,26);    $script:btnMix.Text = 'MODO JOIAS'; $script:btnMix.BackColor = 'DarkCyan'
   $script:btnGold   = New-Object System.Windows.Forms.Button; $script:btnGold.SetBounds(137,76,247,26); $script:btnGold.Text = "DRAGOES DOURADOS ($GoldCmd)"; $script:btnGold.BackColor = 'Teal'   # NAO usar tom dourado: o -TestGold roda em processo separado (nao mascara a UI) e detectava o proprio botao como dragao
   $script:logBox = New-Object System.Windows.Forms.TextBox; $script:logBox.SetBounds(10,108,375,150); $script:logBox.Multiline = $true; $script:logBox.ReadOnly = $true; $script:logBox.ScrollBars = 'Vertical'
   $script:btnPause.Add_Click({ $script:paused = -not $script:paused; $script:btnPause.Text = $(if($script:paused){ 'RETOMAR' } else { 'PAUSAR' }); $script:btnPause.BackColor = $(if($script:paused){ 'ForestGreen' } else { 'Goldenrod' }); Log $(if($script:paused){ 'PAUSADO pelo usuario (mixe as joias; clique RETOMAR pra voltar)' } else { 'retomado pelo usuario' }) })
   $btn.Add_Click({ $script:stop = $true })
   $script:btnWarmup.Add_Click({ $script:phase = 'warmup'; $script:warmupCount = 0; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Save-Estado; Log "[BOTAO] modo WARMUP: /losttower7 ate $WarmupResets resets" })
-  $script:btnNormal.Add_Click({ $script:phase = 'normal'; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Save-Estado; Log "[BOTAO] modo NORMAL: /s18 ate os atributos encherem" })
+  $script:btnNormal.Add_Click({ $script:modo = 'reset'; $script:btnMix.Text = 'MODO JOIAS'; $script:btnMix.BackColor = 'DarkCyan'; $script:phase = 'normal'; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Save-Estado; Log "[BOTAO] modo NORMAL: /s18 ate os atributos encherem" })
   $script:btnMR.Add_Click({ $script:forceMR = $true; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Log "[BOTAO] ATRIBUIR TUDO + MR" })
-  $script:btnMix.Add_Click({ $script:mixNow = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Log "[BOTAO] MIXAR JOIAS no proximo tick ($MixCmd)" })
+  $script:btnMix.Add_Click({
+    $script:modo = if($script:modo -eq 'joias'){ 'reset' } else { 'joias' }
+    $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'
+    $script:btnMix.Text = if($script:modo -eq 'joias'){ 'MODO JOIAS (ligado)' } else { 'MODO JOIAS' }
+    $script:btnMix.BackColor = if($script:modo -eq 'joias'){ 'ForestGreen' } else { 'DarkCyan' }
+    Save-Estado
+    Log $(if($script:modo -eq 'joias'){ "[BOTAO] MODO JOIAS: farma em $WarpCmd ate encher, mixa no $MixCmd, repete. Sem reset e sem /darmr." } else { '[BOTAO] modo JOIAS desligado: volta ao ciclo de reset/master reset' })
+  })
   $script:btnGold.Add_Click({ $script:goldNow = $true; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Log "[BOTAO] DRAGOES DOURADOS: $GoldCmd por ate $GoldMinutes min" })
   $f.Add_FormClosing({ $script:stop = $true })
   $f.Controls.AddRange(@($script:status,$script:btnPause,$btn,$script:btnWarmup,$script:btnNormal,$script:btnMR,$script:btnMix,$script:btnGold,$script:logBox)); $f.Show(); $script:ui = $f
@@ -499,11 +507,13 @@ function Save-Shot([string]$nome){   # print pra diagnostico (chamar com o jogo 
   New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null
   $f = Join-Path $CaptchaShotDir $nome; $img.Save($f); $img.Dispose(); $f
 }
+$script:modo = 'reset'   # 'reset' = ciclo normal (farm/reset/darmr). 'joias' = farma ate encher, mixa, repete
 $script:farmMap = ''; $script:phase = 'normal'; $script:warmupCount = 0; $script:restartCycle = $false; $script:forceMR = $false
 function Save-Estado {   # fase/warmup E as metricas do MR. Medir um MR leva horas e reiniciar o bot zerava tudo.
   try {
     @(
       "fase=$($script:phase)"
+      "modo=$($script:modo)"
       "warmup=$($script:warmupCount)"
       "resets=$($script:resets)"
       "ptsSent=$($script:ptsSent)"
@@ -528,6 +538,7 @@ function Load-Estado {
     } else {
       $kv = @{}; foreach($l in ($txt -split "`r?`n")){ if($l -match '^(\w+)=(.*)$'){ $kv[$Matches[1]] = $Matches[2] } }
       if($kv.fase -in 'normal','warmup'){ $script:phase = $kv.fase }
+      if($kv.modo -in 'reset','joias'){ $script:modo = $kv.modo }
       if($kv.warmup){ $script:warmupCount = [int]$kv.warmup }
       if($kv.resets){ $script:resets = [int]$kv.resets }
       if($kv.ptsSent){ $script:ptsSent = [int]$kv.ptsSent }
@@ -726,7 +737,7 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
     $st = Read-Status
     if(-not $st){ Tag-Ciclo 'status'; Log "stats: nao consegui ler o status"; return }
     $script:ptsNeeded = Points-Needed $st
-    if($script:ptsNeeded -le 0){ if($script:phase -eq 'warmup'){ Log "stats: atributos no maximo durante o warmup, seguindo sem /darmr"; return }; Log "stats: F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) -> TODOS no maximo, /darmr"; Master-Reset; return }
+    if($script:ptsNeeded -le 0){ if($script:modo -eq 'joias'){ Log "stats: atributos no maximo, mas o modo JOIAS nao da /darmr"; return }; if($script:phase -eq 'warmup'){ Log "stats: atributos no maximo durante o warmup, seguindo sem /darmr"; return }; Log "stats: F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) -> TODOS no maximo, /darmr"; Master-Reset; return }
     $p = [int]$st['Pts']; $script:ptsLeft = $p
     if($p -lt 0){ Log "stats: F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) (pontos ilegiveis)"; return }
     if($p -lt $StatMinAvail){ return }   # nada relevante a distribuir agora
@@ -1074,7 +1085,11 @@ function Mix-Jewels {   # /mixer -> clica no NPC -> "Mixar Joias" -> clica cada 
       $img.Dispose()
       if(-not $verde){ Log "mix: nenhuma opcao verde sobrou ($mixados mixados)"; break }
       $c = Word-Center $verde.W
-      Log "mix: $($verde.J.Name) verde em ($($c.X),$($c.Y)), clicando"
+      # print ANTES de clicar, igual ao captcha: fica o registro de qual opcao estava verde e onde o bot clicou
+      New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null
+      $shot = Join-Path $CaptchaShotDir ("mix_{0}_{1}.png" -f (Get-Date -Format 'yyyyMMdd_HHmmss'), $verde.J.Name)
+      $imgS = Capture-Raw; try { $imgS.Save($shot) } catch {}; $imgS.Dispose()
+      Log "mix: $($verde.J.Name) verde em ($($c.X),$($c.Y)), clicando. Print: $(Split-Path $shot -Leaf)"
       $null = Click-Client $c.X $c.Y -KeepFocus
       Wait 1.5
       # Clicar na joia abre um SEGUNDO dialogo ("Mixar 16 Jewel of Life / Deseja continuar?" com CONFIRMAR e CANCELAR).
@@ -1295,6 +1310,42 @@ function Tick-Progresso {   # rede de seguranca GERAL: o travamento de 2h passou
   Notify "MudinhoX" "Sem ganhar pontos ha $SemProgressoMin min. Reiniciando o ciclo - da uma olhada se repetir."
   $script:restartCycle = $true
 }
+function Ciclo-Joias {   # MODO JOIAS: farma no spot ate encher o inventario, vai mixar, volta a farmar. Nao reseta nem da MR.
+  $script:restartCycle = $false
+  Hold-Focus
+  try { $ok = Warp-To-Spot; if($ok){ Start-Helper; $script:lvlChangedAt = Get-Date } } finally { Release-Focus }
+  if(-not $ok){ Wait 15; return }
+  $fim = (Get-Date).AddMinutes($JoiasFarmMax)
+  $cheio = $false
+  Log "joias: farmando em $WarpCmd ate encher (ou $JoiasFarmMax min)"
+  do {
+    Wait (Poll-Interval); Bater-Heartbeat
+    Hold-Focus
+    try {
+      $img = Capture-Game
+      if($img){
+        if(-not (Handle-Captcha $img)){
+          $lvl = Read-Level $img
+          if($null -ne $lvl){ if(-not (Check-Progress $lvl $img)){ $img.Dispose(); continue } }
+          Tick-Stats            # continua distribuindo pontos (o /darmr fica bloqueado neste modo)
+          Tick-Msgs $img        # "inventario cheio" no chat liga $script:mixNow
+          Tick-Human
+          if($script:mixNow){ $script:mixNow = $false; $cheio = $true; Log "joias: inventario cheio (aviso do jogo)" }
+          elseif(-not $script:invDesligado -and (Get-Date) -ge $script:invDue){   # NAO a cada leitura: abrir/fechar o inventario a cada poll seria absurdo
+            $script:invDue = (Get-Date).AddSeconds((Jit $InvCheckSec))
+            $free = Inv-Free
+            if($free -ge 0){ Log "joias: $free celulas livres"; if($free -lt $InvFreeMin){ $cheio = $true } }
+          }
+        }
+        $img.Dispose()
+      }
+    } finally { Release-Focus }
+  } until ($cheio -or (Get-Date) -ge $fim -or $script:stop -or $script:restartCycle -or $script:modo -ne 'joias')
+  if($script:stop -or $script:modo -ne 'joias'){ return }
+  if(-not $cheio){ Log "joias: $JoiasFarmMax min de farm, indo mixar mesmo assim (sem deteccao de inventario cheio)" }
+  Hold-Focus; try { $null = Mix-Jewels } finally { Release-Focus }
+  $script:ptsLastGain = Get-Date   # mixar nao distribui pontos: nao deixa o watchdog de progresso contar esse tempo
+}
 function Poll-Interval {   # perto do alvo le rapido: o level sobe ~150 entre leituras e o reset saia com 400 em vez de 350
   if($null -ne $script:lvlPrev -and $script:lvlPrev -ge ($TargetLevel * $PollNearFrom)){ return $PollNearSec }
   if($NoFocusRead -or $script:gameWasFg){ $PollSec } else { $PollBgSec }
@@ -1507,12 +1558,17 @@ try {   # preflight no start: 10s conferindo tudo evita a noite inteira perdida 
   $pf = Run-Preflight $false
   if($pf){ Notify "MudinhoX" "$pf verificacao(oes) falharam no start - veja o log. O bot vai tentar rodar mesmo assim." }
 } catch { Log "preflight falhou: $_" }
-Load-Estado   # retoma fase/warmup de onde parou (o warmup.flag abaixo ainda tem prioridade)
+Load-Estado   # retoma fase/warmup/modo de onde parou (o warmup.flag abaixo ainda tem prioridade)
+if($script:ui -and $script:modo -eq 'joias'){   # botao tem que refletir o modo retomado do estado.txt
+  $script:btnMix.Text = 'MODO JOIAS (ligado)'; $script:btnMix.BackColor = 'ForestGreen'
+  Log "retomando em MODO JOIAS: farma em $WarpCmd ate encher, mixa no $MixCmd, repete"
+}
 if(Test-Path $WarmupFile){ Remove-Item $WarmupFile -ErrorAction SilentlyContinue; $script:phase = 'warmup'; $script:warmupCount = 0; Save-Estado; Log "iniciando em modo warmup (pos-MR manual): $WarmupCmd ate $WarmupResets resets" }
 while(-not $script:stop){   # envelope: se o cliente cair, o catch espera ele voltar e o ciclo recomeca aqui (antes o script terminava)
 try {
 while($true){
   Pause-Gate
+  if($script:modo -eq 'joias'){ Ciclo-Joias; continue }   # modo JOIAS: farma ate encher, mixa, volta a farmar. Nao reseta nem da MR.
   if($script:mixNow){ Hold-Focus; try { Tick-Inventory } finally { Release-Focus } }   # botao MIXAR JOIAS: atende ANTES do warp (senao so era visto la dentro do loop de farm, e o bot parecia ignorar o botao)
   if($script:goldNow){ $script:goldNow = $false; $script:restartCycle = $false; Hold-Focus; try { Hunt-Golden } finally { Release-Focus } }   # botao DRAGOES DOURADOS
   $script:restartCycle = $false   # comecando um ciclo novo (botoes de fase ja aplicaram phase/forceMR)
