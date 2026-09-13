@@ -164,3 +164,14 @@ Rodada 9, 2026-09-01 02:15:
 - **A caca aos dragoes NAO FUNCIONA ate `$GoldPix` ser calibrado com `-TestGold` num mob real.** As duas guardas so evitam desperdicio; nao substituem a calibracao.
 - **Alvo da caca mudou pra LORENCIA (usuario, 2026-09-01)**: sao dois bichos diferentes e o chat do jogo anuncia os dois — `Golden Dragon vivo(s) em Lorencia` e `Golden Tantalo vivo(s) em Tarkan`. O alvo e o **Golden Dragon, em Lorencia**. `$GoldCmd` = `/lorencia`, `$GoldMap` = `lore`.
 - Consequencia: **Lorencia e CIDADE**, e clicar no play la abre "precisa estar fora da cidade" (gotcha ja documentado). `$GoldHelper` = `$false`: sem MU Helper, quem ataca e o proprio clique no mob (1o clique leva ate ele, 2o ataca, e o loop reclica a cada varredura).
+
+Rodada 10, 2026-09-01 02:25 - prints do usuario destravaram mix e caca:
+- **MIX TRAVAVA porque falta(va) um PASSO**: clicar na joia verde abre um SEGUNDO dialogo (`Mixar 16 Jewel of Life` / `Deseja continuar?` com **CONFIRMAR** e CANCELAR). O bot clicava na joia e ficava parado nesse dialogo. Agora acha `$MixConfirmWords` (`^confirmar$`, nunca CANCELAR) por OCR e clica; se nao achar, salva `mix_sem_confirmar.png`, avisa e para.
+- **A lista tem 7 opcoes**, nao 4: Jewel of Soul, Life, Creation, Chaos, Fragment of Death, Stone of God, Jewel of God (x~960, y de 416 a 698 na area cliente, passo ~47px). Verde = disponivel, vermelho = nao.
+- **`Word-Color` nunca via verde**: os botoes sao verde/vermelho ESCUROS (~(45,85,45) e ~(90,40,40)) e o limiar exigia canal > 110 -> os dois davam 'other' e nenhuma joia era considerada disponivel. Trocado por comparacao RELATIVA entre canais (G > R+18 etc), com piso so pra ignorar quase-preto. Coberto por teste sintetico no `-TestVisao` (nao precisa de fixture do jogo).
+- **Caca calibrada pelo print do Golden Derkon** (Lorencia): `$GoldPix = @{RMin=200; GMin=90; BMax=90; RmB=110; RmG=145}`. O filtro antigo (GMin=140, RmG=75) rejeitava as partes mais saturadas do dragao e aceitava areia clara. `BMax` baixo e o que separa dourado de areia/pedra/grama.
+- **`$GoldBlobMin` 30 -> 250**: 30 era 4% do bloco de 26x26 (676px), permissivo demais.
+- **`$GoldSelfR` -> 300**: as ASAS FLAMEJANTES do personagem sao (255,131,15) e o icone VIP e dourado - tao saturados quanto o dragao. **Cor nao separa, so distancia.** Verificado empiricamente: com 220 ainda detectava a asa (915,269); com 300 a tela sem dragao nao acusa nada.
+- O botao "DRAGOES DOURADOS" era DarkGoldenrod (184,134,11) e **o proprio `-TestGold` detectava o botao como dragao** (o modo de teste roda em processo separado e nao mascara a UI). Botao virou Teal, e `RMin` subiu pra 200 pra rejeitar ouro fosco.
+- Bug de escape: `"\$Var"` NAO escapa em PowerShell (sai `\` + valor). O certo e crase: `` "`$Var" ``. Corrigido em 5 mensagens.
+- **Um `sed` meu injetou um `X` literal no script e derrubou o bot as 02:18** (`O termo "X" nao e reconhecido...`). Cuidado com `s|...|X|` como no-op em sed.

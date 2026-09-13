@@ -122,6 +122,7 @@ $MixJewels     = @(       # tipos da lista, na ordem; Pat = como o OCR pode ler 
   @{ Name = 'Creation'; Pat = "(?i)^creation" },
   @{ Name = 'Chaos';    Pat = "(?i)^chaos" }
 )
+$MixConfirmWords = '(?i)^confirmar$'   # 2o dialogo do mix: "Deseja continuar?" com CONFIRMAR/CANCELAR. NUNCA casar com CANCELAR
 $MixWaitSec    = 5        # espera entre o mix de um tipo e o proximo
 $MixRounds     = 8        # no maximo N voltas na lista antes de desistir (cada volta mixa os que estao verdes)
 $InvKey        = 0x56     # V = inventario
@@ -136,10 +137,13 @@ $GoldCmd       = '/lorencia'
 $GoldMap       = 'lore'   # nome esperado do mapa (4 letras). Lorencia e CIDADE: ver $GoldHelper abaixo
 $GoldMinutes   = 20       # tempo maximo cacando; depois volta pro farm sozinho
 $GoldArea      = @{ X1 = 70; Y1 = 100; X2FromRight = 70; Y2FromBottom = 150 }   # area util da tela (fora do HUD, minimapa e chat)
-$GoldPix       = @{ RMin = 185; GMin = 140; BMax = 125; RmB = 70; RmG = 75 }    # pixel "dourado": vermelho e verde altos, azul baixo, e R-B grande (NAO CALIBRADO: casou com o chao de Tarkan)
+# Calibrado pelo print do Golden Derkon em Lorencia (01/09). O bicho e laranja-ouro MUITO saturado: R alto, G medio, B quase zero.
+# O filtro antigo (GMin=140, RmG=75) rejeitava justo as partes mais saturadas do dragao e aceitava areia clara - dai casar com o chao de Tarkan.
+# BMax baixo e o que separa dourado de areia/pedra/grama: areia de Tarkan e pedra cinza tem azul alto, o dragao nao.
+$GoldPix       = @{ RMin = 200; GMin = 90; BMax = 90; RmB = 110; RmG = 145 }   # RMin 200: o dragao e ouro BRILHANTE. Com 180 passava ouro fosco - inclusive DarkGoldenrod(184,134,11), a cor de um botao da propria UI
 $GoldCell      = 26       # agrega os pixels dourados em blocos de N px (o mob e um borrao, nao um pixel)
-$GoldBlobMin   = 30       # minimo de pixels dourados no bloco pra considerar que tem mob ali
-$GoldSelfR     = 90      # ignora esse raio em volta do centro (seu personagem tem fogo/asas). 150 escondia o mob colado em voce; o filtro de cor ja rejeita laranja. CALIBRAR com -TestGold
+$GoldBlobMin   = 250     # de 676 px do bloco (26x26), quantos precisam ser dourados. 30 era 4% do bloco - permissivo demais. O dragao e enorme e enche o bloco; brilho solto do personagem nao
+$GoldSelfR     = 300     # raio ignorado em volta do centro. As ASAS FLAMEJANTES do personagem (255,131,15) e o icone VIP dourado sao tao laranja quanto o dragao - cor nao separa, so distancia. O dragao tem ~700px, entao sobra blob de sobra fora do raio
 $GoldHelper    = $false  # ligar o MU Helper na caca? Em CIDADE (Lorencia) nao da: clicar no play abre "precisa estar fora da cidade". Sem helper, o clique no mob e o ataque
 $GoldStepSec   = 2.0      # espera depois de mandar o personagem pro bloco dourado
 $GoldRepetMax  = 4       # mesma coordenada N vezes na caca = cenario, nao mob: para e avisa (no log de 31/08 foram 21 de 26 deteccoes no mesmo x)
@@ -279,7 +283,7 @@ function Show-Ui {
   $script:btnNormal = New-Object System.Windows.Forms.Button; $script:btnNormal.SetBounds(137,40,122,32); $script:btnNormal.Text = "Normal /s18`n(ate MT)"; $script:btnNormal.BackColor = 'MediumSeaGreen'
   $script:btnMR     = New-Object System.Windows.Forms.Button; $script:btnMR.SetBounds(264,40,120,32);     $script:btnMR.Text = "Atribuir tudo`n+ MR"; $script:btnMR.BackColor = 'MediumPurple'
   $script:btnMix    = New-Object System.Windows.Forms.Button; $script:btnMix.SetBounds(10,76,122,26);    $script:btnMix.Text = 'MIXAR JOIAS'; $script:btnMix.BackColor = 'DarkCyan'
-  $script:btnGold   = New-Object System.Windows.Forms.Button; $script:btnGold.SetBounds(137,76,247,26); $script:btnGold.Text = 'DRAGOES DOURADOS (/tarkan2)'; $script:btnGold.BackColor = 'DarkGoldenrod'
+  $script:btnGold   = New-Object System.Windows.Forms.Button; $script:btnGold.SetBounds(137,76,247,26); $script:btnGold.Text = "DRAGOES DOURADOS ($GoldCmd)"; $script:btnGold.BackColor = 'Teal'   # NAO usar tom dourado: o -TestGold roda em processo separado (nao mascara a UI) e detectava o proprio botao como dragao
   $script:logBox = New-Object System.Windows.Forms.TextBox; $script:logBox.SetBounds(10,108,375,150); $script:logBox.Multiline = $true; $script:logBox.ReadOnly = $true; $script:logBox.ScrollBars = 'Vertical'
   $script:btnPause.Add_Click({ $script:paused = -not $script:paused; $script:btnPause.Text = $(if($script:paused){ 'RETOMAR' } else { 'PAUSAR' }); $script:btnPause.BackColor = $(if($script:paused){ 'ForestGreen' } else { 'Goldenrod' }); Log $(if($script:paused){ 'PAUSADO pelo usuario (mixe as joias; clique RETOMAR pra voltar)' } else { 'retomado pelo usuario' }) })
   $btn.Add_Click({ $script:stop = $true })
@@ -831,7 +835,7 @@ function Enter-Game([string]$motivo){   # clica pra entrar com o personagem ate 
     if($img){ $img.Dispose() }
     if($btn){ $script:viuLogin = $true }   # confirmou que estava FORA do jogo (nao so que o play sumiu por um loading)
     if($btn -and $btn.X -lt 0){   # reconheci a tela (tem "CRIAR NOVA CONTA"/"Sair") mas nao sei em que botao clicar: JAMAIS chutar coordenada aqui
-      Notify "MudinhoX" "Estou na tela de servidor/login e nao sei qual botao clicar. Entra manualmente (ou ajuste \$LoginServerWords)."
+      Notify "MudinhoX" "Estou na tela de servidor/login e nao sei qual botao clicar. Entra manualmente (ou ajuste `$LoginServerWords)."
       Wait 30; continue
     }
     if(-not $btn){   # nao reconheci nada: pode ser so tela de loading. So usa a coordenada de config apos insistir
@@ -924,16 +928,19 @@ function Start-Helper {   # liga o helper e CONFIRMA. Para de clicar apos PlayTr
 # ---------- inventario / mix de joias ----------
 function Screen-Words($img){ @((Ocr-Bitmap $img).Lines | % { $_.Words }) }
 function Word-Center($w){ @{ X = [int]($w.BoundingRect.X + $w.BoundingRect.Width/2); Y = [int]($w.BoundingRect.Y + $w.BoundingRect.Height/2) } }
-function Word-Color($img,$w){   # cor do texto da palavra: 'green' (opcao disponivel), 'red' (indisponivel) ou 'other'
+function Word-Color($img,$w){   # cor do BOTAO atras da palavra: 'green' (disponivel), 'red' (indisponivel) ou 'other'
+  # Os botoes do modal sao verde/vermelho ESCUROS (~(45,85,45) e ~(90,40,40)). O limiar antigo exigia canal > 110
+  # e classificava os dois como 'other' - nenhuma joia era vista como verde. Agora e comparacao RELATIVA entre canais.
   $r = $w.BoundingRect; $g = 0; $rd = 0
   $x1 = [Math]::Max(0,[int]$r.X); $y1 = [Math]::Max(0,[int]$r.Y)
   $x2 = [Math]::Min($img.Width-1, [int]($r.X + $r.Width)); $y2 = [Math]::Min($img.Height-1, [int]($r.Y + $r.Height))
   for($y = $y1; $y -le $y2; $y++){ for($x = $x1; $x -le $x2; $x++){
     $p = $img.GetPixel($x,$y)
-    if($p.G -gt 110 -and $p.G -gt $p.R + 35 -and $p.G -gt $p.B + 35){ $g++ }
-    elseif($p.R -gt 110 -and $p.R -gt $p.G + 35 -and $p.R -gt $p.B + 35){ $rd++ }
+    if($p.R + $p.G + $p.B -lt 60){ continue }   # quase preto: nao decide nada
+    if($p.G -gt $p.R + 18 -and $p.G -gt $p.B + 18){ $g++ }
+    elseif($p.R -gt $p.G + 18 -and $p.R -gt $p.B + 18){ $rd++ }
   } }
-  if($g -gt $rd -and $g -gt 12){ 'green' } elseif($rd -gt 12){ 'red' } else { 'other' }
+  if($g -gt $rd -and $g -gt 20){ 'green' } elseif($rd -gt $g -and $rd -gt 20){ 'red' } else { 'other' }
 }
 function Inv-Occupancy($img){   # matriz de celulas ocupadas do inventario ($true = tem item). $null se $InvGrid nao esta calibrado
   if(-not $InvGrid){ return $null }
@@ -990,7 +997,7 @@ function Hover-Npc {   # passa o mouse por $MixNpcPos (e uns vizinhos) ate o nom
   $null
 }
 function Mix-Jewels {   # /mixer -> clica no NPC -> "Mixar Joias" -> clica cada tipo VERDE (espera $MixWaitSec entre eles) ate sobrar so vermelho. $true se mixou
-  if(-not $MixNpcPos){ Notify "MudinhoX" "Nao sei onde o NPC do mix fica: rode -TestNpc e preencha \$MixNpcPos."; return $false }
+  if(-not $MixNpcPos){ Notify "MudinhoX" "Nao sei onde o NPC do mix fica: rode -TestNpc e preencha `$MixNpcPos."; return $false }
   Tag-Ciclo 'mix'; Log "mix: indo pro $MixCmd"
   if(-not (Send-Chat $MixCmd)){ return $false }
   Wait $WarpWaitSec
@@ -1020,8 +1027,23 @@ function Mix-Jewels {   # /mixer -> clica no NPC -> "Mixar Joias" -> clica cada 
       $img.Dispose()
       if(-not $verde){ Log "mix: nenhuma opcao verde sobrou ($mixados mixados)"; break }
       $c = Word-Center $verde.W
-      Log "mix: $($verde.J.Name) verde em ($($c.X),$($c.Y)), mixando"
-      $null = Click-Client $c.X $c.Y -KeepFocus; $mixados++
+      Log "mix: $($verde.J.Name) verde em ($($c.X),$($c.Y)), clicando"
+      $null = Click-Client $c.X $c.Y -KeepFocus
+      Wait 1.5
+      # Clicar na joia abre um SEGUNDO dialogo ("Mixar 16 Jewel of Life / Deseja continuar?" com CONFIRMAR e CANCELAR).
+      # O bot nao clicava em CONFIRMAR e ficava travado nele - era o travamento que o usuario reportou.
+      $img2 = Capture-Raw
+      $conf = Screen-Words $img2 | ? { $_.Text -match $MixConfirmWords } | select -First 1
+      $img2.Dispose()
+      if(-not $conf){
+        Log "mix: cliquei em $($verde.J.Name) mas nao achei o botao CONFIRMAR - parando pra nao travar"
+        Notify "MudinhoX" "O mix abriu um dialogo que eu nao reconheci. Confirma na mao e clique RETOMAR."
+        $null = Save-Shot 'mix_sem_confirmar.png'
+        break
+      }
+      $cc = Word-Center $conf
+      Log "mix: confirmando em ($($cc.X),$($cc.Y))"
+      $null = Click-Client $cc.X $cc.Y -KeepFocus; $mixados++
       Wait $MixWaitSec
     }
     Close-Popup
@@ -1065,14 +1087,14 @@ function Hunt-Golden {   # botao DRAGOES: /tarkan2 e caca os Golden Tantalos ate
       $seguidas++
       if($seguidas -ge $GoldMaxSeguidas){
         Log "dragoes: achei alvo em $seguidas varreduras SEGUIDAS, cada uma num lugar - isso e o cenario dourado, nao mob. Parando."
-        Notify "MudinhoX" "A caca esta casando com o chao de Tarkan. \$GoldPix precisa ser calibrado com -TestGold. Parei."
+        Notify "MudinhoX" "A caca esta casando com o cenario, nao com o mob. Calibre a cor com -TestGold. Parei."
         $null = Save-Shot 'gold_falso_positivo.png'
         break
       }
       $chave = "$($alvo.X),$($alvo.Y)"
       $vistos[$chave] = [int]$vistos[$chave] + 1
       if($vistos[$chave] -ge $GoldRepetMax){
-        Log "dragoes: achei '$chave' $($vistos[$chave]) vezes - isso e cenario, nao mob. Parando (calibre \$GoldPix com -TestGold)."
+        Log "dragoes: achei '$chave' $($vistos[$chave]) vezes - isso e cenario, nao mob. Parando (calibre `$GoldPix com -TestGold)."
         Notify "MudinhoX" "A caca esta batendo sempre no mesmo ponto ($chave): o filtro de cor precisa de calibracao. Parei."
         $null = Save-Shot 'gold_falso_positivo.png'
         break
@@ -1215,7 +1237,7 @@ if($TestInv){   # abra o inventario NO JOGO antes de rodar
   $img = Capture-Game; if(-not $img){ Log "jogo nao ficou na frente, nada lido"; exit }
   New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null
   $f = Join-Path $CaptchaShotDir 'inventario.png'; $img.Save($f); Log "print do inventario salvo: $f  (me passe o X,Y do canto sup-esq da primeira celula e o tamanho da celula em pixels)"
-  if(-not (Inv-Open $img)){ Log "AVISO: nao achei a linha do 'Zen' abaixo da grade -> a janela do inventario NAO esta aberta (ou \$InvGrid esta errado). O mapa abaixo e do chao do mapa, ignore." }
+  if(-not (Inv-Open $img)){ Log "AVISO: nao achei a linha do 'Zen' abaixo da grade -> a janela do inventario NAO esta aberta (ou `$InvGrid esta errado). O mapa abaixo e do chao do mapa, ignore." }
   $map = Inv-Occupancy $img
   if($map){ Log "ocupacao ($((@($map | % { $_ } | ? { -not $_ }).Count)) livres):"; foreach($r in $map){ Log ("  " + (($r | % { if($_){'X'}else{'.'} }) -join '')) } }
   else { Log "InvGrid ainda nao calibrado (veja o bloco CONFIG)" }
@@ -1342,6 +1364,17 @@ if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guard
   # regressao real: com o inventario FECHADO a grade cai no chao do mapa e leu "8 livres" - o bot acharia que esta cheio e mixaria pra sempre
   if($i){ Ok 'Inv-Open recusa inventario fechado' (-not (Inv-Open $i)) 'achou o Zen onde nao tem inventario'; $i.Dispose() }
 
+  # Word-Color com os tons ESCUROS dos botoes do modal de mix. O limiar antigo (canal > 110) dava 'other' nos dois
+  # e nenhuma joia era vista como verde - o mix nunca clicava em nada.
+  $bm = New-Object System.Drawing.Bitmap(120,60); $gg = [System.Drawing.Graphics]::FromImage($bm)
+  $gg.FillRectangle((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(45,85,45))), 0, 0, 120, 30)   # botao verde escuro
+  $gg.FillRectangle((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(90,40,40))), 0, 30, 120, 30)  # botao vermelho escuro
+  $gg.Dispose()
+  function FakeWord($x,$y,$w,$h){ [pscustomobject]@{ BoundingRect = [pscustomobject]@{ X=$x; Y=$y; Width=$w; Height=$h } } }
+  Ok 'Word-Color acha verde escuro'    ((Word-Color $bm (FakeWord 10 5 100 20))  -eq 'green') "deu '$(Word-Color $bm (FakeWord 10 5 100 20))'"
+  Ok 'Word-Color acha vermelho escuro' ((Word-Color $bm (FakeWord 10 35 100 20)) -eq 'red')   "deu '$(Word-Color $bm (FakeWord 10 35 100 20))'"
+  $bm.Dispose()
+
   $i = Fx 'captcha.png'
   if($i){
     $a = Find-Captcha $i
@@ -1360,7 +1393,7 @@ if($TestGold){   # com um Golden Tantalos NA TELA: mostra onde o detector acha d
     Log "dourado achado em ($($alvo.X),$($alvo.Y)) com $($alvo.N) pixels no bloco"
     $g = [System.Drawing.Graphics]::FromImage($img)
     $g.DrawRectangle((New-Object System.Drawing.Pen([System.Drawing.Color]::Lime,4)), $alvo.X-40, $alvo.Y-40, 80, 80); $g.Dispose()
-  } else { Log "nenhum bloco dourado passou de $GoldBlobMin pixels (maior bloco teve menos que isso). Se o mob esta na tela, baixe \$GoldBlobMin ou afrouxe \$GoldPix" }
+  } else { Log "nenhum bloco dourado passou de $GoldBlobMin pixels (maior bloco teve menos que isso). Se o mob esta na tela, baixe `$GoldBlobMin ou afrouxe `$GoldPix" }
   $f = Join-Path $CaptchaShotDir 'gold.png'; $img.Save($f); Log "print salvo (com o quadrado verde no que ele achou): $f"
   $img.Dispose(); exit
 }
