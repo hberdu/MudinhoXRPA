@@ -76,6 +76,9 @@ $PlayTries     = 3       # clica no play ate N vezes; se nao ligar, para de clic
 $HumanMinSec   = 120; $HumanMaxSec = 420   # a cada X seg (aleatorio) faz algo "humano": anda um pouco, abre/fecha janela, mexe o mouse
 $LogFile       = Join-Path $PSScriptRoot 'rpa.log'
 $StopFile      = Join-Path $PSScriptRoot 'stop.flag'
+$HeartbeatFile = Join-Path $PSScriptRoot 'heartbeat.txt'   # o bot bate aqui a cada volta; o watchdog externo relanca se ficar velho
+$HeartbeatVivoSec = 180  # heartbeat mais novo que isso = tem bot vivo (impede duas instancias no mesmo jogo)
+$SemProgressoMax = 3     # apos N ciclos seguidos sem progresso, o bot REINICIA A SI MESMO (ja elevado: nao pede UAC de novo)
 $EstadoFile    = Join-Path $PSScriptRoot 'estado.txt'   # fase + contagem de warmup, pra sobreviver a reinicio do bot
 $LogMaxMB      = 5       # rpa.log maior que isso no start vira .bak (a pasta sincroniza no OneDrive)
 $LogKeepBaks   = 5       # quantos .bak manter
@@ -254,7 +257,12 @@ function Log($m){
     $script:logBox.AppendText("$line`r`n"); [System.Windows.Forms.Application]::DoEvents()
   }
 }
-function Check-Stop { if(-not $script:stop -and (Test-Path $StopFile)){ $script:stop = $true; Remove-Item $StopFile -ErrorAction SilentlyContinue }; if($script:stop){ Log "parado pelo usuario"; if($script:logW){ $script:logW.Dispose() }; if($script:ui){ $script:ui.Dispose() }; exit } }
+function Bater-Heartbeat { try { (Get-Date).Ticks | Set-Content -Path $HeartbeatFile -Encoding ASCII } catch {} }   # o watchdog externo usa isto pra saber se o bot esta vivo
+function Heartbeat-Fresco {   # $true se OUTRA instancia bateu o heartbeat ha pouco (evita dois bots no mesmo jogo)
+  if(-not (Test-Path $HeartbeatFile)){ return $false }
+  try { $t = [datetime]::new([long](Get-Content $HeartbeatFile -Raw).Trim()); return ((Get-Date) - $t).TotalSeconds -lt $HeartbeatVivoSec } catch { return $false }
+}
+function Check-Stop { if(-not $script:stop -and (Test-Path $StopFile)){ $script:stop = $true; Remove-Item $StopFile -ErrorAction SilentlyContinue }; if($script:stop){ Log "parado pelo usuario"; Remove-Item $HeartbeatFile -ErrorAction SilentlyContinue; if($script:logW){ $script:logW.Dispose() }; if($script:ui){ $script:ui.Dispose() }; exit } }
 function Pause-Gate {   # congela o bot enquanto PAUSADO e LIBERA o foco pra voce mixar joias no NPC; re-adquire ao retomar
   if(-not $script:paused){ return }
   $wasHeld = $script:focusHeld; if($wasHeld){ Release-Focus }   # solta o jogo pra voce interagir
@@ -275,7 +283,7 @@ function Wait([double]$sec){   # Start-Sleep que mantem a janelinha viva e obede
 function Show-Ui {
   $f = New-Object System.Windows.Forms.Form
   $f.Text = 'MudinhoX RPA'; $f.Width = 400; $f.Height = 300; $f.TopMost = $true; $f.FormBorderStyle = 'FixedToolWindow'
-  $f.StartPosition = 'Manual'; $f.Location = New-Object System.Drawing.Point(([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Width - 410), 300)
+  $f.StartPosition = 'Manual'; $f.Location = New-Object System.Drawing.Point(10, ([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height - 310))   # canto INFERIOR ESQUERDO: nao cobre play(topo-esq), minimapa(topo-dir), inventario(dir) nem chat/level(centro-baixo)
   $script:status = New-Object System.Windows.Forms.Label; $script:status.SetBounds(10,12,160,22); $script:status.Text = 'iniciando...'
   $script:btnPause = New-Object System.Windows.Forms.Button; $script:btnPause.SetBounds(175,6,100,28); $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'
   $btn = New-Object System.Windows.Forms.Button; $btn.SetBounds(280,6,100,28); $btn.Text = 'PARAR'; $btn.BackColor = 'IndianRed'
@@ -450,16 +458,29 @@ function Read-Map($img){   # nome do mapa (rotulo do minimapa) em minusculo, ou 
   if(-not $out){ Unblock-MapLabel }   # nao leu nada: pode ser a JANELA DO BOT em cima do rotulo (Capture-Raw pinta ela de preto)
   $out
 }
-function Unblock-MapLabel {   # se a janelinha do bot cobre o rotulo do minimapa, ela mesma se cega; desce ela pra fora
-  if(-not $script:ui -or $script:ui.IsDisposed){ return }
+function Fugir-Da-Area([int]$x,[int]$y,[int]$w,[int]$h,[string]$oque){   # a janelinha do bot e pintada de PRETO na captura:
+  # se ela cobre algo que o bot precisa LER, ele se cega sozinho. Ja aconteceu com o rotulo do minimapa e com a
+  # grade do inventario. Aqui ela foge pro canto inferior esquerdo, que nao tem nada lido (play=topo-esq,
+  # minimapa=topo-dir, inventario=dir, chat e level=centro-baixo).
+  if(-not $script:ui -or $script:ui.IsDisposed){ return $false }
   $o = Client-Origin; $r = $script:ui.Bounds
-  $lx = $o.X + $MapLabel.X; $ly = $o.Y + $MapLabel.Y
-  if($r.Left -lt ($lx + $MapLabel.W) -and $r.Right -gt $lx -and $r.Top -lt ($ly + $MapLabel.H) -and $r.Bottom -gt $ly){
-    $novoY = $ly + $MapLabel.H + 60
-    Log "janela do bot estava em cima do rotulo do minimapa (por isso o mapa saia vazio): descendo ela pra Y=$novoY"
-    $script:ui.Location = New-Object System.Drawing.Point($r.Left, $novoY)
+  $ax = $o.X + $x; $ay = $o.Y + $y
+  if($r.Left -lt ($ax + $w) -and $r.Right -gt $ax -and $r.Top -lt ($ay + $h) -and $r.Bottom -gt $ay){
+    $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $script:ui.Location = New-Object System.Drawing.Point(10, ($wa.Height - $script:ui.Height - 10))
+    Log "janela do bot estava em cima de: $oque (o bot se cegava sozinho). Movi pro canto inferior esquerdo."
+    return $true
+  }
+  $false
+}
+function Unblock-Areas {   # chamado quando uma leitura falha, e no start
+  $null = Fugir-Da-Area $MapLabel.X $MapLabel.Y $MapLabel.W $MapLabel.H 'rotulo do minimapa'
+  if($InvGrid){
+    $c = [double]$InvGrid.Cell
+    $null = Fugir-Da-Area $InvGrid.X $InvGrid.Y ([int]($InvGrid.Cols*$c)+40) ([int]($InvGrid.Rows*$c)+90) 'grade do inventario'
   }
 }
+function Unblock-MapLabel { Unblock-Areas }   # nome antigo, mantido pelos chamadores
 function Save-Shot([string]$nome){   # print pra diagnostico (chamar com o jogo na frente)
   $img = Capture-Game; if(-not $img){ return '' }
   New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null
@@ -640,7 +661,13 @@ if($Check){
 # O jogo roda como administrador: o Windows descarta teclado/mouse sintetico vindo de processo comum (UIPI). Entao roda elevado.
 if(-not (Is-Admin) -and -not ($TestInv -or $TestMix -or $TestNpc -or $TestGold -or $TestVisao -or $Preflight)){   # -TestInv/-TestMix so LEEM a tela: nao precisam de admin (e elevar abriria janela oculta, sem saida no terminal)
   try { Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`"" }
-  catch { [System.Windows.Forms.MessageBox]::Show("Precisa rodar como administrador: o jogo roda como admin e senao o Windows bloqueia o teclado/mouse do bot. Abra de novo e aceite o UAC.", 'MudinhoX RPA') | Out-Null }
+  catch {
+    # NUNCA usar MessageBox aqui: o processo roda com -WindowStyle Hidden, o dialogo fica invisivel e o processo
+    # trava nele PARA SEMPRE - parecendo vivo pra quem so olha a lista de processos. Foi assim que o bot ficou
+    # 6 horas parado em 01/09 (03:27 -> 09:09, zero linha de log). Loga, avisa por toast (nao bloqueia) e SAI.
+    Log "UAC recusado ou falhou: nao consigo elevar. O bot precisa de admin porque o jogo roda elevado."
+    Notify "MudinhoX RPA" "UAC recusado: o bot nao subiu. Instale o watchdog (instalar-watchdog.cmd) pra ele subir sem UAC."
+  }
   exit
 }
 
@@ -701,7 +728,7 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
     Log "stats: plano ($($plano.Count) comandos): $($plano -join ' | ')"
     foreach($cmd in $plano){   # acumula pra metrica de pontos/h e marca que houve progresso
       if($script:stop -or -not (Send-Chat $cmd)){ break }
-      $script:ptsSent += [int](($cmd -split ' ')[1]); $script:ptsLastGain = Get-Date
+      $script:ptsSent += [int](($cmd -split " ")[1]); $script:ptsLastGain = Get-Date; $script:semProgresso = 0
     }
     Wait $StatRoundSec
   }
@@ -973,6 +1000,7 @@ function Inv-Free {   # abre o inventario (V), conta celulas livres, fecha. -1 s
     # Falha recorrente em todo start. O print + o que o OCR leu na faixa do Zen dizem QUAL dos dois casos e:
     # janela nao abriu (faixa com cenario/vazio) ou abriu noutro lugar (faixa com outro texto do jogo).
     Log "inventario: nao consegui abrir/confirmar a janela (tecla V). Na faixa do 'Zen' o OCR leu: '$($script:invZenTxt)'"
+    Unblock-Areas   # pode ser a propria janela do bot cobrindo a grade
     $null = Save-Shot 'inventario_falhou.png'
     return -1
   }
@@ -1213,12 +1241,33 @@ function Tick-AutoTune {   # $TargetLevel sempre foi chute. Em vez de pedir expe
     Save-Estado
   }
 }
-$script:ptsLastGain = Get-Date
+$script:ptsLastGain = Get-Date; $script:semProgresso = 0
+function Unstick-Tudo {   # forca um estado conhecido. Em 01/09 uma caixa de chat aberta (nao detectada) travou tudo:
+  # o C do status virava letra, o /resetar virava hotkey. ESC + fechar o chat cobre essa classe inteira.
+  $prev = Focus-Game; if(-not $script:gameFg){ Restore-Focus $prev; return }
+  Close-Popup                                   # ESC: fecha janela/modal do jogo
+  Start-Sleep -Milliseconds 300
+  if(Chat-Open){ Clear-ChatLine; Press-Vk 0x0D; Log "destravei: a caixa de chat estava aberta" }
+  Restore-Focus $prev
+}
 function Tick-Progresso {   # rede de seguranca GERAL: o travamento de 2h passou porque nada vigiava o RESULTADO.
   # $ResetStuckMin cobre so o loop de reset; isto cobre qualquer modo de falha em que o bot "roda" sem produzir nada.
   if(((Get-Date) - $script:ptsLastGain).TotalMinutes -lt $SemProgressoMin){ return }
   $script:ptsLastGain = Get-Date
-  Log "SEM PROGRESSO ha $SemProgressoMin min (nenhum ponto distribuido): reiniciando o ciclo"
+  $script:semProgresso++
+  Log "SEM PROGRESSO ha $SemProgressoMin min ($($script:semProgresso)x): destravando e reiniciando o ciclo"
+  Unstick-Tudo   # forca estado conhecido: fecha popup e caixa de chat (foi um chat aberto que travou o bot em 01/09)
+  if($script:semProgresso -ge $SemProgressoMax){
+    # Reiniciar o PROPRIO processo resolve o que reiniciar o ciclo nao resolve (estado interno ruim) e ainda
+    # recarrega o script - se houver correcao nova no disco, ela entra. O processo ja e elevado, entao o filho
+    # nasce elevado SEM pedir UAC de novo.
+    Log "sem progresso $($script:semProgresso)x seguidas: REINICIANDO O PROPRIO BOT"
+    Notify "MudinhoX" "Sem progresso $($script:semProgresso)x seguidas. Reiniciando o bot sozinho."
+    Save-Estado
+    try { Start-Process powershell -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-File","`"$PSCommandPath`"" | Out-Null } catch { Log "nao consegui relancar: $_" }
+    Remove-Item $HeartbeatFile -ErrorAction SilentlyContinue   # libera pro novo processo assumir
+    $script:stop = $true; return
+  }
   Notify "MudinhoX" "Sem ganhar pontos ha $SemProgressoMin min. Reiniciando o ciclo - da uma olhada se repetir."
   $script:restartCycle = $true
 }
@@ -1416,7 +1465,11 @@ if($TestMix){   # abra o modal de mix NO JOGO antes de rodar
 }
 
 Show-Ui
-Remove-Item $StopFile -ErrorAction SilentlyContinue; Log "iniciando"
+if(Heartbeat-Fresco){   # ja tem bot vivo: dois no mesmo jogo brigam pelo teclado e estragam tudo
+  Log "ja existe um bot rodando (heartbeat fresco). Saindo pra nao duplicar."
+  if($script:ui){ $script:ui.Dispose() }; exit
+}
+Remove-Item $StopFile -ErrorAction SilentlyContinue; Bater-Heartbeat; Log "iniciando"
 try {   # TODA coordenada calibrada ($InvGrid, $MixNpcPos, $MapLabel, $LevelBox...) e pra $ClientEsperado. Mudou a resolucao, tudo quebra EM SILENCIO - ja custou uma noite
   $h0 = Get-Game; $c0 = New-Object W+RECT; [W]::GetClientRect($h0,[ref]$c0) | Out-Null
   if($c0.R -ne $ClientEsperado.W -or $c0.B -ne $ClientEsperado.H){
@@ -1444,7 +1497,7 @@ while($true){
 
   # upando: le level, checa captcha, manda stats (traz o jogo 1x por iteracao, devolve o foco pra sua janela no fim)
   do {
-    Wait (Poll-Interval); $lvl = $null
+    Wait (Poll-Interval); $lvl = $null; Bater-Heartbeat
     Hold-Focus
     try {
       $img = Capture-Game

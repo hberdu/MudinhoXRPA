@@ -21,3 +21,7 @@ fixtures/
 
 # lixo de monitor antigo
 .rpa_mon.tmp
+
+# heartbeat e log do watchdog (runtime)
+heartbeat.txt
+watchdog.log
