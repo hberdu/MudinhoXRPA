@@ -264,6 +264,8 @@ $MixJewels     = @(       # tipos da lista, na ordem; Pat = como o OCR pode ler 
 $MixSucessoWords = '(?i)(sucesso|voc. mixou|mixou [0-9])'   # resposta do jogo apos o mix; confirma que aconteceu de verdade
 $MixConfirmTentativas = 5   # o dialogo de confirmacao demora um tempo VARIAVEL: procura ate N vezes (1s cada) em vez de olhar uma vez
 $MixConfirmWords = '(?i)^confirmar$'   # 2o dialogo do mix: "Deseja continuar?" com CONFIRMAR/CANCELAR. NUNCA casar com CANCELAR
+$MixCancelWords  = '(?i)^cancelar$'    # o outro botao do mesmo dialogo. SAIDA quando o CONFIRMAR nao e achado:
+                                       # desistir com o dialogo na tela trava o char inteiro (ver o bloco do mix).
 $CursorParkX   = 40      # canto pra onde o mouse e levado antes de ler a tela (o ponteiro aparece na captura e some com o texto debaixo)
 $CursorParkY   = 400
 # "Selecione a Jewel que voce quer mixar" so existe na tela da LISTA (nao no 1o modal, nem no chat).
@@ -791,26 +793,18 @@ function Ver-Janela {   # sobe a janela do jogo na pilha, SEM ativar. Barato (ms
   # ver com SetForegroundWindow custaria o foco do sistema inteiro e ~2s (e o seu teclado no meio da digitacao);
   # aqui e so Z-order. VER e DIGITAR sao coisas diferentes - so digitar exige primeiro plano de verdade (medido:
   # PostMessage e AttachThreadInput+SetFocus nao funcionam neste cliente, ver test_entrada_sem_foco.ps1).
-  # Ja visivel nos pixels? Entao nao ha o que subir, e nao ha frame novo pra esperar. Este e o caso COMUM (o jogo
-  # fica no outro monitor, destapado), e os 60ms saiam em TODA captura: duas por comando de chat, mais uma por
-  # volta do loop. Perguntar ao Windows quem esta nos pixels custa microssegundos - nao tira foto nem dorme.
-  if(Janela-Na-Frente){ return }
+  # SEMPRE sobe, sem perguntar antes. Houve aqui um atalho que pulava o SetWindowPos quando o WindowFromPoint do
+  # CENTRO ja dizia "e o jogo" - economizava 60ms por captura. Custou 13/09: o centro nao prova que o RESTO da
+  # janela esta destapado, e com o jogo nao sendo mais trazido pra cima a leitura passou a pegar tela de outra
+  # janela (5 leituras recusadas com "a captura pegou outra janela"). 60ms nao pagam isso.
   # HWND_TOP=0, SWP_NOSIZE=1 | SWP_NOMOVE=2 | SWP_NOACTIVATE=0x10 = 0x13
   [W]::SetWindowPos((Get-Game), [IntPtr]::Zero, 0,0,0,0, 0x13) | Out-Null
   Start-Sleep -Milliseconds 60   # o compositor precisa de um frame pra desenhar por cima do que estava na frente
 }
-function Janela-Na-Frente {   # os pixels da area cliente sao MESMO desta janela?
-  # Perguntar ao Windows quem esta nos pixels e mais honesto que confiar no Z-order que acabamos de pedir: uma
-  # janela TopMost de outro programa continua por cima, e o bot leria a tela dela sem nada no log denunciar.
-  try {
-    $h = Get-Game; $c = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c) | Out-Null
-    $o = Client-Origin; $p = New-Object W+POINT
-    $p.X = $o.X + [int]($c.R/2); $p.Y = $o.Y + [int]($c.B/2)
-    $w = [W]::WindowFromPoint($p)
-    if($w -eq [IntPtr]::Zero){ return $false }
-    ($w -eq $h) -or ([W]::GetAncestor($w, 2) -eq $h)   # GA_ROOT=2: o ponto pode cair num controle filho do jogo
-  } catch { $false }
-}
+# Houve aqui uma Janela-Na-Frente: WindowFromPoint no centro da area cliente, pra provar que os pixels eram mesmo
+# do jogo. Fazia sentido no MULTIBOX, onde dois clientes empilhados no mesmo ponto da tela liam um o jogo do
+# outro. Com um cliente so ela nunca pegou nada de verdade e produziu falso negativo: 13/09, 5 leituras boas
+# recusadas e a distribuicao parada no meio. Saiu junto com o multibox, um dia atrasada.
 $script:capOk = $true   # a ultima captura foi mesmo do jogo? (Read-Status/Inv-Free usam pra nao ler nem salvar print de outra janela)
 function Capture-Raw {   # bitmap da area cliente, sem mexer no foco (so chamar com o jogo na frente). Janelinha do bot fica preta (nao suja OCR/pixels)
   $h = Get-Game; $b = $null
@@ -827,13 +821,15 @@ function Capture-Raw {   # bitmap da area cliente, sem mexer no foco (so chamar 
     if($script:ui -and -not $script:ui.IsDisposed){ $r = $script:ui.Bounds; $g.FillRectangle([System.Drawing.Brushes]::Black, $r.X-$o.X, $r.Y-$o.Y, $r.Width, $r.Height) }
     $g.Dispose()
     # confere DEPOIS da foto: so checar antes nao basta, outra janela sobe no meio e o bot acaba lendo (e salvando print d)a tela do usuario
-    # O teste nao pode ser "estou em primeiro plano": com $NoFocusRead a leitura nem pede foco, entao isso daria
-    # sempre True e o bot leria alegremente a tela de quem estivesse por cima. Pergunta-se ao Windows quem esta
-    # nos pixels: WindowFromPoint no centro da area cliente.
-    $script:capOk = Janela-Na-Frente
+    # Este teste ja foi o WindowFromPoint do centro da area cliente (herdado do multibox, onde dois clientes
+    # empilhados no mesmo ponto liam um o jogo do outro). Com UM cliente ele so produziu falso negativo: em
+    # 13/09 recusou 5 leituras boas com "a captura pegou outra janela" e parou a distribuicao no meio. O
+    # $NoFocusRead ja carrega a promessa que importa aqui - o jogo fica destapado noutro monitor -, e o
+    # Ver-Janela acima sobe a janela antes de toda foto.
+    $script:capOk = $NoFocusRead -or ([W]::GetForegroundWindow() -eq $h)
     if($script:capOk){ return $b }
     $b.Dispose(); $b = $null
-    if($i -eq 0){ Ver-Janela; Start-Sleep -Milliseconds 150 }   # uma re-tentativa; se ainda nao for a nossa janela nos pixels, devolve a foto marcada como suspeita
+    if($i -eq 0){ Set-Foreground $h; Start-Sleep -Milliseconds 250 }   # uma re-tentativa; se ainda nao vier pra frente, devolve a foto marcada como suspeita
   }
   $c = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c) | Out-Null; $o = Client-Origin
   $b = New-Object System.Drawing.Bitmap($c.R,$c.B); $g = [System.Drawing.Graphics]::FromImage($b)
@@ -2266,9 +2262,24 @@ function Mix-Jewels {   # /mixer -> NPC -> "Mixar Joias" -> mixa TODAS as opcoes
       # print de diagnostico (tirado 1s depois) mostrava na tela. Entao PROCURA ate achar, em vez de olhar uma vez.
       $conf = Achar-Ate $MixConfirmWords $MixConfirmTentativas
       if(-not $conf){
-        Log "mix: cliquei em $($verde.J.Name) mas nao achei o botao CONFIRMAR - parando pra nao travar"
-        Notify "MudinhoX" "O mix abriu um dialogo que eu nao reconheci. Confirma na mao e clique RETOMAR."
+        Log "mix: cliquei em $($verde.J.Name) mas nao achei o botao CONFIRMAR"
         $null = Save-Shot 'mix_sem_confirmar.png'
+        # CANCELAR DE VERDADE, nao so desistir. Sair daqui com o dialogo na tela custou 54 min em 12/09 e 81 min
+        # em 13/09, as duas unicas vezes que isto aconteceu: com janela de NPC aberta o servidor recusa TODO
+        # warp ("Voce nao pode se mover neste momento"), e o bot fica reenviando /k37 contra uma parede. O ESC do
+        # Close-Popup NAO fecha esse dialogo - foi tentado nas duas vezes e nas duas falhou. So o botao fecha.
+        $canc = Achar-Ate $MixCancelWords $MixConfirmTentativas
+        if($canc){
+          $cx = Word-Center $canc
+          Log "mix: clicando CANCELAR em ($($cx.X),$($cx.Y)) - dialogo aberto travaria todo warp daqui pra frente"
+          $null = Click-Client $cx.X $cx.Y -KeepFocus
+          Wait 1
+        } else {
+          # Sem CONFIRMAR e sem CANCELAR na tela, o bot nao sabe o que esta aberto. Ai sim e caso de chamar voce -
+          # e o Close-Popup no fim do laco ainda tenta o ESC, que as vezes resolve dialogo de outro tipo.
+          Log "mix: nao achei nem CONFIRMAR nem CANCELAR - nao sei o que esta aberto, chamando voce"
+          Notify "MudinhoX" "O mix abriu um dialogo que eu nao reconheci e nao achei o CANCELAR. Fecha na mao e clique RETOMAR."
+        }
         break
       }
       $cc = Word-Center $conf

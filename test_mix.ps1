@@ -39,5 +39,27 @@ Chk "mixou -> relogio zerado, nao repete"   (Rodar $script:mixLast $false) 0
 $teto = $MixEveryMin; $MixEveryMin = 0
 Chk "MixEveryMin=0 desliga o teto"          (Rodar (Get-Date).AddHours(-3) $false) 0
 
+# --- desistir do mix NAO pode deixar dialogo aberto ------------------------------------------------
+# O caso mais caro do log inteiro, duas vezes: o bot clica na joia, nao acha o CONFIRMAR e sai. O dialogo do NPC
+# fica na tela, e com ele aberto o servidor recusa TODO warp ("Voce nao pode se mover neste momento") - o bot
+# reenvia /k37 contra uma parede. Custou 54 min em 12/09 e 81 min em 13/09. O ESC do Close-Popup foi tentado nas
+# duas e nas duas falhou: esse dialogo so fecha pelo botao.
+$src = Get-Content "$PSScriptRoot\mudinhox_rpa.ps1" -Raw
+Chk "existe o padrao do CANCELAR"        ($src -match "(?m)^\`$MixCancelWords\s*=") 'True'
+Chk "sem CONFIRMAR, procura o CANCELAR"  ($src -match '(?s)nao achei o botao CONFIRMAR.*?Achar-Ate \$MixCancelWords') 'True'
+Chk "e CLICA nele"                       ($src -match '(?s)nao achei o botao CONFIRMAR.*?Word-Center \$canc.*?Click-Client') 'True'
+# CANCELAR e CONFIRMAR moram no mesmo dialogo: casar um com o outro clicaria em confirmar achando que cancela
+# (ou pior, o contrario - mixando joia que voce nao mandou mixar).
+if($src -notmatch "(?m)^\`$MixCancelWords\s*=\s*'([^']+)'"){ throw "nao achei o `$MixCancelWords" }
+$canc = $Matches[1]
+if($src -notmatch "(?m)^\`$MixConfirmWords\s*=\s*'([^']+)'"){ throw "nao achei o `$MixConfirmWords" }
+$conf = $Matches[1]
+Chk "CANCELAR casa com 'Cancelar'"       ('Cancelar' -match $canc) 'True'
+Chk "  (e nao com 'Confirmar')"          ('Confirmar' -match $canc) 'False'
+Chk "CONFIRMAR nao casa com 'Cancelar'"  ('Cancelar' -match $conf) 'False'
+# So chama o usuario quando NAO ha saida: achando o CANCELAR o bot se resolve sozinho, e notificacao a toa
+# ensina a ignorar notificacao.
+Chk "so notifica se nem CANCELAR achou"  ($src -match '(?s)nem CONFIRMAR nem CANCELAR.*?Notify') 'True'
+
 if($script:erros){ "`n$($script:erros) FALHA(S)"; exit 1 }
-"OK: gatilho do mix por tempo ($teto min no CONFIG), botao e desligamento"
+"OK: gatilho do mix por tempo ($teto min no CONFIG), botao, desligamento, e desistir CANCELA o dialogo"

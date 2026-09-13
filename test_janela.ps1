@@ -46,10 +46,17 @@ Chk "erro aponta a aba, nao a janela" ($src -match 'nao esta na aba ATIVA') 'Tru
 foreach($morto in '\$Slot','\$GamePid','\$Sfx','Input-Lock','Outras-Janelinhas'){
   Chk "sumiu: $morto" ($src -match $morto) 'False'
 }
-# Mas Ver-Janela e Janela-Na-Frente FICAM, e agora sem guarda de slot: sao o que impede o bot de roubar sua tela
-# pra ler (Z-order com SWP_NOACTIVATE) e o que impede ele de ler a tela de OUTRA janela como se fosse o jogo.
-Chk "Ver-Janela sempre ativo"      ($src -match '(?s)function Ver-Janela \{(?!.*\$Slot).*?SetWindowPos') 'True'
-Chk "capOk pergunta quem esta nos pixels" ($src -match '\$script:capOk = Janela-Na-Frente') 'True'
+# Este confere DEFINICAO e CHAMADA, nao qualquer mencao: o comentario que explica POR QUE ela saiu cita o nome,
+# e um teste que proibisse a palavra proibiria junto a explicacao - que e a parte que evita o erro voltar.
+Chk "sumiu: function Janela-Na-Frente" ($src -match '(?m)^function Janela-Na-Frente') 'False'
+Chk "  (e ninguem mais chama)"         ($src -match '(?m)^\s*(\$\w+ = )?Janela-Na-Frente\s*$') 'False'
+# Ver-Janela FICA: subir a janela com SWP_NOACTIVATE e o que deixa o bot LER sem roubar seu teclado.
+# E ele sobe SEMPRE. Houve um atalho que pulava o SetWindowPos quando o WindowFromPoint do centro ja dizia "e o
+# jogo" - 60ms por captura. Em 13/09 isso custou 5 leituras recusadas e a distribuicao parada no meio: o centro
+# nao prova que o RESTO da janela esta destapado. A Janela-Na-Frente inteira saiu junto; ela fazia sentido no
+# multibox (dois clientes empilhados no mesmo ponto), e com um cliente so deu falso negativo.
+Chk "Ver-Janela sobe sempre" ($src -match '(?s)function Ver-Janela \{(?!.*if\(Janela).*?SetWindowPos') 'True'
+Chk "capOk volta ao teste simples" ($src -match '\$script:capOk = \$NoFocusRead -or \(\[W\]::GetForegroundWindow\(\) -eq \$h\)') 'True'
 
 if($script:erros){ "`n$script:erros FALHA(S)"; exit 1 }
 "OK: janela achada por EnumWindows, `$todas e array com 1 resultado, erro de aba de fundo, multibox removido"
