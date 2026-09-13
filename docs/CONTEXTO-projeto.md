@@ -425,3 +425,37 @@ Confirmado no mesmo log, sobre as correcoes anteriores: **MR #1 saiu limpo** (`/
 re-entrada -> warmup em Lost Tower, sem falha de warp), `reset nao aconteceu` caiu pra **1 em 198 comandos**, e
 o auto-tune fechou (`350=175938 vs 380=272925 -> alvo 380`), com o `estado.txt` retomando `alvo 380` no restart
 das 15:04.
+
+## 2026-09-01 19:00 - onde o tempo do MR realmente vai: o WARMUP
+
+Pedido: "master reset mais agil, comandos disparados mais rapido". Medi antes de mexer, e a resposta nao estava
+nos comandos.
+
+| MR | warmup (Lost Tower) | resto (Stadium) | total |
+|---|---|---|---|
+| #3 | **56 min** (10 resets) | 16 min (20 resets) | 72 min |
+| #4 | **37 min** (10 resets) | 14 min (20 resets) | 51 min |
+
+- **O warmup e 73-78% do master reset.** 220s por reset em Lost Tower contra 70-110s no Stadium, por
+  praticamente os MESMOS pontos por reset (6121-6261 contra 5942-6577). E os ciclos de warmup **nao aceleram**
+  ao longo dos 10 - medidos um a um no MR #4: 230, 226, 222, 228, 219, 217, 283, 219, 238, 216s. Ou seja, o char
+  nao esta "esquentando"; Lost Tower e so um spot mais lento.
+- Correcao: **testar em vez de assumir.** Apos o `/darmr` o bot vai pro spot normal e tem `$WarmupTesteSec`
+  (300s) pra fechar um reset la. Fechou -> pula o warmup inteiro. Estourou (ou nem fechou) -> `Tick-WarmupTeste`
+  percebe e cai pro Lost Tower como antes. 300s e folgado de proposito: ciclo saudavel no Stadium e 70-110s e
+  ate o Lost Tower fecha em ~220s, entao so estoura se o char realmente nao aguentar. O teste sobrevive a
+  restart (vai pro `estado.txt`), senao uma queda no meio dele mandaria o char pro warmup - justo o que ele
+  existe pra evitar.
+- **Sobre "comandos mais rapidos": o gargalo nao e o teclado.** Medido no log, o ciclo de um comando e:
+  ler status (~3s) -> mandar 1 comando (<1s) -> esperar ~15s -> repetir. Os 15s sao `$StatEverySec`, e sao
+  gastos ESPERANDO O CHAR SUBIR DE LEVEL pra ter pontos novos - encurtar isso nao faz ponto aparecer mais cedo,
+  so gasta foco. O que dava pra cortar sem risco foi cortado:
+  - `Read-Status` nao dorme mais 900ms fixos apos apertar C: captura a cada 150ms e segue assim que reconhece o
+    painel (~300ms com o recorte do OCR). ~600ms por leitura, centenas de leituras por hora.
+  - `$StatRoundSec` 0.5 -> 0.25.
+  - `$KeyHoldMs`/`$KeyGapMs` continuam 40/40: abaixo disso o comando embaralha e ja fez `/s18` sair invalido.
+- **Alvo fixado em 350 por decisao do usuario**, com o A/B desligado. O experimento tinha apontado 380
+  (272925 contra 175938 pontos/h), mas os dois bracos rodaram em SEQUENCIA e nao intercalados - a taxa do 380
+  subiu durante a propria janela dele (126941 -> 241948 -> 272925), sinal de que algo mudou junto. Com
+  `$AutoTune = $false` o `alvo` do `estado.txt` passa a ser ignorado: quem manda e o CONFIG, senao um alvo
+  gravado pelo experimento sobrescreveria a escolha do usuario pra sempre. Regressao no `test_estado.ps1`.

@@ -2,6 +2,7 @@
 # Metricas do MR levam horas pra juntar; se o estado.txt nao sobreviver a um restart, a medicao inteira se perde.
 $EstadoFile = Join-Path $env:TEMP 'estado_rt_test.txt'
 $WarmupResets = 10
+$AutoTune = $true
 $TargetLevel = 350
 function Log($m){ }
 
@@ -32,6 +33,24 @@ Chk 'ciclos' ($script:ciclos -join ',') '88,91,102,301,77'
 Chk 'tempo ativo' $script:ativoSeg 4200
 Chk 'joias mixadas' $script:joiasMix 37
 Chk 'ciclos de joias' $script:joiasCiclos 9
+
+# 1d. o teste do spot normal pos-MR sobrevive a restart (senao uma queda no meio dele mandaria o char
+#     de volta pro warmup, que e justamente o que ele existe pra evitar)
+$script:warmupTeste = $true; $script:warmupTesteIni = (Get-Date).AddSeconds(-200)
+$ini = $script:warmupTesteIni.Ticks
+Save-Estado
+$script:warmupTeste = $false; $script:warmupTesteIni = Get-Date
+Load-Estado
+Chk 'teste do spot normal sobrevive' $script:warmupTeste $true
+Chk 'relogio do teste sobrevive' $script:warmupTesteIni.Ticks $ini
+$script:warmupTeste = $false; Save-Estado; $script:warmupTeste = $true; Load-Estado
+Chk 'teste desligado sobrevive' $script:warmupTeste $false
+# 1e. com o A/B desligado, o alvo do estado.txt NAO pode sobrescrever a escolha do usuario no CONFIG
+$AutoTune = $false; $script:TargetLevel = 380; Save-Estado; $script:TargetLevel = 350; Load-Estado
+Chk 'A/B desligado: CONFIG manda no alvo' $script:TargetLevel 350
+$AutoTune = $true; $script:TargetLevel = 380; Save-Estado; $script:TargetLevel = 350; Load-Estado
+Chk 'A/B ligado: estado.txt manda no alvo' $script:TargetLevel 380
+$AutoTune = $true   # os testes seguintes assumem o A/B ligado
 
 # 1c. progresso do A/B sobrevive (sem isto o experimento NUNCA fecha: 15 resets por braco, e cada
 #     restart zerava o contador - no log de 11h so o 1o braco chegou ao fim)

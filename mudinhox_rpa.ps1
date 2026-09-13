@@ -19,7 +19,7 @@
 param([switch]$Check, [string]$TestImage, [string]$TestStatus = "", [switch]$TestInv, [switch]$TestMix, [switch]$TestNpc, [switch]$TestGold, [switch]$TestVisao, [switch]$Preflight, [switch]$TestStatMin)
 
 # ---------- CONFIG (coordenadas relativas a area cliente do jogo, 1920x1009) ----------
-$TargetLevel   = 350     # level pra resetar. Nunca abaixo de $LevelMinReset (o servidor recusa)
+$TargetLevel   = 350     # level pra resetar. Nunca abaixo de $LevelMinReset (o servidor recusa). Fixado em 350 por decisao do usuario: o A/B tinha apontado 380 (272925 vs 175938 pontos/h), mas os dois bracos rodaram em sequencia e nao intercalados, entao a comparacao nao era controlada
 $PlayBtn       = @{ X = 77;   Y = 33 }                     # centro do botao play/pause (canto sup. esquerdo)
 $LevelBox      = @{ X = 1080; W = 140; H = 40; YFromBottom = 82 }    # numero do level na barra inferior; Y medido a partir da BASE da area cliente (aguenta resolucao/altura diferente)
 $PollSec       = 6       # intervalo de leitura do level com o jogo na frente
@@ -30,6 +30,8 @@ $PollBgSec     = 60      # intervalo quando outra janela esta na frente (cada le
 $WarpCmd       = '/s18'   # comando de teleporte pro spot de farm normal (troque aqui se mudar de spot)
 $WarmupCmd     = '/losttower7'   # apos /darmr o personagem volta fraco em Lorencia: farma AQUI (Lost Tower 7) ate juntar os primeiros resets
 $WarmupResets  = 10          # quantos resets fazer no modo warmup (pos-darmr) antes de voltar ao spot normal ($WarpCmd)
+$WarmupTeste   = $true   # apos o /darmr, TESTA o spot normal antes de cair no warmup. Medido: o warmup e 73-78% do tempo do MR (220s por reset em Lost Tower contra 70-110s no Stadium, pelos mesmos ~6200 pontos por reset), e os ciclos de warmup nao aceleram ao longo dos 10 - ficam achatados em ~220s. Se o char aguenta o spot normal logo apos o MR, o warmup inteiro e desperdicio
+$WarmupTesteSec = 300    # o teste falha se o primeiro ciclo no spot normal passar disso (ciclo saudavel la e 70-110s; ate o Lost Tower fecha em ~220s). Estourou = char fraco demais, cai pro warmup
 $WarpMap       = 'stad'      # nome esperado do mapa do /s18 (Stadium), 4 primeiras letras. So conta "no spot" se o mapa bater com este
 $WarmupMap     = 'lost'      # nome esperado do mapa do /losttower7 (Lost Tower). Evita aceitar mapa errado (ex AIDA) como spot
 $WarpWaitSec   = 9       # espera apos o teleporte (dar tempo do mapa trocar)
@@ -55,7 +57,7 @@ $StatMinAgi    = 100     # o /a NUNCA vai abaixo disso, nem na reta final: abaix
 $StatEveryNearSec = 5    # perto do maximo le o status a cada N seg (em vez de $StatEverySec): os ultimos pontos e que destravam o /darmr
 $StatEverySec  = 15      # distribui os pontos a cada N seg enquanto upa (alem de logo apos cada reset e antes de cada /resetar)
 $StatMaxSec    = 90      # teto: mesmo com o level parado (ou ilegivel), rele o status a cada N seg
-$StatRoundSec  = 0.5     # espera entre uma rodada de distribuicao e a releitura do status
+$StatRoundSec  = 0.25    # espera entre uma rodada de distribuicao e a releitura do status (era 0.5; a releitura ja custa ~1s de captura+OCR, nao precisa de folga por cima)
 # Velocidade do teclado/chat. 40/40 e o valor testado que NAO embaralha - nao baixe (ja fez /s18 sair invalido e queimar 4 warps).
 $KeyHoldMs     = 40      # tempo segurando cada tecla ao digitar
 $KeyGapMs      = 40      # pausa entre uma tecla e a proxima
@@ -118,7 +120,7 @@ $ClientEsperado = @{ W = 1920; H = 1009 }   # resolucao pra qual as coordenadas 
 $SemProgressoMin = 12    # sem ganhar UM ponto por N min = travou em algo que a gente ainda nao previu -> avisa e reinicia o ciclo
 $LogLevelDelta = 40      # so loga o level quando ele salta N (ou cai = reset). Com poll de 2s, logar todo tick so enche o arquivo
 $UiLogMaxChars = 60000   # teto do log da janelinha (o TextBox crescia sem limite rodando dias seguidos)
-$AutoTune      = $true   # o bot roda um A/B do alvo de level sozinho e fica com o melhor (compara PONTOS/H, nao resets/h)
+$AutoTune      = $false  # A/B do alvo DESLIGADO: o alvo agora e escolha sua ($TargetLevel), nao do experimento
 $AutoTuneAlvos = 350, 380   # alvos a testar. NAO usar abaixo de $LevelMinReset: o servidor recusa e o /resetar so vira reenvio ate o char passar do minimo sozinho
 $LevelMaximo   = 400     # teto de level do servidor ("voce esta no nivel maximo"). No modo joias o char fica parado nele, entao o detector de miss infinito nao pode usar o level la
 $LevelMinReset = 350     # level minimo pra resetar. CONFIRMADO pela mensagem do servidor: "Voce precisa de estar no level 350 para resetar!". O bot re-aprende isso sozinho se mudar
@@ -583,6 +585,8 @@ function Save-Estado {   # fase/warmup E as metricas do MR. Medir um MR leva hor
       "fase=$($script:phase)"
       "modo=$($script:modo)"
       "warmup=$($script:warmupCount)"
+      "warmupTeste=$(if($script:warmupTeste){1}else{0})"
+      "warmupTesteIni=$($script:warmupTesteIni.Ticks)"
       "resets=$($script:resets)"
       "ptsSent=$($script:ptsSent)"
       "runStart=$($script:runStart.Ticks)"
@@ -619,6 +623,10 @@ function Load-Estado {
       if($kv.fase -in 'normal','warmup'){ $script:phase = $kv.fase }
       if($kv.modo -in 'reset','joias','dragoes'){ $script:modo = $kv.modo }
       if($kv.warmup){ $script:warmupCount = [int]$kv.warmup }
+      # O teste do spot normal atravessa restart: sem isto, uma queda no meio do teste voltaria o bot pro warmup
+      # (ou o deixaria testando pra sempre, com o relogio zerado a cada start).
+      if($kv.warmupTeste){ $script:warmupTeste = ($kv.warmupTeste -eq '1') }
+      if($kv.warmupTesteIni){ $script:warmupTesteIni = [datetime]::new([long]$kv.warmupTesteIni) }
       if($kv.resets){ $script:resets = [int]$kv.resets }
       if($kv.ptsSent){ $script:ptsSent = [int]$kv.ptsSent }
       if($kv.mrs){ $script:mrs = [int]$kv.mrs }
@@ -628,7 +636,9 @@ function Load-Estado {
       if($kv.joiasCiclos){ $script:joiasCiclos = [int]$kv.joiasCiclos }
       if($kv.mrStart){ $script:mrStart = [datetime]::new([long]$kv.mrStart) }
       if($kv.ciclos){ $script:ciclos = @($kv.ciclos -split "," | ? { $_ }) }
-      if($kv.alvo){ $script:TargetLevel = [int]$kv.alvo }
+      # O alvo do estado.txt so vale quando foi o A/B que o escolheu. Com $AutoTune desligado quem manda e o
+      # CONFIG - senao um alvo antigo gravado pelo experimento sobrescreveria a sua decisao pra sempre.
+      if($kv.alvo -and $AutoTune){ $script:TargetLevel = [int]$kv.alvo }
       if($kv.tuneOn -eq "0"){ $script:tuneOn = $false; Log "autotune ja concluido antes: alvo $($script:TargetLevel)" }
       if($kv.tuneArm){ $script:tuneArm = [int]$kv.tuneArm }
       if($kv.tuneResets){ $script:tuneResets = [int]$kv.tuneResets }
@@ -982,7 +992,17 @@ function Read-Status {   # abre a janela de status (C), le os 4 atributos + pont
     if($try % 2 -eq 0){
       $null = Focus-Game   # reafirma o foco ANTES de cada tecla: so checar no inicio nao basta - se a sua janela volta, o C vai pra ELA e o status nunca abre (era a causa das falhas)
       if(-not $script:gameFg){ Log "status: jogo perdeu o foco, nao vou apertar C"; Wait 1; continue }
-      Press-Vk $StatusKey $HotkeyHoldMs; Start-Sleep -Milliseconds 900
+      Press-Vk $StatusKey $HotkeyHoldMs
+      # Era Start-Sleep 900 fixo. Agora espera SO ate a janela aparecer: captura a cada 150ms e segue assim que
+      # a leitura reconhece o painel. Com o recorte do OCR ela costuma aparecer em ~300ms, entao sobram ~600ms
+      # por leitura - e sao centenas de leituras por hora, todas com o foco preso no jogo.
+      $viu = $false
+      for($w = 0; $w -lt 8 -and -not $viu; $w++){
+        Start-Sleep -Milliseconds 150
+        $t = Capture-Raw
+        if($script:capOk -and (Status-Open (Ocr-Status $t))){ $viu = $true }
+        $t.Dispose()
+      }
     }
     $img = Capture-Raw
     if(-not $script:capOk){ $img.Dispose(); Log "status: a captura pegou outra janela, nao vou ler"; Wait 1; continue }   # nunca le (nem salva print) da tela de outro programa
@@ -1083,7 +1103,16 @@ function Master-Reset {   # atributos cheios: /darmr -> tela de selecao -> clica
     Log "== MASTER RESET #$($script:mrs) FEITO (levou ${dur}h, $($script:resets) resets) =="   # o marco que interessa
     Notify "MudinhoX" "Master reset #$($script:mrs) feito em ${dur}h."
     $script:resets = 0; $script:ptsSent = 0; $script:runStart = Get-Date; $script:ativoSeg = 0   # zera pra medir o proximo MR limpo
-    $script:phase = 'warmup'; $script:warmupCount = 0; Save-Estado; $script:restartCycle = $true; Log "modo warmup ($WarmupCmd ate $WarmupResets resets)"
+    # Antes ia direto pro warmup. Agora TESTA o spot normal: se o char aguentar, economiza os 37-56 min que o
+    # warmup custava por MR. Se nao aguentar, Tick-WarmupTeste percebe e cai pro Lost Tower sem perder a noite.
+    if($WarmupTeste){
+      $script:phase = 'normal'; $script:warmupCount = 0
+      $script:warmupTeste = $true; $script:warmupTesteIni = Get-Date
+      Log "pos-MR: testando o spot normal ($WarpCmd) por ate $WarmupTesteSec s antes de decidir pelo warmup"
+    } else {
+      $script:phase = 'warmup'; $script:warmupCount = 0; Log "modo warmup ($WarmupCmd ate $WarmupResets resets)"
+    }
+    Save-Estado; $script:restartCycle = $true
   }
 }
 function Walk-Forward {   # ~4 passos numa direcao aleatoria. SO usado pra desbugar o miss infinito (o passeio pos-warp foi removido a pedido do usuario)
@@ -1449,6 +1478,14 @@ function Tick-Inventory {   # aviso do jogo (ou botao MIXAR JOIAS) -> vai mixar 
   $null = Mix-Jewels
   $script:ptsLastGain = Get-Date   # mixar tambem nao distribui pontos: nao deixa o watchdog de progresso contar esse tempo
   $script:restartCycle = $true   # volta pro spot pelo caminho normal (warp + andar + play)
+}
+$script:warmupTeste = $false; $script:warmupTesteIni = Get-Date
+function Tick-WarmupTeste {   # o teste do spot normal pos-MR estourou o tempo? cai pro warmup em vez de insistir
+  if(-not $script:warmupTeste){ return }
+  if(((Get-Date) - $script:warmupTesteIni).TotalSeconds -lt $WarmupTesteSec){ return }
+  $script:warmupTeste = $false
+  $script:phase = 'warmup'; $script:warmupCount = 0; $script:restartCycle = $true; Save-Estado
+  Log "pos-MR: o spot normal nao fechou um reset em $WarmupTesteSec s - char fraco demais, indo pro warmup ($WarmupCmd)"
 }
 function Jit([double]$sec){ $sec * (1 + (Get-Random -Minimum (-$JitterPct) -Maximum $JitterPct)) }   # varia o RITMO (nunca os valores dos stats, que precisam ser exatos)
 $script:runStart = Get-Date; $script:resets = 0; $script:ptsSent = 0; $script:ptsNeeded = -1
@@ -1963,7 +2000,7 @@ while($true){
             # perto do alvo o poll e de 2s: logar todo tick enche o arquivo e atrapalha achar problema. So loga salto real ou queda (reset)
             if($null -eq $script:lvlLogged -or $lvl -lt $script:lvlLogged -or ($lvl - $script:lvlLogged) -ge $LogLevelDelta){ Log "level: $lvl"; $script:lvlLogged = $lvl }
           }
-          Tick-Stats; Tick-Inventory; Tick-Msgs $img; Tick-Progresso; Tick-Human
+          Tick-Stats; Tick-Inventory; Tick-Msgs $img; Tick-Progresso; Tick-Human; Tick-WarmupTeste
         }
         $img.Dispose()
       }
@@ -2036,6 +2073,12 @@ while($true){
   Save-Estado   # metricas do MR sobrevivem a reinicio do bot (medir um MR leva horas)
   if(($script:resets % $MetricsEvery) -eq 0){ Metrics }
   $null = Wait-Map '' 8   # espera o mapa RENDERIZAR (o jogo ignora teclas durante o teleporte); segue assim que ler, em vez de dormir 8s
+  if($script:warmupTeste){   # fechou um reset no spot normal dentro do prazo: o warmup era desperdicio
+    $seg = [int]((Get-Date) - $script:warmupTesteIni).TotalSeconds
+    $script:warmupTeste = $false
+    Log "pos-MR: o spot normal fechou um reset em ${seg}s - PULANDO o warmup (economia medida: 37-56 min por MR)"
+    Save-Estado
+  }
   if($script:phase -eq 'warmup'){
     $script:warmupCount++; Log "warmup: reset $($script:warmupCount)/$WarmupResets (Lost Tower)"
     if($script:warmupCount -ge $WarmupResets){ $script:phase = 'normal'; Log "warmup completo ($WarmupResets resets) -> voltando ao spot normal ($WarpCmd)" }
