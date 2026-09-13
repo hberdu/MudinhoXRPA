@@ -110,6 +110,7 @@ $LogLevelDelta = 40      # so loga o level quando ele salta N (ou cai = reset). 
 $UiLogMaxChars = 60000   # teto do log da janelinha (o TextBox crescia sem limite rodando dias seguidos)
 $AutoTune      = $true   # o bot roda um A/B do alvo de level sozinho e fica com o melhor (compara PONTOS/H, nao resets/h)
 $AutoTuneAlvos = 350, 380   # alvos a testar. NAO usar abaixo de $LevelMinReset: o servidor recusa e o /resetar so vira reenvio ate o char passar do minimo sozinho
+$LevelMaximo   = 400     # teto de level do servidor ("voce esta no nivel maximo"). No modo joias o char fica parado nele, entao o detector de miss infinito nao pode usar o level la
 $LevelMinReset = 350     # level minimo pra resetar. CONFIRMADO pela mensagem do servidor: "Voce precisa de estar no level 350 para resetar!". O bot re-aprende isso sozinho se mudar
 $AutoTuneResets = 15     # resets por alvo antes de comparar
 $MetricsEvery  = 5       # a cada N resets loga resumo: resets/h, pontos/h e ETA do master reset
@@ -1409,6 +1410,7 @@ function Ciclo-Joias {   # MODO JOIAS: farma no spot ate encher o inventario, va
   if(-not $ok){ Wait 15; return }
   $fim = (Get-Date).AddMinutes($JoiasFarmMax)
   $cheio = $false
+  $script:invDue = Get-Date   # checa o inventario JA na primeira leitura: se ja esta cheio, nao faz sentido farmar 5 min antes de olhar
   Log "joias: farmando em $WarpCmd ate encher (ou $JoiasFarmMax min)"
   do {
     Wait (Poll-Interval); Bater-Heartbeat
@@ -1418,7 +1420,10 @@ function Ciclo-Joias {   # MODO JOIAS: farma no spot ate encher o inventario, va
       if($img){
         if(-not (Handle-Captcha $img)){
           $lvl = Read-Level $img
-          if($null -ne $lvl){ if(-not (Check-Progress $lvl $img)){ $img.Dispose(); continue } }
+          # No modo joias nao ha reset, entao no level MAXIMO o level nunca muda e o detector de miss infinito
+          # dispararia a cada $StallSec pausando o farm a toa (visto no log: 2 disparos em 40s, level 400 fixo).
+          if($null -ne $lvl -and $lvl -lt $LevelMaximo){ if(-not (Check-Progress $lvl $img)){ $img.Dispose(); continue } }
+          else { $script:lvlChangedAt = Get-Date }
           Tick-Stats            # continua distribuindo pontos (o /darmr fica bloqueado neste modo)
           Tick-Msgs $img        # "inventario cheio" no chat liga $script:mixNow
           Tick-Human
