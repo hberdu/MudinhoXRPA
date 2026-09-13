@@ -33,7 +33,6 @@ $TargetLevel   = 305     # level pra resetar. Nunca abaixo de $LevelMinReset (o 
                          # O que aquele A/B sugere e que alvo MENOR rende mais - o ciclo encurta mais do que os pontos
                          # por reset caem -, entao 305 deve render acima de 350. Da pra conferir no `pontos/h` do log.
 $PlayBtn       = @{ X = 77;   Y = 33 }                     # centro do botao play/pause (canto sup. esquerdo)
-$LevelBox      = @{ X = 1080; W = 140; H = 40; YFromBottom = 82 }    # numero do level na barra inferior; Y medido a partir da BASE da area cliente (aguenta resolucao/altura diferente)
 $PollSec       = 6       # intervalo de leitura do level com o jogo na frente
 $PollNearSec   = 2       # perto do level alvo le a cada N seg: o level sobe ~150 entre leituras e o reset saia com 400 em vez de 350 (farm jogado fora)
 $PollNearFrom  = 0.82    # "perto" = a partir de N% do $TargetLevel
@@ -447,7 +446,7 @@ function Canto-Da-Tela-Do-Jogo([int]$alturaJanela){
   if(-not $t){ $t = [System.Windows.Forms.Screen]::PrimaryScreen }
   $wa = $t.WorkingArea
   # MULTIBOX: as janelinhas em CASCATA, todas dentro do canto inferior esquerdo. Nao lado a lado: a 3a e a 4a
-  # cairiam em cima do $MsgBox (x 760+), do $ChatBox (x 870+) e do $LevelBox (x 1080+). Mascarar a janela dos
+  # cairiam em cima do $MsgBox e do $ChatBox (e, na epoca, do level, que ainda era coordenada fixa). Mascarar a janela dos
   # outros slots (ver Outras-Janelinhas) impede LER LIXO, mas ler PRETO tambem nao serve - o Read-Level ia
   # falhar do mesmo jeito. Entao elas ficam onde nao ha nada pra ler.
   # Passo de 28px: da pra ver as 4 barras de titulo (e saber qual e qual) sem sair da area segura. A 4a termina
@@ -650,7 +649,7 @@ function Capture-Raw {   # bitmap da area cliente, sem mexer no foco (so chamar 
     $g.CopyFromScreen($o.X,$o.Y,0,0,$b.Size)
     if($script:ui -and -not $script:ui.IsDisposed){ $r = $script:ui.Bounds; $g.FillRectangle([System.Drawing.Brushes]::Black, $r.X-$o.X, $r.Y-$o.Y, $r.Width, $r.Height) }
     # MULTIBOX: apaga tambem a janelinha DOS OUTROS slots. Cada bot so conhecia a propria ($script:ui), e com
-    # quatro na tela a do slot 2 em cima do $LevelBox do cliente 1 viraria leitura de lixo - o tipo de bug que
+    # quatro na tela a do slot 2 em cima da HUD do cliente 1 viraria leitura de lixo - o tipo de bug que
     # este projeto ja caçou por horas. Mascarar sai mais barato e mais seguro que tentar posicionar as quatro
     # fora de tudo que o bot le (o inventario e o modal do mix nem tem posicao fixa).
     foreach($r in (Outras-Janelinhas)){ $g.FillRectangle([System.Drawing.Brushes]::Black, $r.X-$o.X, $r.Y-$o.Y, $r.Width, $r.Height) }
@@ -997,18 +996,69 @@ function Close-Popup {   # ESC fecha popup do jogo (ex "precisa estar fora da ci
 function Is-FarmMap($m){ $m -and ($m -notmatch $CityWords) }   # nao e cidade conhecida
 function Spot-Map { if($script:phase -eq 'warmup'){ $WarmupMap } else { $WarpMap } }   # nome esperado do spot da fase atual
 function In-Farm($img){ Same-Map (Read-Map $img) (Spot-Map) }   # $true so se esta no spot CORRETO da fase (nao qualquer mapa; ex AIDA nao conta)
+# ---------- LEVEL sem coordenada cravada ----------
+# O numero do level na HUD e um numero SOLTO: nao tem rotulo do lado pra ancorar, e nem posicao comparavel entre
+# o cliente desktop e a aba do navegador (medido: 0.56 da largura no desktop, 0.62 na web - fracao tambem nao
+# transfere). Entao ele se AUTO-CALIBRA: o painel de status mostra "Level: 400" com rotulo, e isso e verdade
+# absoluta. Sabendo o numero certo, o bot procura ele na tela inteira, descarta a ocorrencia que esta colada no
+# rotulo (essa e a do painel) e guarda onde estava a outra - a da HUD. Dai em diante le so daquele recorte,
+# barato igual antes. Se o recorte parar de dar numero plausivel, a caixa e jogada fora e ele recalibra.
+$script:lvlBox = $null
+function Get-Level-Painel($words){   # level pelo ROTULO do painel. 'Levei:' e como o OCR le "Level:" nos 3 fixtures
+  $lab = $words | ? { $_.Text -match '(?i)^(level|levei|lvl|n.vel)' } | select -First 1; if(-not $lab){ return $null }
+  $yc = $lab.BoundingRect.Y + $lab.BoundingRect.Height/2
+  $n = $words | ? { $_.Text -match '^\d{1,4}$' -and $_.BoundingRect.X -gt $lab.BoundingRect.X -and
+                    [Math]::Abs(($_.BoundingRect.Y + $_.BoundingRect.Height/2) - $yc) -lt ($lab.BoundingRect.Height + 6) } |
+       sort { $_.BoundingRect.X } | select -First 1
+  if($n){ [int]$n.Text } else { $null }
+}
+$LevelFaixaBase = 0.18   # fracao da ALTURA, de baixo pra cima, onde a HUD mostra o level. Nao e coordenada
+                         # calibrada: e onde a barra inferior fica em qualquer layout (desktop 8% da base, web 6%).
+                         # 18% da folga pros dois sem alcancar o chat nem o mundo.
+function Calibrar-LevelBox($img, [int]$lvlReal){   # acha o mesmo numero na HUD e guarda o recorte
+  # NAO da pra procurar na tela toda: medido, o OCR do Windows NAO enxerga o numero solto da HUD na resolucao
+  # nativa - mesma limitacao que ja obrigava o Ocr-Status a ampliar o painel 2x. Entao recorta a FAIXA INFERIOR
+  # (fracao da altura, nao pixel) e amplia. E um crop so, barato, e serve nos dois layouts.
+  if($lvlReal -le 0){ return $false }
+  $fy = [int]($img.Height * (1 - $LevelFaixaBase)); $fh = $img.Height - $fy
+  if($fh -le 0){ return $false }
+  try {
+    $c = Crop-Bitmap $img 0 $fy $img.Width $fh 3
+    $ws = @((Ocr-Bitmap $c).Lines | % { $_.Words }); $esc = $c.Width / [double]$img.Width; $c.Dispose()
+    foreach($w in ($ws | ? { $_.Text -match "^$lvlReal$" })){
+      # as coordenadas voltam na escala do recorte AMPLIADO: desfaz a ampliacao e soma o deslocamento da faixa
+      $r = $w.BoundingRect
+      $x = [int]($r.X / $esc); $y = [int]($r.Y / $esc) + $fy
+      $ww = [int]($r.Width / $esc); $hh = [int]($r.Height / $esc)
+      $script:lvlBox = @{ X = [Math]::Max(0, $x - 12); Y = [Math]::Max(0, $y - 8); W = $ww + 34; H = $hh + 16 }
+      Log "level: caixa calibrada em ($($script:lvlBox.X),$($script:lvlBox.Y)) pelo painel (level $lvlReal)"
+      return $true
+    }
+  } catch {}
+  $false
+}
 function Read-Level($img){
   $own = -not $img; if($own){ $img = Capture-Game }; if(-not $img){ return $null }
-  $reads = @()
-  $ly = $img.Height - $LevelBox.YFromBottom   # topo do numero, relativo a base da area cliente
-  foreach($v in $LevelOcrVariants){
-    $c = Crop-Bitmap $img $LevelBox.X $ly $LevelBox.W $LevelBox.H $v.S $v.Pad; if($v.Inv){ [Img]::Invert($c) }
-    $txt = (Ocr-Bitmap $c).Text; $c.Dispose()
-    if($txt -match '\d+'){ $reads += [int]$Matches[0] }
-  }
+  $out = $null
+  try {
+    if($script:lvlBox){
+      $b = $script:lvlBox
+      if($b.X -ge 0 -and $b.Y -ge 0 -and ($b.X + $b.W) -le $img.Width -and ($b.Y + $b.H) -le $img.Height){
+        $reads = @()
+        foreach($v in $LevelOcrVariants){
+          $c = Crop-Bitmap $img $b.X $b.Y $b.W $b.H $v.S $v.Pad; if($v.Inv){ [Img]::Invert($c) }
+          $txt = (Ocr-Bitmap $c).Text; $c.Dispose()
+          if($txt -match '\d+'){ $reads += [int]$Matches[0] }
+        }
+        # so aceita numero PLAUSIVEL: o recorte pode ter pegado dano, vida ou coordenada se a janela mudou
+        $reads = @($reads | ? { $_ -ge 1 -and $_ -le $LevelMaximo })
+        if($reads.Count){ $out = [int]($reads | Group-Object | Sort-Object Count -Descending | Select-Object -First 1).Name }
+      }
+      if($null -eq $out){ $script:lvlBox = $null; Log "level: a caixa calibrada parou de dar numero valido - vou recalibrar na proxima leitura de status" }
+    }
+  } catch { $out = $null; $script:lvlBox = $null }
   if($own){ $img.Dispose() }
-  if($reads.Count -eq 0){ return $null }
-  [int]($reads | Group-Object | Sort-Object Count -Descending | Select-Object -First 1).Name   # Sort-Object e estavel: empate mantem prioridade
+  $out
 }
 function Get-HelperState($img){   # pausa = barras vermelhas; play = triangulo verde. Conta pixels num quadrado em volta do botao
   $own = -not $img; if($own){ $img = Capture-Game }; if(-not $img){ return 'unknown' }; $red = 0; $green = 0
@@ -1478,6 +1528,13 @@ function Read-Status {   # abre a janela de status (C), le os 4 atributos + pont
       # O print so serve quando a leitura FALHA. Antes ia pro disco em TODA leitura: ~3500 por sessao, 3.8MB
       # cada, numa pasta dentro do OneDrive - uns 13GB de re-upload por noite pra reescrever sempre o mesmo nome.
       if($miss){ New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null; $img.Save((Join-Path $CaptchaShotDir 'status_ultimo.png')) | Out-Null }
+      # CALIBRA A CAIXA DO LEVEL enquanto o painel esta aberto: aqui o level e VERDADE (tem rotulo do lado) e a
+      # HUD esta visivel na mesma foto. E o unico momento em que da pra saber qual dos numeros da tela e o level.
+      # So quando nao ha caixa: custa um OCR de tela cheia, entao nao se paga isso a cada leitura de status.
+      if(-not $script:lvlBox){
+        $lp = Get-Level-Painel $words
+        if($lp){ $null = Calibrar-LevelBox $img $lp }
+      }
       $img.Dispose()
       Press-Vk $StatusKey $HotkeyHoldMs; Start-Sleep -Milliseconds 300; $fechou = $true   # fecha
       foreach($k in @('For','Agi','Vit','Ene')){ if($miss -notcontains $k){ $script:stCarry[$k] = [int]$v[$k] } }   # o que FOI lido vira memoria
@@ -2368,6 +2425,33 @@ if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guard
     # E importante que este teste rode DEPOIS do fixture desktop: a caixa cacheada la nao serve aqui, entao
     # este caso tambem exercita o auto-conserto (cache invalido -> procura de novo).
     Ok 'web: Read-Map acha o mapa noutro layout' ((Read-Map $i) -match '^lorencia') "leu '$(Read-Map $i)'"
+    # LEVEL auto-calibrado. O painel diz "Level: 400" (verdade, tem rotulo); a HUD mostra o mesmo 400 solto.
+    # A calibracao tem que pegar a ocorrencia da HUD e DESCARTAR a do painel - se pegar a do painel, o bot le o
+    # level so enquanto a janela C estiver aberta, que e quase nunca.
+    Ok 'web: le o level pelo rotulo do painel' ((Get-Level-Painel $w) -eq 400) "Get-Level-Painel devolveu '$(Get-Level-Painel $w)', esperado 400"
+    $i.Dispose()
+  }
+  # LEVEL AUTO-CALIBRADO. O painel diz "Level: 400" (verdade, tem rotulo do lado); a HUD mostra o mesmo 400
+  # solto, sem rotulo nenhum - e em posicao que nem por fracao transfere entre desktop (0.56 da largura) e web
+  # (0.62). Entao a calibracao usa o numero do painel pra achar o da HUD e guarda so o recorte.
+  # Este fixture e a HUD da web SEM painel aberto: e o que prova que o OCR enxerga o numero solto la.
+  # Os dois layouts tem que calibrar e ler. O DESKTOP e o caso de regressao: o $LevelBox cravado foi removido,
+  # entao a leitura de level dele passou a depender inteiramente deste caminho.
+  foreach($cal in @(@{ F='web_hud.png';          L=400; Q='web'     },
+                    @{ F='status_ABERTO.png';    L=329; Q='desktop' },
+                    @{ F='lorencia_modal_mix.png'; L=0;  Q='desktop sem painel' })){
+    $i = Fx $cal.F
+    if(-not $i){ continue }
+    $script:lvlBox = $null
+    if($cal.L -gt 0){
+      Ok "$($cal.Q): acha o level na HUD" (Calibrar-LevelBox $i $cal.L) "nao achou o $($cal.L) na faixa inferior"
+      if($script:lvlBox){ Ok "$($cal.Q): o recorte calibrado devolve $($cal.L)" ((Read-Level $i) -eq $cal.L) "Read-Level devolveu '$(Read-Level $i)'" }
+    } else {
+      # sem level conhecido pra este print: o que importa e que SEM caixa calibrada o Read-Level devolve $null
+      # em vez de inventar numero. Level errado manda o bot resetar na hora errada.
+      Ok "$($cal.Q): sem calibracao, Read-Level nao inventa" ($null -eq (Read-Level $i)) "devolveu '$(Read-Level $i)' sem caixa calibrada"
+    }
+    $script:lvlBox = $null
     $i.Dispose()
   }
   $i = Fx 'inventario_FECHADO.png'
@@ -2436,11 +2520,11 @@ Bater-Heartbeat
 Log $(if($Slot -gt 0){ "iniciando (slot $Slot, spot $WarpCmd, arquivos rpa$Sfx.log / estado$Sfx.txt)" } else { 'iniciando' })
 try {   # preflight no start: 10s conferindo tudo evita a noite inteira perdida por algo obvio. Nao BLOQUEIA (o spot nem e checado, o bot ainda vai warpar)
   # JANELA MENOR QUE A CALIBRACAO = para na hora, com instrucao. Nao e frescura de preflight: TODA coordenada do
-  # bot e fixa em $ClientEsperado ($PlayBtn, $LevelBox, $MixNpcPos, a grade do captcha...). Numa janela menor o
+  # bot ainda e fixa em $ClientEsperado ($PlayBtn, $MixNpcPos, a grade do inventario...). Numa janela menor o
   # Read-Level vai ler em x=1080 de uma tela de 958 e o GetPixel estoura - foi o que matou os 4 slots em 08/09,
   # quando os clientes foram reduzidos pra 958x484 pra caberem os quatro no monitor. O erro que aparecia era
   # "O parametro deve ser positivo e < Width", que nao diz nada sobre o tamanho da janela.
-  # Maior que a calibracao nao para: as coordenadas ainda caem dentro, e o $LevelBox/$ChatBox ja medem a partir
+  # Maior que a calibracao nao para: as coordenadas ainda caem dentro, e o $ChatBox ja mede a partir
   # da BASE da area cliente, entao altura extra e tolerada (ja rodou assim em 1920x1061).
   $cli = New-Object W+RECT; [W]::GetClientRect((Get-Game),[ref]$cli) | Out-Null
   if($cli.R -lt $ClientEsperado.W -or $cli.B -lt $ClientEsperado.H){

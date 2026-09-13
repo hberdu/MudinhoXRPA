@@ -90,6 +90,27 @@ O título de cada janelinha diz o slot. **Pra parar todos de uma vez**, crie um 
 - **Cada bot apaga da captura a janelinha dos outros**, não só a sua (`Outras-Janelinhas`, achadas pelo título e em cache de 30s). Com quatro na tela, a do slot 2 em cima do `$LevelBox` do cliente 1 viraria leitura de lixo. Mascarar é mais barato e mais seguro que posicionar as quatro fora de tudo que o bot lê — o inventário e o modal do mix nem têm posição fixa.
 - **Custo:** a tela alterna entre os clientes o tempo todo, e `SetForegroundWindow` rouba o foco do sistema inteiro. A máquina fica ruim de usar enquanto roda. O modo "jogo num monitor, você no outro" (`$NoFocusRead = $true`) só existe pro caso de **um** cliente.
 
+## Nenhuma coordenada cravada
+
+O bot está migrando de coordenadas fixas para **auto-localização**: cada coisa se acha sozinha, por texto onde há texto. Foi o que tornou possível rodar o mesmo código no cliente desktop em `1920x1009` e na aba do navegador em `1024x720`.
+
+| | como se localiza |
+|---|---|
+| atributos, pontos | pelo **rótulo** (`Força`, `Pontos`) — pega o número à direita, na mesma linha |
+| nome do mapa | pela **coordenada do char** no minimapa (`132,125`) — nada mais na tela tem a forma `número,número`; o nome é a palavra à esquerda |
+| level | **auto-calibrado**: o painel mostra `Level: 400` *com rótulo*, e isso é verdade; com o número certo na mão, procura ele na faixa inferior e guarda o recorte |
+| captcha | acha a âncora `Selecione a mesma imagem` por OCR |
+| inventário | acha a grade pelo título da janela |
+| modal do mix | acha `Mixar` e os nomes das joias por OCR |
+
+**Por que o level precisou de auto-calibração:** ele é um número **solto** na HUD, sem rótulo do lado, e a posição não transfere nem por fração — fica em 0,56 da largura no desktop e 0,62 na web. E o OCR do Windows **não enxerga** ele numa varredura de tela cheia (mesma limitação que já obrigava o painel a ser ampliado 2x), então a busca é na faixa inferior (`$LevelFaixaBase`, fração da altura) com ampliação.
+
+Validação: o desktop calibrou sozinho em `(1121,932)`. O `$LevelBox` cravado que existia antes era `X=1080, y=927` — a auto-calibração achou o mesmo lugar que a calibração manual.
+
+Se o recorte parar de dar número plausível (janela redimensionada, layout trocado), a caixa é descartada e ele recalibra na próxima leitura de status. E sem calibração o `Read-Level` devolve `$null` em vez de inventar — level errado manda o bot resetar na hora errada.
+
+**Ainda por coordenada:** botão play (é ícone, não texto), grade do inventário (brilho de pixel), chat aberto (borda vermelha), posição do NPC do mix (sem texto até o hover). Esses vão precisar de busca por template/âncora, não de OCR.
+
 ## Uso
 
 Duplo clique em **`MudinhoX RPA.cmd`** com o jogo aberto. Pede permissão de administrador (o jogo roda como admin; sem isso o Windows ignora o teclado/mouse do bot). Abre uma janelinha com log e botão **PARAR** (ou feche a janela). Também para se criar um arquivo `stop.flag` na pasta.
