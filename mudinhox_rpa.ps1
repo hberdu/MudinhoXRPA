@@ -1566,14 +1566,6 @@ if(Heartbeat-Fresco){   # ja tem bot vivo: dois no mesmo jogo brigam pelo teclad
   if($script:ui){ $script:ui.Dispose() }; exit
 }
 Remove-Item $StopFile -ErrorAction SilentlyContinue; Bater-Heartbeat; Log "iniciando"
-try {   # TODA coordenada calibrada ($InvGrid, $MixNpcPos, $MapLabel, $LevelBox...) e pra $ClientEsperado. Mudou a resolucao, tudo quebra EM SILENCIO - ja custou uma noite
-  $h0 = Get-Game; $c0 = New-Object W+RECT; [W]::GetClientRect($h0,[ref]$c0) | Out-Null
-  if($c0.R -ne $ClientEsperado.W -or $c0.B -ne $ClientEsperado.H){
-    Log "AVISO: area cliente e $($c0.R)x$($c0.B), mas a calibracao e pra $($ClientEsperado.W)x$($ClientEsperado.H)."
-    Log "       Coordenadas ancoradas na BASE (level, chat) se ajustam; as fixas (inventario, Lahap, minimapa) NAO. Recalibre com -TestInv / -TestNpc."
-    Notify "MudinhoX" "Resolucao mudou ($($c0.R)x$($c0.B), esperado $($ClientEsperado.W)x$($ClientEsperado.H)). Inventario e mix podem falhar."
-  } else { Log "area cliente $($c0.R)x$($c0.B) confere com a calibracao" }
-} catch { Log "nao consegui medir a area cliente: $_" }
 try {   # preflight no start: 10s conferindo tudo evita a noite inteira perdida por algo obvio. Nao BLOQUEIA (o spot nem e checado, o bot ainda vai warpar)
   Log "preflight de inicializacao:"
   $pf = Run-Preflight $false
