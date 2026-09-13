@@ -10,6 +10,7 @@ $StatMinAprende = $true
 $StatMinTeste = 100
 $StatMinOutros = 1000
 $script:statMinOk = 0
+$script:stCarry = @{}
 function Log($m){ }
 
 $src = Get-Content "$PSScriptRoot\mudinhox_rpa.ps1" -Raw
@@ -153,6 +154,23 @@ $script:statMinOk = 1; $script:StatMinOutros = $StatMinTeste; Save-Estado
 $StatMinAprende = $false; $script:statMinOk = 0; $script:StatMinOutros = 1000; Load-Estado
 Chk 'AutoAprender off ignora o aprendido' $script:StatMinOutros 1000
 $StatMinAprende = $true
+
+# 6. memoria dos atributos. Neste cliente o OCR nao enxerga a linha da Vitalidade; o unico valor que o bot
+#    tem dela e o que ele guardou. Se isso nao sobreviver ao restart, a distribuicao inteira volta a travar.
+$script:stCarry = @{ For = 15000; Agi = 13780; Vit = 11112; Ene = 15048 }
+Save-Estado
+$script:stCarry = @{}
+Load-Estado
+Chk 'memoria do atributo volta'   $script:stCarry['Vit'] 11112
+Chk 'e os outros tambem'          "$($script:stCarry['For'])/$($script:stCarry['Agi'])/$($script:stCarry['Ene'])" '15000/13780/15048'
+
+# atributo sem valor guardado nao pode virar 0 (0 no Plan-Stats mandaria o char pro cap errado)
+$script:stCarry = @{ Vit = 11112 }
+Save-Estado
+$script:stCarry = @{}
+Load-Estado
+Chk 'so grava o que conhece'      $script:stCarry.Count 1
+Chk 'e nao inventa For'           ($null -eq $script:stCarry['For']) $true
 
 Remove-Item $EstadoFile -ErrorAction SilentlyContinue
 if($script:erros -eq 0){ "OK: estado sobrevive ao round-trip, ao formato antigo e a arquivo corrompido" }

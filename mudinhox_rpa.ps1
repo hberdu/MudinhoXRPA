@@ -703,6 +703,9 @@ function Save-Estado {   # fase/warmup E as metricas do MR. Medir um MR leva hor
       # Veredito do servidor sobre comando abaixo do piso (0 nao perguntei / 1 aceita / -1 recusa). E uma
       # pergunta que se faz UMA vez na vida: sem gravar, cada restart gastaria um /f e uma leitura de status.
       "statMinOk=$($script:statMinOk)"
+      # Memoria dos atributos. Sem isto, reiniciar o bot apaga o unico valor que ele tem de uma linha que o OCR
+      # nao le - e a distribuicao inteira volta a travar ate o proximo (improvavel) acerto do OCR.
+      "statCarry=$(@(@('For','Agi','Vit','Ene') | ? { $null -ne $script:stCarry[$_] } | % { "$_`:$($script:stCarry[$_])" }) -join '|')"
     ) | Set-Content -Path $EstadoFile -Encoding ASCII
   } catch {}
 }
@@ -746,6 +749,7 @@ function Load-Estado {
       if($kv.warpMap -and -not $WarpMap -and $kv.warpCmd -eq $WarpCmd){ $script:WarpMap = $kv.warpMap; Log "mapa do spot ($WarpCmd) retomado do estado.txt: '$WarpMap'" }
       # Piso de /f /v /e: nao guarda o VALOR, guarda o veredito - assim mexer no $StatMinTeste do CONFIG vale na hora
       # e desligar o $StatMinAprende volta pro piso fixo sem precisar editar o estado.txt.
+      if($kv.statCarry){ foreach($par in ($kv.statCarry -split '\|')){ if($par -match '^(For|Agi|Vit|Ene):(\d+)$'){ $script:stCarry[$Matches[1]] = [int]$Matches[2] } } }
       if($StatMinAprende -and $kv.statMinOk){
         $script:statMinOk = [int]$kv.statMinOk
         if($script:statMinOk -eq 1){ $script:StatMinOutros = $StatMinTeste; Log "piso de /f /v /e: o servidor ja tinha aceitado abaixo de 1000, usando $StatMinTeste" }
@@ -1036,7 +1040,11 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
     $script:statVazias = 0   # rendeu comando: volta a ler no ritmo rapido
     foreach($cmd in $plano){   # acumula pra metrica de pontos/h e marca que houve progresso
       if($script:stop -or -not (Send-Chat $cmd)){ break }
-      $script:ptsSent += [int](($cmd -split " ")[1]); $script:ptsLastGain = Get-Date; $script:semProgresso = 0
+      $qtd = [int](($cmd -split " ")[1])
+      $script:ptsSent += $qtd; $script:ptsLastGain = Get-Date; $script:semProgresso = 0
+      # Mantem viva a memoria do atributo: e o que permite seguir quando o OCR nao le a linha dele (ver Read-Status).
+      $kc = ($StatCmds | ? { $_.Cmd -eq ($cmd -split ' ')[0] } | select -First 1).Key
+      if($kc -and $null -ne $script:stCarry[$kc]){ $script:stCarry[$kc] += $qtd }
     }
     Wait $StatRoundSec
   }
@@ -1047,6 +1055,9 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
 $script:statLvlLast = -1; $script:statMax = Get-Date; $script:pertoDoMax = $false; $script:statVazias = 0
 $script:stFp = ''; $script:stFpLvl = $null; $script:stFpN = 0   # assinatura da ultima leitura de status (detector de painel congelado)
 $script:statMinOk = 0   # veredito do servidor sobre comando abaixo do piso: 0 = ainda nao perguntei, 1 = aceita, -1 = recusa. Vai pro estado.txt: a pergunta e feita UMA vez na vida
+# Memoria dos 4 atributos: ultimo valor LIDO de cada um, somado ao que o bot mandou desde entao. Serve pra
+# atravessar uma linha que o OCR nao enxerga (a Vitalidade neste cliente). Vai pro estado.txt.
+$script:stCarry = @{}; $script:stParcial = @()
 function Tick-Stats {   # so roda enquanto upa (nunca durante captcha)
   if((Get-Date) -lt $script:statDue){ return }
   # Na reta final o portao do level nao vale: com os 4 atributos perto do cap, o level pode nem subir mais e sao
@@ -1178,7 +1189,20 @@ function Read-Status {   # abre a janela de status (C), le os 4 atributos + pont
       if($miss){ New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null; $img.Save((Join-Path $CaptchaShotDir 'status_ultimo.png')) | Out-Null }
       $img.Dispose()
       Press-Vk $StatusKey $HotkeyHoldMs; Start-Sleep -Milliseconds 300; $fechou = $true   # fecha
-      if($miss){ Log ("status: nao li " + ($miss -join ',') + " (li " + (($v.GetEnumerator() | % { "$($_.Key)=$($_.Value)" }) -join ',') + "). Print em captcha\status_ultimo.png") } else { $out = $v }
+      foreach($k in @('For','Agi','Vit','Ene')){ if($miss -notcontains $k){ $script:stCarry[$k] = [int]$v[$k] } }   # o que FOI lido vira memoria
+      # Uma leitura 3-de-4 nao pode valer zero. Neste cliente o OCR do Windows simplesmente NAO enxerga a linha
+      # da Vitalidade - confirmado no print salvo, em pt-BR e en-US, escalas 1x a 4x, cru e binarizado: devolve
+      # so o "(+0)" da linha. Foram 429 leituras perdidas assim e o char empilhou 423 MIL pontos sem gastar um.
+      # Um atributo so muda quando o proprio bot manda /f /a /v /e, entao "ultimo lido + o que mandei desde
+      # entao" (mantido em $stCarry) e valor EXATO, nao chute.
+      $script:stParcial = @()
+      foreach($k in $miss){ if($null -ne $script:stCarry[$k]){ $v[$k] = $script:stCarry[$k]; $script:stParcial += $k } }
+      $semFonte = @('For','Agi','Vit','Ene') | ? { -not $v.ContainsKey($_) }
+      if($semFonte){ Log ("status: nao li " + ($semFonte -join ',') + " e nao tenho valor guardado (li " + (($v.GetEnumerator() | % { "$($_.Key)=$($_.Value)" }) -join ',') + "). Print em captcha\status_ultimo.png") }
+      else {
+        if($script:stParcial.Count){ Log ("status: OCR nao leu " + ($script:stParcial -join ',') + "; usando o valor que o bot ja sabia (" + (($script:stParcial | % { "$_=$($v[$_])" }) -join ' ') + "). Print em captcha\status_ultimo.png") }
+        $out = $v
+      }
       break
     }
     if($try -eq 5){   # desistiu: salva a tela pra dar pra ver se a janela ESTAVA aberta (OCR falhou) ou nao abriu mesmo (tecla C engolida)
@@ -1243,6 +1267,9 @@ function Master-Reset {   # atributos cheios: /darmr -> tela de selecao -> clica
   $conf = Read-Status
   if(-not $conf){ Log "/darmr: nao consegui reler o status pra confirmar, deixo pro proximo tick"; return }
   if((Points-Needed $conf) -gt 0){ Log "/darmr CANCELADO: a releitura mostra F=$($conf.For) A=$($conf.Agi) V=$($conf.Vit) E=$($conf.Ene) (a 1a leitura estava errada)"; return }
+  # Nao BLOQUEIA: se um atributo veio da memoria e ela estiver errada, o proprio servidor recusa o /darmr e o
+  # bloco abaixo ja trata isso ("/darmr NAO APLICOU"). Mas registra, porque e a decisao mais cara do ciclo.
+  if($script:stParcial.Count){ Log "/darmr indo com $($script:stParcial -join ',') vindo da memoria (OCR nao leu a linha) - se o servidor recusar, e aqui que se olha" }
   if(-not (Send-Chat "/darmr")){ return }
   Notify "MudinhoX" "Atributos no maximo: mandei /darmr. Tentando entrar de novo com o personagem."
   Wait 10
