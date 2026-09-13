@@ -16,7 +16,7 @@ rpa_*.log.bak
 # estado do bot (fase/warmup/metricas do MR), gerado em runtime. E POR PERSONAGEM: subir isso no repo faria
 # outra maquina comecar com o mrs/resets de um char que nao e o dela.
 estado.txt
-# backups pontuais do estado (estado.txt.bak-fenrir, .bak-1156, ...)
+# backups pontuais do estado (estado.txt.bak-<motivo>)
 *.bak-*
 
 # fixtures do -TestVisao sao prints grandes (~4MB cada); mantenha local ou use Git LFS
