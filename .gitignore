@@ -1,0 +1,14 @@
+# prints de captcha/debug (gerados em runtime — chegam a varios GB); mantem so o exemplo
+captcha/*
+!captcha/exemplo.png
+
+# logs e backups
+rpa.log
+rpa_*.log.bak
+
+# flags e temporarios
+*.flag
+.rpa_mon.tmp
+
+# scratch/backup do editor
+*.bak
