@@ -3,6 +3,7 @@ $StatCmds  = @( @{Cmd='/f';Key='For'}, @{Cmd='/a';Key='Agi'}, @{Cmd='/v';Key='Vi
 $StatOrder = 'Ene','Agi','For','Vit'
 $StatStep = 5000
 $StatMinCmd = 1000
+$StatMinOutros = 1000
 $StatMaxValue = 32767
 $StatStages = @(1..([Math]::Floor(($StatMaxValue - 1) / $StatStep)) | % { $_ * $StatStep }) + $StatMaxValue
 # pega as 3 funcoes puras direto do .ps1 (sem carregar o bot inteiro)
@@ -51,6 +52,14 @@ foreach($ini in (St 0 0 0 0), (St 12000 9800 3000 20500), (St 32767 32767 30000 
   $espaco = ($StatOrder | % { 32767 - $rr.St[$_] } | measure -Sum).Sum
   if($rr.Pts -gt 10000 -and $espaco -gt 10000){ throw "sobraram $($rr.Pts) pontos com $espaco de espaco livre" }
 }
+# 7. Points-Needed / Stat-Stage
+# 6b. piso separado: baixando so o de /f /v /e, o /a CONTINUA protegido (valor pequeno nele teleporta pra AIDA)
+$StatMinOutros = 1
+$r6 = Run (St 32767 32000 32767 32767) 500      # so o Agi falta, e /a nao pode receber 500
+if($r6.Cmds.Count -ne 0){ throw "/a recebeu valor pequeno mesmo com o piso proprio: $($r6.Cmds -join '|')" }
+$r7 = Run (St 32000 32767 32767 32767) 500      # so a For falta: com piso baixo, pode receber
+if($r7.Cmds -join '|' -ne '/f 500'){ throw "com StatMinOutros=1 o /f deveria aceitar 500: $($r7.Cmds -join '|')" }
+$StatMinOutros = 1000
 # 7. Points-Needed / Stat-Stage
 if((Points-Needed (St 0 0 0 0)) -ne 131068){ throw "Points-Needed do zero errado" }
 if((Stat-Stage (St 5000 5000 5000 4999)) -ne 5000){ throw "etapa deveria continuar em 5000 ate todos chegarem" }

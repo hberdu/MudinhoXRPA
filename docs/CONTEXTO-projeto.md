@@ -144,3 +144,11 @@ Rodada 7, 2026-08-31 23:50:
 - **`Podar-Shots` tambem no start**: a poda so rodava quando um captcha aparecia; sem captcha, os 4.9GB ficavam la. Agora tambem no boot, e loga quantos MB liberou.
 - **Preflight no start do bot** (`Run-Preflight $false`, sem checar spot porque o bot ainda vai warpar): 10s conferindo tudo evita a noite perdida por algo obvio. NAO bloqueia, so avisa. O `-Preflight` manual continua checando o spot tambem.
 - `test_ciclos.ps1`: mediana ignorando etiquetas, divisao da culpa, ciclo sem etiqueta virando '?', Tag-Ciclo sem duplicata, formato antigo.
+
+Rodada 8, 2026-09-01 01:00 - achados da analise do log do dia (2187 linhas, 10:06->23:51):
+- **O bot nao rodou desde 21:40 de 31/08.** Ultima atividade real de farm 21:38. Tudo depois sao testes. Ou seja: correcoes de foco, /darmr, watchdog, metricas, preflight e etiquetas de ciclo **nunca executaram contra o jogo**.
+- **Detector de dragoes = falso positivo, provado**: das 26 deteccoes, **21 na mesma coluna x=655** ((655,503) 10x, (655,269) 8x, (655,243) 3x), 561-615px cada. Mob se move e morre; mesmo pixel 21 vezes e cenario. Correcao `$GoldRepetMax`=4: conta deteccoes por coordenada, para e avisa. Vale mesmo com `$GoldPix` errado (auto-validante).
+- **Nunca saiu um comando de stat <1000 em 2187 linhas.** O caminho que FECHA o cap exato (`/f 767`) nunca rodou — e o /darmr inteiro depende dele. Criado `-TestStatMin`: le status, manda `/f 300`, rele e compara. NAO RODOU AINDA (UAC pendente).
+- **Custo real do bug de deadlock, medido no log**: `77936 pontos | etapa 30000 | F=29856 A=30000 V=30000 E=30000 -> nada a distribuir`. Forca precisava de **144** pontos e isso congelou **77936**. Depois da correcao das etapas: ocorrencias de "nada a distribuir" cairam de 132 (mediana 576 parados) pra 6 (mediana 496).
+- **`$StatMinCmd` dividido**: `$StatMinCmd` (1000) vale so pro `/a`, que tem perigo REAL documentado (teleporta pra AIDA). `$StatMinOutros` (1000, a baixar) vale pra /f /v /e, onde o piso era so precaucao nunca testada. Teste 6b no test_stats cobre: com `$StatMinOutros=1` o /f aceita 500 e o /a continua recusando.
+- NAO usar a comparacao "18% de falha de status antes vs 74% depois": a janela pos-21h tem 19 minutos, rodando codigo ANTERIOR as correcoes, e justo enquanto o usuario usava o PC. Mede o problema, nao a solucao. Continua sem baseline limpa.

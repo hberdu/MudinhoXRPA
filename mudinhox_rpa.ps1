@@ -16,7 +16,7 @@
   Requisito: o jogo precisa estar visivel na hora da leitura. Se outra janela estiver na frente, o bot traz o jogo
   por ~1s, le, e devolve o foco pra janela que voce estava usando (nesse caso le a cada 60s em vez de 10s).
 #>
-param([switch]$Check, [string]$TestImage, [switch]$TestInv, [switch]$TestMix, [switch]$TestNpc, [switch]$TestGold, [switch]$TestVisao, [switch]$Preflight)
+param([switch]$Check, [string]$TestImage, [switch]$TestInv, [switch]$TestMix, [switch]$TestNpc, [switch]$TestGold, [switch]$TestVisao, [switch]$Preflight, [switch]$TestStatMin)
 
 # ---------- CONFIG (coordenadas relativas a area cliente do jogo, 1920x1009) ----------
 $TargetLevel   = 350
@@ -47,7 +47,8 @@ $StatOrder     = 'Ene','Agi','For','Vit'          # ordem de distribuicao: energ
 $StatStep      = 5000    # sobe de 5k em 5k: 5000, 10000, ... 30000 e por fim o cap. Etapas montadas logo abaixo de $StatMaxValue
 $StatMaxLeftover = 10000 # nao pode sobrar mais que isso de pontos nao distribuidos; acima disso o bot avisa em vez de continuar resetando
 $StatMinAvail  = 1       # menos que isso de pontos disponiveis: nao distribui (1 = sempre tenta; um atributo pode fechar o cap com poucos pontos)
-$StatMinCmd    = 1000    # valor MINIMO por comando de stat. /a com valor pequeno (<100) teleporta pra AIDA; abaixo de 1000 o atributo nem recebe (fica pro proximo, com mais pontos)
+$StatMinCmd    = 1000    # piso do /a. Perigo REAL: /a com valor pequeno (<100) teleporta pra AIDA. Nao baixe.
+$StatMinOutros = 1000    # piso de /f /v /e. Era so precaucao (nunca testado). Baixe pra ~1 depois que -TestStatMin confirmar que o servidor aceita
 $StatEverySec  = 15      # distribui os pontos a cada N seg enquanto upa (alem de logo apos cada reset e antes de cada /resetar)
 $StatRoundSec  = 0.5     # espera entre uma rodada de distribuicao e a releitura do status
 # Velocidade do teclado/chat. 40/40 e o valor testado que NAO embaralha - nao baixe (ja fez /s18 sair invalido e queimar 4 warps).
@@ -135,6 +136,7 @@ $GoldCell      = 26       # agrega os pixels dourados em blocos de N px (o mob e
 $GoldBlobMin   = 30       # minimo de pixels dourados no bloco pra considerar que tem mob ali
 $GoldSelfR     = 90      # ignora esse raio em volta do centro (seu personagem tem fogo/asas). 150 escondia o mob colado em voce; o filtro de cor ja rejeita laranja. CALIBRAR com -TestGold
 $GoldStepSec   = 2.0      # espera depois de mandar o personagem pro bloco dourado
+$GoldRepetMax  = 4       # mesma coordenada N vezes na caca = cenario, nao mob: para e avisa (no log de 31/08 foram 21 de 26 deteccoes no mesmo x)
 $GoldRoamSec   = 4.0      # sem nada dourado na tela: anda pra um lado e procura de novo
 # ---------------------------------------------------------------------------------------
 
@@ -628,12 +630,15 @@ function Plan-Stats($st,[int]$p){   # TODOS os comandos que os $p pontos dao con
       $faltaEtapa = $stage - $sim[$k]
       if($faltaEtapa -le 0){ continue }
       $faltaCap = $StatMaxValue - $sim[$k]
+      $sc = $StatCmds | ? { $_.Key -eq $k } | select -First 1
+      # /a tem perigo REAL documentado (valor pequeno teleporta pra AIDA). Pros outros o piso era so precaucao:
+      # baixe $StatMinOutros depois de confirmar com -TestStatMin que o servidor aceita valor pequeno em /f /v /e.
+      $minCmd = if($sc.Cmd -eq '/a'){ $StatMinCmd } else { $StatMinOutros }
       $amt = [Math]::Min($p, $faltaEtapa)
       # se o que falta pra fechar a etapa e menor que o minimo por comando, passa um pouco da meta (limitado pelo cap):
       # senao a etapa inteira TRAVA por causa de um atributo faltando <1000, e os pontos ficam empilhando pra sempre
-      if($amt -lt $StatMinCmd){ $amt = [Math]::Min($p, [Math]::Min($StatMinCmd, $faltaCap)) }
-      $sc = $StatCmds | ? { $_.Key -eq $k } | select -First 1
-      $piso = if($sc.Cmd -ne '/a' -and $amt -eq $faltaCap){ 1 } else { $StatMinCmd }   # so manda <1000 quando e pra FECHAR o cap (e nunca no /a, que teleporta pra AIDA)
+      if($amt -lt $minCmd){ $amt = [Math]::Min($p, [Math]::Min($minCmd, $faltaCap)) }
+      $piso = if($sc.Cmd -ne '/a' -and $amt -eq $faltaCap){ 1 } else { $minCmd }   # so manda abaixo do piso quando e pra FECHAR o cap (e nunca no /a)
       if($amt -lt $piso){ continue }
       $out += ("{0} {1}" -f $sc.Cmd, $amt); $p -= $amt; $sim[$k] += $amt; $mandou = $true
     }
@@ -1020,7 +1025,7 @@ function Hunt-Golden {   # botao DRAGOES: /tarkan2 e caca os Golden Tantalos ate
   }
   if(-not (Same-Map (Read-Map $null) $GoldMap)){ Notify "MudinhoX" "Nao consegui chegar em Tarkan com $GoldCmd."; return }
   Start-Helper   # o helper bate no que estiver perto; o bot so leva o personagem ate o mob dourado
-  $fim = (Get-Date).AddMinutes($GoldMinutes); $achados = 0; $vazios = 0
+  $fim = (Get-Date).AddMinutes($GoldMinutes); $achados = 0; $vazios = 0; $vistos = @{}
   while((Get-Date) -lt $fim -and -not $script:stop -and -not $script:restartCycle){
     $img = Capture-Game
     if(-not $img){ Wait 2; continue }
@@ -1028,7 +1033,17 @@ function Hunt-Golden {   # botao DRAGOES: /tarkan2 e caca os Golden Tantalos ate
     $alvo = Find-Gold $img; $img.Dispose()
     if($alvo){
       $vazios = 0; $achados++
-      Log "dragoes: dourado em ($($alvo.X),$($alvo.Y)) [$($alvo.N) px douradros], indo bater"
+      # Mob se move e morre. Mesma coordenada varias vezes = CENARIO, nao mob. No log de 31/08 foram 21 de 26
+      # deteccoes na coluna x=655, e a caca passou o tempo batendo em nada. Vale mesmo com o filtro de cor errado.
+      $chave = "$($alvo.X),$($alvo.Y)"
+      $vistos[$chave] = [int]$vistos[$chave] + 1
+      if($vistos[$chave] -ge $GoldRepetMax){
+        Log "dragoes: achei '$chave' $($vistos[$chave]) vezes - isso e cenario, nao mob. Parando (calibre \$GoldPix com -TestGold)."
+        Notify "MudinhoX" "A caca esta batendo sempre no mesmo ponto ($chave): o filtro de cor precisa de calibracao. Parei."
+        $null = Save-Shot 'gold_falso_positivo.png'
+        break
+      }
+      Log "dragoes: dourado em $chave [$($alvo.N) px dourados], indo bater"
       $null = Click-Client $alvo.X $alvo.Y
       Wait $GoldStepSec
       Start-Helper
@@ -1208,6 +1223,34 @@ if($Preflight){
   $f = Run-Preflight $true
   Log $(if($f){ "Preflight: $f FALHA(S) - resolva antes de deixar rodando sozinho" } else { 'Preflight: tudo OK, pode deixar rodando' })
   exit $(if($f){ 1 } else { 0 })
+}
+if($TestStatMin){   # o servidor aceita stat ABAIXO de 1000? Disso depende fechar o cap em 32767 - e sem fechar, o /darmr nunca sai.
+  # Em 2187 linhas de log nunca saiu um comando <1000, entao esse caminho critico nunca rodou. Aqui ele roda de verdade.
+  $val = 300   # valor pequeno, seguro: so em /f (o /a com valor pequeno teleporta pra AIDA)
+  Log "TestStatMin: vou mandar '/f $val' e conferir se a Forca sobe. Precisa de pontos disponiveis."
+  Hold-Focus
+  try {
+    $a = Read-Status
+    if(-not $a){ Log "TestStatMin: nao consegui ler o status antes. Abortando."; exit 1 }
+    Log "  antes:  For=$($a.For)  Pts=$($a.Pts)"
+    if([int]$a.Pts -lt $val){ Log "TestStatMin: so tem $($a.Pts) pontos disponiveis, precisa de pelo menos $val. Farme um pouco e rode de novo."; exit 1 }
+    if([int]$a.For + $val -gt $StatMaxValue){ Log "TestStatMin: Forca ja esta perto do cap, o teste passaria dele. Abortando."; exit 1 }
+    $null = Send-Chat "/f $val"
+    Wait 3
+    $b = Read-Status
+    if(-not $b){ Log "TestStatMin: nao consegui ler o status depois. Inconclusivo."; exit 1 }
+    Log "  depois: For=$($b.For)  Pts=$($b.Pts)"
+    $ganho = [int]$b.For - [int]$a.For
+    if($ganho -eq $val){
+      Log "TestStatMin: ACEITOU (+$ganho de Forca). Da pra baixar o piso de /f /v /e e fechar o cap exato."
+    } elseif($ganho -eq 0){
+      Log "TestStatMin: RECUSOU (Forca nao mudou). O piso de 1000 tem que ficar - e ATENCAO: assim o cap 32767 pode ser inalcancavel e o /darmr nunca sai."
+      Notify "MudinhoX" "O servidor recusou /f $val. Fechar o cap exato pode ser impossivel - o /darmr depende disso."
+    } else {
+      Log "TestStatMin: resultado estranho, Forca subiu $ganho em vez de $val. Conferir manualmente."
+    }
+  } finally { Release-Focus }
+  exit 0
 }
 if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guardados em fixtures\ (nao precisa do jogo aberto)
   $falhas = 0
