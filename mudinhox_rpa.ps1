@@ -151,7 +151,7 @@ $InvMenuAncora = '(?i)^(shop|personagem|guild|mercado|invent)'   # se nenhuma de
 $InvMenuClickDy = -45    # no menu, o item e um ICONE com o rotulo EMBAIXO: o OCR acha o texto, mas o clicavel esta ACIMA dele
 $InvMenuWords  = '(?i)^invent'   # item do menu que abre o inventario
 $InvMaxFalhas  = 3       # apos N falhas seguidas de abrir o inventario, desiste (nao fica apertando tecla desconhecida no personagem)
-$InvCheckSec   = 300      # checa o inventario a cada N seg enquanto farma
+$InvCheckSec   = 120     # checa o inventario a cada N seg (a contagem e aproximada, mas confirma cheio mais cedo que o teto de tempo)
 # Evento dos Dragoes Dourados: botao -> /lorencia -> procura os Golden Dragon (mobs DOURADOS) pela tela, anda ate eles e mata.
 # O chat anuncia dois bichos diferentes: "Golden Dragon vivo(s) em Lorencia" e "Golden Tantalo vivo(s) em Tarkan". O alvo aqui e o DRAGAO, em Lorencia.
 $GoldCmd       = '/lorencia'
@@ -309,7 +309,7 @@ function Wait([double]$sec){   # Start-Sleep que mantem a janelinha viva e obede
 }
 function Show-Ui {
   $f = New-Object System.Windows.Forms.Form
-  $f.Text = 'MudinhoX RPA'; $f.Width = 400; $f.Height = 300; $f.TopMost = $true; $f.FormBorderStyle = 'FixedToolWindow'
+  $f.Text = 'MudinhoX RPA'; $f.Width = 400; $f.Height = 330; $f.TopMost = $true; $f.FormBorderStyle = 'FixedToolWindow'
   $f.StartPosition = 'Manual'; $f.Location = New-Object System.Drawing.Point(10, ([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height - 310))   # canto INFERIOR ESQUERDO: nao cobre play(topo-esq), minimapa(topo-dir), inventario(dir) nem chat/level(centro-baixo)
   $script:status = New-Object System.Windows.Forms.Label; $script:status.SetBounds(10,12,160,22); $script:status.Text = 'iniciando...'
   $script:btnPause = New-Object System.Windows.Forms.Button; $script:btnPause.SetBounds(175,6,100,28); $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'
@@ -320,7 +320,8 @@ function Show-Ui {
   $script:btnMR     = New-Object System.Windows.Forms.Button; $script:btnMR.SetBounds(264,40,120,32);     $script:btnMR.Text = "Atribuir tudo`n+ MR"; $script:btnMR.BackColor = 'MediumPurple'
   $script:btnMix    = New-Object System.Windows.Forms.Button; $script:btnMix.SetBounds(10,76,122,26);    $script:btnMix.Text = 'MODO JOIAS'; $script:btnMix.BackColor = 'DarkCyan'
   $script:btnGold   = New-Object System.Windows.Forms.Button; $script:btnGold.SetBounds(137,76,247,26); $script:btnGold.Text = "MODO DRAGOES ($GoldCmd)"; $script:btnGold.BackColor = 'Teal'   # NAO usar tom dourado: o -TestGold roda em processo separado (nao mascara a UI) e detectava o proprio botao como dragao
-  $script:logBox = New-Object System.Windows.Forms.TextBox; $script:logBox.SetBounds(10,108,375,150); $script:logBox.Multiline = $true; $script:logBox.ReadOnly = $true; $script:logBox.ScrollBars = 'Vertical'
+  $script:btnMixJa = New-Object System.Windows.Forms.Button; $script:btnMixJa.SetBounds(10,106,374,26); $script:btnMixJa.Text = "MIXAR AGORA (nao espera encher)"; $script:btnMixJa.BackColor = 'SteelBlue'
+  $script:logBox = New-Object System.Windows.Forms.TextBox; $script:logBox.SetBounds(10,138,375,150); $script:logBox.Multiline = $true; $script:logBox.ReadOnly = $true; $script:logBox.ScrollBars = 'Vertical'
   $script:btnPause.Add_Click({ $script:paused = -not $script:paused; $script:btnPause.Text = $(if($script:paused){ 'RETOMAR' } else { 'PAUSAR' }); $script:btnPause.BackColor = $(if($script:paused){ 'ForestGreen' } else { 'Goldenrod' }); Log $(if($script:paused){ 'PAUSADO pelo usuario (mixe as joias; clique RETOMAR pra voltar)' } else { 'retomado pelo usuario' }) })
   $btn.Add_Click({ $script:stop = $true })
   $script:btnWarmup.Add_Click({ $script:phase = 'warmup'; $script:warmupCount = 0; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Save-Estado; Log "[BOTAO] modo WARMUP: /losttower7 ate $WarmupResets resets" })
@@ -344,8 +345,15 @@ function Show-Ui {
     Save-Estado
     Log $(if($script:modo -eq 'dragoes'){ "[BOTAO] MODO DRAGOES: so caca em $GoldCmd, sem reset/darmr/inventario" } else { '[BOTAO] modo DRAGOES desligado: volta ao ciclo de reset/master reset' })
   })
+  # Quando o botao de mix virou alternador de MODO, ficou sem jeito de mandar mixar AGORA. Este devolve isso:
+  # com o inventario cheio na sua frente, nao faz sentido esperar o teto de tempo.
+  $script:btnMixJa.Add_Click({
+    $script:mixNow = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'
+    if($script:modo -ne 'joias'){ $script:restartCycle = $true }   # fora do modo joias, corta o ciclo atual pra ir mixar
+    Log "[BOTAO] MIXAR AGORA: indo pro $MixCmd no proximo tick"
+  })
   $f.Add_FormClosing({ $script:stop = $true })
-  $f.Controls.AddRange(@($script:status,$script:btnPause,$btn,$script:btnWarmup,$script:btnNormal,$script:btnMR,$script:btnMix,$script:btnGold,$script:logBox)); $f.Show(); $script:ui = $f
+  $f.Controls.AddRange(@($script:status,$script:btnPause,$btn,$script:btnWarmup,$script:btnNormal,$script:btnMR,$script:btnMix,$script:btnGold,$script:btnMixJa,$script:logBox)); $f.Show(); $script:ui = $f
 }
 
 # ---------- janela do jogo / foco ----------
