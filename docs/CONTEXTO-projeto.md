@@ -288,3 +288,35 @@ Rodada 13, 2026-09-01 10:25 — 1o MIX REAL funcionou, e revelou 2 bugs:
   chamar `Bater-Heartbeat`, porque aquela funcao tambem acumula TEMPO ATIVO e tempo parado no NPC nao pode
   entrar no `pontos/h`; ao retomar, `$tickLast` e zerado pelo mesmo motivo. (Como o watchdog ainda nao esta
   instalado, isso nunca chegou a acontecer de verdade — mas aconteceria na primeira pausa depois de instalar.)
+
+## 2026-09-01 - o que o log de 4883 linhas disse (numeros, nao palpites)
+
+Contagens sobre a sessao inteira do `rpa.log`:
+
+| sintoma | ocorrencias | o que era |
+|---|---|---|
+| `stats: nao consegui ler o status` | 100 de 1064 leituras (9,4%) | ver abaixo — deixava a janela ABERTA |
+| `sem linha de Pontos (0 a distribuir)` | 84 | leitura de status sem motivo (level parado) |
+| `reset nao aconteceu ... reenviando` | 83 de 179 `/resetar` | o 1o comando some; o REENVIO funciona quase sempre |
+| `nao teleportou pro spot certo` | 27 (16 saindo de `lorencia`) | sempre logo depois de um mix |
+| `ERRO: O termo 'X' nao e reconhecido` | 4 (02:18, 11:57, 13:05, 13:25) | a linha destruida do `Warp-To-Spot` |
+
+- **O `X` matou o bot 4 vezes, nao 2** — e sempre no mesmo ponto: o retorno do mixer pro `/s18`, porque o warp
+  saindo de Lorencia falha na 1a tentativa e e exatamente esse o ramo que continha o `X`. Corrigido + `test_lint.ps1`.
+- **`Read-Status` deixava a janela de status ABERTA ao desistir.** A alternancia aperta C nas tentativas 0, 2 e 4
+  — tres vezes, numero impar, janela aberta — e o bot seguia achando que estava fechada. E o `/resetar` seguinte
+  era digitado com o painel por cima. Bate com os 83 `/resetar` perdidos, quase sempre logo apos uma leitura de
+  status. Agora, ao falhar, ele CONFERE (captura + `Status-Open`) e so aperta C se estiver mesmo aberta — apertar
+  no escuro seria pior, porque se o C nunca chegou o aperto ABRIRIA a janela.
+- **`$ResetWaitSec` 15 -> 8.** Como o reenvio quase sempre resolve na hora, esperar 15s por 83 vezes jogou uns
+  20 min fora. Nao ha risco em reenviar cedo: um `/resetar` a mais e recusado pelo proprio jogo.
+- **`Tick-Stats` so rele o status quando ha MOTIVO.** Ponto so vem de subir de level; com o level parado a
+  releitura so custa foco. Regra: rele se o level mudou desde a ultima leitura, ou se estourou `$StatMaxSec`
+  (90s — o teto existe porque o level as vezes sai ilegivel do OCR e nao da pra confiar so nele). Regressao no
+  `test_ciclos.ps1`, verificada quebrando a condicao de proposito (5 falhas).
+- **`Tick-Stats` saiu do modo joias.** Era o que voce tinha pedido ("nao envolve checkar inventario, checar
+  atributos, resetar nem darmr") e o log mostrava o custo: leituras a cada 15s logando "0 a distribuir" enquanto
+  o `/darmr` esta bloqueado nesse modo. Os pontos acumulados sao gastos assim que voltar pro modo normal.
+- **Ainda sem explicacao: o warp saindo de Lorencia falha na 1a tentativa.** A linha que lia a resposta do
+  servidor era justamente a que o `X` tinha destruido — por isso nunca houve diagnostico. Restaurada; o proximo
+  `nao teleportou` ja loga o `jogo diz (apos /s18): ...`.

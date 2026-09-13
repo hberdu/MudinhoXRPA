@@ -33,7 +33,7 @@ $WarmupResets  = 10          # quantos resets fazer no modo warmup (pos-darmr) a
 $WarpMap       = 'stad'      # nome esperado do mapa do /s18 (Stadium), 4 primeiras letras. So conta "no spot" se o mapa bater com este
 $WarmupMap     = 'lost'      # nome esperado do mapa do /losttower7 (Lost Tower). Evita aceitar mapa errado (ex AIDA) como spot
 $WarpWaitSec   = 9       # espera apos o teleporte (dar tempo do mapa trocar)
-$ResetWaitSec  = 15      # sem captcha e level ainda alto apos N seg -> reenvia /resetar
+$ResetWaitSec  = 8       # sem captcha e level ainda alto apos N seg -> reenvia /resetar. Era 15: no log 83 dos 179 /resetar se perderam (o REENVIO funciona quase sempre na hora), entao esperar 15s so jogava ~20 min fora
 $ResetRetries  = 2       # apos N reenvios de /resetar avisa (mas NUNCA para de reenviar)
 $ResetStuckMin = 5       # preso no reset por N minutos -> reinicia o ciclo (re-warp) em vez de ficar so avisando
 $RenotifySec   = 120     # re-avisa a cada N segundos enquanto espera humano
@@ -50,6 +50,7 @@ $StatMinAvail  = 1       # menos que isso de pontos disponiveis: nao distribui (
 $StatMinCmd    = 1000    # piso do /a. Perigo REAL: /a com valor pequeno (<100) teleporta pra AIDA. Nao baixe.
 $StatMinOutros = 1000    # piso de /f /v /e. Era so precaucao (nunca testado). Baixe pra ~1 depois que -TestStatMin confirmar que o servidor aceita
 $StatEverySec  = 15      # distribui os pontos a cada N seg enquanto upa (alem de logo apos cada reset e antes de cada /resetar)
+$StatMaxSec    = 90      # teto: mesmo com o level parado (ou ilegivel), rele o status a cada N seg
 $StatRoundSec  = 0.5     # espera entre uma rodada de distribuicao e a releitura do status
 # Velocidade do teclado/chat. 40/40 e o valor testado que NAO embaralha - nao baixe (ja fez /s18 sair invalido e queimar 4 warps).
 $KeyHoldMs     = 40      # tempo segurando cada tecla ao digitar
@@ -806,8 +807,16 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
     Wait $StatRoundSec
   }
 }
+# Le o status quando ha MOTIVO pra ler. Pontos so vem de subir de level - com o level parado, abrir a janela
+# de novo so custa: rouba o foco, gasta 2-3s e loga "0 a distribuir". No log foram 84 leituras assim.
+# O teto de tempo continua existindo porque o level as vezes nao e legivel (OCR) e nao da pra confiar so nele.
+$script:statLvlLast = -1; $script:statMax = Get-Date
 function Tick-Stats {   # so roda enquanto upa (nunca durante captcha)
   if((Get-Date) -lt $script:statDue){ return }
+  $mesmoLevel = ($null -ne $script:lvlPrev -and $script:lvlPrev -eq $script:statLvlLast)
+  if($mesmoLevel -and (Get-Date) -lt $script:statMax){ $script:statDue = (Get-Date).AddSeconds((Jit $StatEverySec)); return }
+  $script:statLvlLast = $script:lvlPrev
+  $script:statMax = (Get-Date).AddSeconds($StatMaxSec)
   Distribute-Points
   $script:statDue = (Get-Date).AddSeconds((Jit $StatEverySec))
 }
@@ -863,7 +872,7 @@ function Parse-Attrs($words){   # das words do OCR global: acha cada rotulo (For
 function Ocr-Status($img){ @((Ocr-Bitmap $img).Lines | % { $_.Words }) }
 function Read-Status {   # abre a janela de status (C), le os 4 atributos + pontos, fecha. @{For;Agi;Vit;Ene;Pts} ou $null
   $prev = Focus-Game; if(-not $script:gameFg){ Restore-Focus $prev; return $null }
-  Close-Chat; $out = $null
+  Close-Chat; $out = $null; $fechou = $false
   for($try = 0; $try -lt 6; $try++){
     # C ALTERNA: tentativa par aperta, impar le sem apertar (senao uma leitura ruim FECHA a janela e ele alterna pra sempre).
     # 900ms e o tempo que a janela precisa pra aparecer - cortei pra 350 quando otimizei o tickrate e o "nao consegui ler o status" virou constante.
@@ -882,7 +891,7 @@ function Read-Status {   # abre a janela de status (C), le os 4 atributos + pont
         $v2 = Parse-Attrs $words; foreach($kk in $v2.Keys){ if(-not $v.ContainsKey($kk)){ $v[$kk] = $v2[$kk] } }; if($v2.ContainsKey('Pts')){ $v['Pts'] = $v2['Pts'] } else { $v['Pts'] = Get-Points $words }
       }
       New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null; $img.Save((Join-Path $CaptchaShotDir 'status_ultimo.png')) | Out-Null; $img.Dispose()
-      Press-Vk $StatusKey $HotkeyHoldMs; Start-Sleep -Milliseconds 300   # fecha
+      Press-Vk $StatusKey $HotkeyHoldMs; Start-Sleep -Milliseconds 300; $fechou = $true   # fecha
       $miss = @('For','Agi','Vit','Ene') | ? { -not $v.ContainsKey($_) }
       if($miss){ Log ("status: nao li " + ($miss -join ',') + " (li " + (($v.GetEnumerator() | % { "$($_.Key)=$($_.Value)" }) -join ',') + "). Print em captcha\status_ultimo.png") } else { $out = $v }
       break
@@ -892,6 +901,14 @@ function Read-Status {   # abre a janela de status (C), le os 4 atributos + pont
       $img.Save((Join-Path $CaptchaShotDir 'status_falhou.png')); Log "status: nao abriu em 6 tentativas. Print em captcha\status_falhou.png"
     }
     $img.Dispose(); Wait 1   # nao abriu (tecla ignorada logo apos reset): tenta de novo
+  }
+  # A alternancia deixa a janela ABERTA quando desiste (aperta C nas tentativas 0,2,4 = 3 vezes = aberta), e o
+  # bot segue achando que esta fechada. O proximo /resetar e digitado com o painel de status por cima - e no log
+  # 83 dos 179 /resetar simplesmente sumiram, quase sempre logo depois de uma leitura de status. Fecha na saida.
+  if(-not $fechou){   # nao aperta C no escuro: se a leitura falhou porque o C nem chegou, apertar aqui ABRIRIA
+    $img = Capture-Raw
+    if($script:capOk -and (Status-Open (Ocr-Status $img))){ Press-Vk $StatusKey $HotkeyHoldMs; Start-Sleep -Milliseconds 300; Log "status: janela ficou aberta apos falhar, fechei" }
+    $img.Dispose()
   }
   Restore-Focus $prev; $out
 }
@@ -1470,7 +1487,10 @@ function Ciclo-Joias {   # MODO JOIAS: farma no spot ate encher o inventario, va
           # dispararia a cada $StallSec pausando o farm a toa (visto no log: 2 disparos em 40s, level 400 fixo).
           if($null -ne $lvl -and $lvl -lt $LevelMaximo){ if(-not (Check-Progress $lvl $img)){ $img.Dispose(); continue } }
           else { $script:lvlChangedAt = Get-Date }
-          Tick-Stats            # continua distribuindo pontos (o /darmr fica bloqueado neste modo)
+          # Nada de Tick-Stats aqui: voce pediu um ciclo que "nao envolve checkar inventario, checar atributos,
+          # resetar nem darmr". O log mostrava o custo - 84 leituras de status logando "0 a distribuir",
+          # cada uma roubando o foco por 2-3s pra nada (no modo joias os pontos nao servem pra nada, o /darmr
+          # esta bloqueado). Os pontos que sobrarem sao distribuidos assim que voltar pro modo normal.
           Tick-Msgs $img        # "inventario cheio" no chat liga $script:mixNow
           Tick-Human
           # A contagem periodica de celulas foi REMOVIDA: ela abria e fechava o inventario a cada 2 min (dois

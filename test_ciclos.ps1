@@ -46,5 +46,32 @@ Chk 'lento sem etiqueta vira ?' $porCausa2['?'] 200
 $script:tagsCiclo = @(); Tag-Ciclo 'warp'; Tag-Ciclo 'warp'; Tag-Ciclo 'stall'
 Chk 'Tag-Ciclo sem duplicata' ($script:tagsCiclo -join '+') 'warp+stall'
 
-if($script:erros -eq 0){ "OK: mediana ignora etiquetas, culpa dividida certo, formato antigo aceito" }
+
+# --- Tick-Stats so rele o status quando ha motivo -------------------------------------------------
+# 84 leituras do log logaram "0 a distribuir": o level estava parado, entao nao havia ponto novo pra
+# gastar. Cada uma custa foco + 2-3s. A regra: rele se o level MUDOU, ou se estourou o teto de tempo.
+$StatEverySec = 15; $StatMaxSec = 90; $JitterPct = 0
+function Jit([double]$sec){ $sec }
+$script:chamadas = 0
+function Distribute-Points { $script:chamadas++ }
+$src2 = Get-Content "$PSScriptRoot\mudinhox_rpa.ps1" -Raw
+if($src2 -notmatch '(?s)(\$script:statLvlLast = -1.*?\r?\n\})'){ throw "nao achei o Tick-Stats" }
+. ([scriptblock]::Create($Matches[1]))
+
+$script:statDue = Get-Date; $script:lvlPrev = 100
+Tick-Stats                                  # primeira leitura sempre acontece
+Chk 'primeira leitura' $script:chamadas 1
+$script:statDue = Get-Date; Tick-Stats      # level parado, dentro do teto: pula
+Chk 'level parado nao rele' $script:chamadas 1
+$script:statDue = Get-Date; $script:lvlPrev = 101; Tick-Stats
+Chk 'level subiu, rele' $script:chamadas 2
+$script:statDue = Get-Date; $script:statMax = (Get-Date).AddSeconds(-1); Tick-Stats
+Chk 'teto de tempo forca a releitura' $script:chamadas 3
+# level ilegivel (OCR falhou): nao pode congelar a distribuicao pra sempre
+$script:statDue = Get-Date; $script:lvlPrev = $null; Tick-Stats
+Chk 'level ilegivel rele mesmo assim' $script:chamadas 4
+# e o intervalo normal continua valendo: sem $statDue vencido, nao le nada
+$script:statDue = (Get-Date).AddSeconds(30); $script:lvlPrev = 999; Tick-Stats
+Chk 'respeita o intervalo' $script:chamadas 4
+if($script:erros -eq 0){ "OK: mediana ignora etiquetas, culpa dividida certo, Tick-Stats so rele quando precisa" }
 else { "$($script:erros) FALHA(S)"; exit 1 }
