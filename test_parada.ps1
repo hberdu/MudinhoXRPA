@@ -10,7 +10,11 @@ $tmp = Join-Path $env:TEMP ("rpa_test_" + [guid]::NewGuid().ToString('N').Substr
 New-Item -ItemType Directory -Path $tmp | Out-Null
 $StopFile      = Join-Path $tmp 'stop.flag'
 $HeartbeatFile = Join-Path $tmp 'heartbeat.txt'
+# MULTIBOX: no modo -Slot cada bot le o SEU stop$N.flag, e um stop.flag sem numero derruba todos.
+$StopAllFile   = Join-Path $tmp 'stop_geral.flag'
+$Slot          = 0
 function Log($m){ $script:ultimoLog = $m }
+function Input-Unlock { }   # a Check-Stop solta a trava de entrada ao morrer; aqui nao ha mutex nenhum
 $script:logW = $null; $script:ui = $null
 
 # Check-Stop termina em `exit`, que mataria o teste: troca por `return` e o resto do corpo roda igual.
@@ -42,6 +46,23 @@ Check-Stop
 Chk 'stop.flag externo para o bot'       $script:stop               $true
 Chk 'e o motivo fica registrado'         $script:stopReason         'stop.flag'
 Chk 'e o arquivo e consumido'            (Test-Path $StopFile)      $false
+
+# --- MULTIBOX: stop.flag SEM numero derruba todos os slots ----------------------------------------
+# Com quatro janelinhas na tela, fechar uma por uma no meio de um /darmr foi o que deixou o estado do char
+# inconsistente em 08/09. O flag geral e o botao de "para tudo".
+Remove-Item $StopFile,$HeartbeatFile,$StopAllFile -ErrorAction SilentlyContinue
+'' | Set-Content $StopAllFile
+$Slot = 2; $script:stop = $false; $script:stopReason = 'usuario'
+Check-Stop
+Chk 'flag geral para o slot'             $script:stop               $true
+Chk 'e diz que foi o geral'              $script:stopReason         'stop.flag geral'
+# ...e um slot NAO apaga o flag geral: os outros tres ainda precisam ve-lo
+Chk 'o flag geral sobrevive ao slot'     (Test-Path $StopAllFile)   $true
+# fora do modo multibox (Slot 0) o flag geral E o stop.flag de sempre, entao nao ha caminho novo
+Remove-Item $HeartbeatFile -ErrorAction SilentlyContinue
+$Slot = 0; $script:stop = $false; $script:stopReason = 'usuario'
+Check-Stop
+Chk 'sem slot, o flag geral e ignorado'  $script:stop               $false
 
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 

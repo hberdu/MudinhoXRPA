@@ -16,10 +16,23 @@
   Requisito: o jogo precisa estar visivel na hora da leitura. Se outra janela estiver na frente, o bot traz o jogo
   por ~1s, le, e devolve o foco pra janela que voce estava usando (nesse caso le a cada 60s em vez de 10s).
 #>
-param([switch]$Check, [string]$TestImage, [string]$TestStatus = "", [switch]$TestInv, [switch]$TestMix, [switch]$TestNpc, [switch]$TestGold, [switch]$TestVisao, [switch]$Preflight, [switch]$TestStatMin)
+param([switch]$Check, [string]$TestImage, [string]$TestStatus = "", [switch]$TestInv, [switch]$TestMix, [switch]$TestNpc, [switch]$TestGold, [switch]$TestVisao, [switch]$Preflight, [switch]$TestStatMin,
+      # MULTIBOX: -Slot 1..N liga o modo N-clientes. 0 (padrao) = um cliente so, tudo exatamente como antes.
+      # Um PROCESSO por cliente, nao um processo controlando N janelas: todo o estado do bot (fase, warmupCount,
+      # resets, lvlPrev, stCarry, mixLast...) vive em variaveis $script:, e transformar isso em estado-por-janela
+      # seria reescrever o arquivo inteiro. Com um processo por slot a logica de um cliente fica intocada.
+      [int]$Slot = 0,
+      # Qual janela do mudx este slot controla. Vazio = pega a N-esima ordenada por PID (estavel enquanto ninguem
+      # fecha cliente). Passe o PID explicito se quiser amarrar slot a personagem.
+      [int]$GamePid = 0)
 
 # ---------- CONFIG (coordenadas relativas a area cliente do jogo, 1920x1009) ----------
-$TargetLevel   = 350     # level pra resetar. Nunca abaixo de $LevelMinReset (o servidor recusa). Fixado em 350 por decisao do usuario: o A/B tinha apontado 380 (272925 vs 175938 pontos/h), mas os dois bracos rodaram em sequencia e nao intercalados, entao a comparacao nao era controlada
+$TargetLevel   = 305     # level pra resetar. Nunca abaixo de $LevelMinReset (o servidor recusa).
+                         # 305 desde 11/09: esta conta tem FENRIR, que baixa a exigencia de reset em 45 levels (350 -> 305).
+                         # Era 350 por decisao sua; o A/B de antes tinha apontado 380 (272925 vs 175938 pontos/h), mas os
+                         # dois bracos rodaram em sequencia e nao intercalados, entao a comparacao nao era controlada.
+                         # O que aquele A/B sugere e que alvo MENOR rende mais - o ciclo encurta mais do que os pontos
+                         # por reset caem -, entao 305 deve render acima de 350. Da pra conferir no `pontos/h` do log.
 $PlayBtn       = @{ X = 77;   Y = 33 }                     # centro do botao play/pause (canto sup. esquerdo)
 $LevelBox      = @{ X = 1080; W = 140; H = 40; YFromBottom = 82 }    # numero do level na barra inferior; Y medido a partir da BASE da area cliente (aguenta resolucao/altura diferente)
 $PollSec       = 6       # intervalo de leitura do level com o jogo na frente
@@ -34,9 +47,29 @@ $NoFocusRead   = $true   # JOGO NOUTRO MONITOR, sempre visivel. Liga o modo "nao
                          # uma janela por cima dela vira leitura de lixo. $false = comportamento antigo (jogo em 1 monitor so).
 $PollBgSec     = 60      # intervalo quando outra janela esta na frente (cada leitura rouba o foco por ~1s)
 $WarpCmd       = '/k37'   # comando de teleporte pro spot de farm normal (troque aqui se mudar de spot). Era /s18 (Stadium)
+                          # MULTIBOX: os quatro slots usam ESTE mesmo spot. Houve um $SlotSpots que dava um spot
+                          # por slot (/k37, /k36, ...) pra eles nao dividirem mapa; saiu a pedido do usuario, que
+                          # sobe os quatro em PARTY - e party quer os chars JUNTOS, no mesmo lugar.
 $WarmupCmd     = '/losttower7'   # apos /darmr o personagem volta fraco em Lorencia: farma AQUI (Lost Tower 7) ate juntar os primeiros resets
-$WarmupResets  = 3           # quantos resets fazer no modo warmup (pos-darmr) antes de voltar ao spot normal ($WarpCmd). Era 10: medido, cada reset em Lost Tower custa ~220s contra 70-110s no Stadium, pelos mesmos ~6200 pontos - 10 resets la eram 73-78% do tempo do MR inteiro
-$WarmupTeste   = $false  # $true faz o bot TESTAR o spot normal logo apos o /darmr e pular o warmup se o char aguentar. Desligado a pedido do usuario, que prefere os $WarmupResets resets garantidos no Lost Tower antes de voltar pro /s18
+$WarmupResets  = 3           # quantos resets fazer no modo warmup (pos-darmr) antes de voltar ao spot normal ($WarpCmd).
+                             # Era 10, depois 3. Chegou a ir pra 2 em 08/09 e voltou pra 3 no rollback daquele lote.
+                             # Medido em 9 master resets: o warmup e o MAIOR ponto isolado de demora - 13.9 min de um
+                             # MR de 41.8 (33%) pra fazer 3 dos ~23 resets. Cada reset la custa 255s contra 74s no
+                             # $WarpCmd. Vale reduzir de novo, mas UMA mudanca por vez e com o bot medido depois.
+$WarmupTeste   = $false  # TESTA o spot normal logo apos o /darmr: fechou um reset la em ate $WarmupTesteSec, pula o
+                         # warmup inteiro; estourou, cai pro Lost Tower e faz os $WarmupResets normalmente.
+                         # Ligado em 08/09 junto com outras 2 mudancas e revertido no mesmo dia - NAO por culpa dele:
+                         # o lote inteiro voltou porque o painel de status parou de abrir e nao deu pra isolar qual
+                         # das tres causou. Este e o candidato mais promissor pra tentar de novo, SOZINHO.
+$MrsPorDia     = 0       # COTA DIARIA de master resets. 0 = SEM LIMITE (pedido do usuario em 07/09: "o maximo possivel").
+                         # A cota foi criada quando o bot fazia 6 MR/dia e o limite de 10 nunca encostava; depois que o
+                         # captcha e a cauda foram corrigidos ele passou pra ~0.61h por MR (~39/dia) e o teto passou a
+                         # morder antes do meio-dia. O mecanismo continua inteiro aqui: e so por um numero > 0 de volta.
+                         # Com valor > 0: batendo a cota o bot PARA DE RESETAR e cai no modo joias (farma, mixa, repete)
+                         # ate virar o dia; a meia-noite ele volta sozinho ao ciclo de reset. 0 = sem limite.
+                         # A contagem e por DIA DO CALENDARIO e mora no estado.txt (mrsDia/mrsDiaData): reiniciar o bot
+                         # nao fura a cota, e maquina desligada a noite toda tambem nao - o que vale e a data.
+                         # NAO encerra o processo: sem watchdog, bot fechado nao volta sozinho no dia seguinte.
 $WarmupTesteSec = 300    # o teste falha se o primeiro ciclo no spot normal passar disso (ciclo saudavel la e 70-110s; ate o Lost Tower fecha em ~220s). Estourou = char fraco demais, cai pro warmup
 $WarpMap       = 'kant'      # 4 primeiras letras do nome que o minimapa mostra no spot do $WarpCmd - o /k37 cai em KANTURU (confirmado no log de 12:01). VAZIO = o bot APRENDE no primeiro teleporte e grava no estado.txt.
                              # Era 'stad' (Stadium, do /s18). Chutar o nome errado e pior que nao saber: o bot acha que nunca chegou e re-teleporta a noite toda.
@@ -103,18 +136,23 @@ $PlayTries     = 3       # clica no play ate N vezes; se nao ligar, para de clic
 $HumanMinSec   = 120; $HumanMaxSec = 420   # a cada X seg (aleatorio) faz algo "humano": anda um pouco, abre/fecha janela, mexe o mouse
 # Modos de teste escrevem em OUTRO arquivo. Analisar o rpa.log e como todo bug serio deste projeto foi achado,
 # e cada -TestVisao despejava ~30 linhas de "OK ..." no meio do log do bot, quebrando as contagens.
-$LogFile       = Join-Path $PSScriptRoot $(if($Check -or $TestImage -or $TestStatus -or $TestInv -or $TestMix -or $TestNpc -or $TestGold -or $TestVisao -or $TestStatMin){ 'testes.log' } else { 'rpa.log' })
-$StopFile      = Join-Path $PSScriptRoot 'stop.flag'
-$HeartbeatFile = Join-Path $PSScriptRoot 'heartbeat.txt'   # o bot bate aqui a cada volta; o watchdog externo relanca se ficar velho
+# MULTIBOX: com -Slot N cada instancia tem os SEUS arquivos (rpa2.log, estado2.txt, ...). Sem sufixo os quatro
+# processos escreveriam o mesmo log e, pior, o mesmo estado.txt - um sobrescrevendo a fase/warmup do outro.
+# Slot 0 (padrao) fica com os nomes de sempre, entao um cliente so nao muda nada.
+$Sfx           = if($Slot -gt 0){ "$Slot" } else { '' }
+$LogFile       = Join-Path $PSScriptRoot $(if($Check -or $TestImage -or $TestStatus -or $TestInv -or $TestMix -or $TestNpc -or $TestGold -or $TestVisao -or $TestStatMin){ 'testes.log' } else { "rpa$Sfx.log" })
+$StopFile      = Join-Path $PSScriptRoot "stop$Sfx.flag"
+$StopAllFile   = Join-Path $PSScriptRoot 'stop.flag'   # stop.flag sem numero para TODOS os slots de uma vez
+$HeartbeatFile = Join-Path $PSScriptRoot "heartbeat$Sfx.txt"   # o bot bate aqui a cada volta; serve pra nao subir dois bots no mesmo cliente
 $AtivoGapMax   = 120     # buraco maior que N seg entre voltas = o bot esteve PARADO; nao conta como tempo ativo nas metricas
 $HeartbeatVivoSec = 180  # heartbeat mais novo que isso = tem bot vivo (impede duas instancias no mesmo jogo)
 $SemProgressoMax = 3     # apos N ciclos seguidos sem progresso, o bot REINICIA A SI MESMO (ja elevado: nao pede UAC de novo)
 $AutoRestart   = $true   # $false = nunca relanca a si mesmo; sem progresso $SemProgressoMax vezes ele so PARA. Unico caminho que ainda cria processo sozinho - e so com o bot rodando (fechar a janela ja o desliga antes)
 $WatchdogTask  = 'MudinhoX RPA Watchdog'   # Tarefa Agendada do watchdog ANTIGO. Ele foi removido (nao queremos nada rodando depois que voce fecha); isto so serve pra APAGAR a tarefa que ficou instalada em quem ja rodou a versao velha
-$EstadoFile    = Join-Path $PSScriptRoot 'estado.txt'   # fase + contagem de warmup, pra sobreviver a reinicio do bot
+$EstadoFile    = Join-Path $PSScriptRoot "estado$Sfx.txt"   # fase + contagem de warmup, pra sobreviver a reinicio do bot
 $LogMaxMB      = 5       # rpa.log maior que isso no start vira .bak (a pasta sincroniza no OneDrive)
 $LogKeepBaks   = 5       # quantos .bak manter
-$WarmupFile    = Join-Path $PSScriptRoot 'warmup.flag'   # se existir no start, o bot comeca em modo warmup (/losttower7) — use apos dar MR manualmente
+$WarmupFile    = Join-Path $PSScriptRoot "warmup$Sfx.flag"   # se existir no start, o bot comeca em modo warmup (/losttower7) — use apos dar MR manualmente
 # Captcha: offsets a partir do centro do texto "Selecione a mesma imagem abaixo:" (achado por OCR)
 $CapRefDy      = -80                          # imagem de referencia (acima do texto)
 $CapRowDy      = 80, 210                      # 2 linhas de opcoes
@@ -126,9 +164,33 @@ $CapCiclosMax  = 200     # quantas duracoes de ciclo guardar pra mediana (array 
 $CapKillGame   = $false  # $true volta a regra antiga (fecha o mudx.exe e encerra). $false = pausa e espera voce
 $CapSelHalf    = 61                           # distancia do centro ate a borda vermelha (3px) da opcao selecionada; varre +-5px
 $WalkDist      = 140                          # apos /icarus anda ~4 passos (pixels a partir do centro) numa direcao aleatoria a cada chegada, antes do play
-$CapConfidence = 0.5                          # melhor precisa ser < 50% do segundo, senao nao chuta
-$CaptchaShotDir = Join-Path $PSScriptRoot 'captcha'   # print salvo aqui a cada captcha
+$CapConfidence = 0.65                         # melhor precisa ser < N% do segundo, senao nao chuta. Era 0.5, e ESSE era o gargalo do MR:
+                                              # captcha nao resolvido TRAVA o jogo (o char nao farma, o /resetar nao pega), e o bot ficava
+                                              # relendo a mesma imagem estatica a cada 5s pra sempre. No MR #30 foram 12 captchas distintos,
+                                              # 192 linhas de "ambiguo" e 4 travados - o MR levou 4.59h contra os 0.71h do MR #15.
+                                              # Razoes medidas (melhor/segundo): 0.132 0.199 0.218 0.431 0.487 0.493 passavam;
+                                              # 0.503 0.504 0.514 0.515 eram RECUSADOS - e o de 0.515 foi aberto na mao: a resposta estava CERTA.
+                                              # Lixo de verdade (cursor tapando a opcao certa, 04/09) deu 0.98, bem longe daqui.
+                                              # Errar nao e barato mas e limitado: o bot confere a borda vermelha depois de clicar e PAUSA
+                                              # apos $CapMaxTries erros. Nao clicar custou ~1h por captcha travado.
+$CaptchaShotDir = Join-Path $PSScriptRoot "captcha$Sfx"   # print salvo aqui a cada captcha
 $FixtureDir    = Join-Path $PSScriptRoot 'fixtures'   # prints guardados pro -TestVisao (regressao das funcoes de leitura de tela)
+# ---------- MULTIBOX: o que o -Slot muda no CONFIG ----------
+if($Slot -gt 0){
+  # O spot e o $WarpCmd, igual pros quatro: eles sobem em PARTY, entao tem que ficar no mesmo lugar.
+  # $NoFocusRead = $true: LER nao pede foco. Chegou a ficar $false aqui (assumindo janelas empilhadas), e MEDIDO
+  # em 08/09 isso nao cabia: com toda leitura passando pelo primeiro plano, um bot sozinho precisava de 40-60%
+  # do foco do sistema - dois ja saturavam, e os quatro se atropelaram (slot 1 passou 81s sem uma leitura e
+  # disparou miss infinito achando que estava travado).
+  # O que faltava era separar "preciso VER" de "preciso DIGITAR". Ver e Z-order: o Ver-Janela sobe a janela do
+  # slot com SWP_NOACTIVATE, custa ms e nao tira o teclado de onde voce esta. Digitar e que exige primeiro plano
+  # de verdade (medido: PostMessage e AttachThreadInput+SetFocus nao funcionam neste cliente, ver
+  # test_entrada_sem_foco.ps1). Com isso a fatia de foco por bot cai pra 10-15% e os quatro cabem.
+  $NoFocusRead = $true
+  # O $PollBgSec (60s) e pro caso "sua janela na frente, leio devagar pra nao te atrapalhar". Aqui a leitura nao
+  # depende mais de foco, entao esse freio nao faz sentido - e 60s deixariam o level passar de 350 pra 400.
+  $PollBgSec = $PollSec
+}
 # Mensagens do jogo (faixa acima da caixa de chat). O servidor responde tudo por texto e o bot ignorava:
 # "Voce adicionou N pontos", "Bem-vindo(a) a Lorencia", "Resta ainda N Golden Tantalo vivo(s)".
 $MsgBox        = @{ X = 760; W = 400; Y1FromBottom = 250; Y2FromBottom = 135 }
@@ -142,7 +204,12 @@ $UiLogMaxChars = 60000   # teto do log da janelinha (o TextBox crescia sem limit
 $AutoTune      = $false  # A/B do alvo DESLIGADO: o alvo agora e escolha sua ($TargetLevel), nao do experimento
 $AutoTuneAlvos = 350, 380   # alvos a testar. NAO usar abaixo de $LevelMinReset: o servidor recusa e o /resetar so vira reenvio ate o char passar do minimo sozinho
 $LevelMaximo   = 400     # teto de level do servidor ("voce esta no nivel maximo"). No modo joias o char fica parado nele, entao o detector de miss infinito nao pode usar o level la
-$LevelMinReset = 350     # level minimo pra resetar. CONFIRMADO pela mensagem do servidor: "Voce precisa de estar no level 350 para resetar!". O bot re-aprende isso sozinho se mudar
+$LevelMinReset = 305     # level minimo pra resetar. Era 350, confirmado pela mensagem do servidor ("Voce precisa de estar
+                         # no level 350 para resetar!"); com FENRIR a conta reseta 45 levels antes, entao 305.
+                         # O bot re-aprende sozinho pela mensagem do servidor se estiver errado - mas so pra CIMA
+                         # (ver Master-Reset), entao um valor baixo demais se corrige e um alto demais nao.
+                         # ATENCAO: o Load-Estado restaura minReset= do estado.txt SEMPRE (diferente do alvo=, que so
+                         # entra com $AutoTune). Trocar aqui sem limpar a linha do estado nao adianta.
 $AutoTuneResets = 15     # resets por alvo antes de comparar
 $MetricsEvery  = 5       # a cada N resets loga resumo: resets/h, pontos/h e ETA do master reset
 $JitterPct     = 0.25    # varia +-25% os intervalos (stats, inventario, mensagens, poll). Valores dos stats seguem EXATOS - so o RITMO varia
@@ -168,7 +235,9 @@ $CursorParkY   = 400
 # Antes eu procurava nomes de joia soltos - e o CHAT casava ("Sucesso! voce mixou N Life Points", "Obtido Jewel of
 # Soul"), entao o bot achava que a lista continuava aberta, nao reabria o modal e mixava so a primeira joia.
 $MixListaWords = '(?i)selecione'
-$MixWaitSec    = 5        # espera entre o mix de um tipo e o proximo
+$MixWaitSec    = 2        # espera entre o mix de um tipo e o proximo. Era 5: quem tolera UI lenta e o Achar-Ate do
+                          # Abrir-Modal-Mix, que PROCURA o menu ate $MixConfirmTentativas vezes em vez de olhar uma vez.
+                          # O sleep grande aqui so somava em cima disso (11.5s por joia com a espera do "Sucesso!" junto).
 $MixRounds     = 12      # no maximo N voltas (a lista tem 7 opcoes; sobra folga)
 $InvKey        = 0x56     # V = inventario
 # A grade do inventario e localizada DINAMICAMENTE pelo titulo da janela: o painel abriu em (1317,408) na
@@ -181,6 +250,9 @@ $InvCellLit    = 210      # soma R+G+B acima disso = pixel "com item" (celula va
 $InvCellMin    = 10       # N pixels claros na celula = ocupada
 $InvFreeMin    = 4        # so informativo agora (-Preflight/-TestInv): quantas celulas livres ainda contam como "vazio"
 $JoiasFarmMax  = 8       # modo JOIAS: vai mixar a cada N min. E o gatilho PRINCIPAL: a contagem de celulas depende de alinhamento e a ancora oscila, entao nao da pra confiar nela pra adiar o mix
+$MixEveryMin   = 25      # ciclo NORMAL (reset/master reset): mixa a cada N min sem parar de resetar. 0 = so pelo aviso do jogo e pelo botao.
+                         # Existe porque o aviso "inventario cheio" NUNCA foi lido: 0 ocorrencias no rpa.log inteiro, contra 68 pausas manuais suas pra mixar na mao.
+                         # Custo medido: um mix leva 30-70s (ida pro /mixer, mix, warp de volta, play), ~3% do tempo a cada 25 min.
 $InvUsarMenu   = $true   # se a tecla nao abrir o inventario, tenta pelo MENU do jogo (botao de 3 barras no topo direito)
 $InvMenuBtn    = @{ X = 1888; Y = 23 }   # botao de 3 barras (menu) no canto superior direito, area cliente
 $InvMenuClickDy = -45    # no menu, o item e um ICONE com o rotulo EMBAIXO: o OCR acha o texto, mas o clicavel esta ACIMA dele
@@ -225,6 +297,12 @@ public class W {
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
   [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);   // multibox: apagar a janelinha DOS OUTROS slots da captura
+  // multibox: SUBIR a janela na pilha SEM roubar o teclado (SWP_NOACTIVATE). E o que separa "preciso ver" de
+  // "preciso digitar": ver custa ms e nao tira o foco de onde voce esta; digitar exige primeiro plano de verdade.
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int hh, uint flags);
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);   // quem esta REALMENTE nesses pixels?
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint fl);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr pid);
   [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);
   [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
@@ -310,12 +388,12 @@ function Log($m){
   $line = "[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $m; Write-Host $line
   if($script:logW){ try { $script:logW.WriteLine($line) } catch {} } else { try { Add-Content -Path $LogFile -Value $line -Encoding UTF8 } catch {} }
   if($script:ui -and -not $script:ui.IsDisposed){
-    $script:status.Text = $m
     # Painel atualizado aqui e nao num tick proprio: o Log ja roda a cada evento do bot e ja faz o DoEvents,
     # entao a barra nunca fica velha e nao precisa de mais nada agendado.
     $pct = Progresso-MR
     $script:barra.Value = [int]($pct * $script:barra.Maximum)
-    $script:contador.Text = ("sessao: {0} resets | {1} MR    -    /darmr: {2:0.0}%  ({3} pontos faltando)" -f `
+    # Texto encurtado junto com a janela: a versao longa nao cabia nos 284px e truncava justo no numero do fim.
+    $script:contador.Text = ("{0} resets | {1} MR  -  MR {2:0.0}% (faltam {3})" -f `
       $script:resetsSessao, $script:mrsSessao, ($pct * 100), $(if($script:ptsNeeded -ge 0){ $script:ptsNeeded } else { '?' }))
     # o TextBox crescia sem limite: rodando dias seguidos a janela fica pesada. Corta pela metade quando passa do teto.
     if($script:logBox.TextLength -gt $UiLogMaxChars){ $script:logBox.Text = $script:logBox.Text.Substring($script:logBox.TextLength - [int]($UiLogMaxChars/2)) }
@@ -342,8 +420,12 @@ function Heartbeat-Fresco {   # $true se OUTRA instancia bateu o heartbeat ha po
 $script:stopReason = 'usuario'   # POR QUE parou. O log dizia "parado pelo usuario" ate quando era erro ou reinicio proprio, e ai nao dava pra saber o que tinha acontecido de madrugada
 function Check-Stop {
   if(-not $script:stop -and (Test-Path $StopFile)){ $script:stop = $true; $script:stopReason = 'stop.flag' }
+  # MULTIBOX: um stop.flag SEM numero derruba os quatro de uma vez. Com quatro janelinhas espalhadas, fechar uma
+  # por uma no meio de um /darmr e como o estado do char ficou inconsistente em 08/09.
+  if(-not $script:stop -and $Slot -gt 0 -and (Test-Path $StopAllFile)){ $script:stop = $true; $script:stopReason = 'stop.flag geral' }
   if(-not $script:stop){ return }
   Log "parado ($script:stopReason)"
+  Input-Unlock   # morrer com a trava na mao faria os outros slots esperarem os 120s do teto
   # Consome o flag e o heartbeat: parou, acabou. Nao existe mais watchdog lendo isto - nada relanca o bot depois
   # que ele sai, e um flag esquecido no disco so atrapalharia a proxima abertura.
   Remove-Item $StopFile,$HeartbeatFile -ErrorAction SilentlyContinue
@@ -390,50 +472,71 @@ function Canto-Da-Tela-Do-Jogo([int]$alturaJanela){
   try { $t = [System.Windows.Forms.Screen]::FromHandle((Get-Game)) } catch { }
   if(-not $t){ $t = [System.Windows.Forms.Screen]::PrimaryScreen }
   $wa = $t.WorkingArea
-  New-Object System.Drawing.Point(($wa.X + 10), ($wa.Y + $wa.Height - $alturaJanela - 10))
+  # MULTIBOX: as janelinhas em CASCATA, todas dentro do canto inferior esquerdo. Nao lado a lado: a 3a e a 4a
+  # cairiam em cima do $MsgBox (x 760+), do $ChatBox (x 870+) e do $LevelBox (x 1080+). Mascarar a janela dos
+  # outros slots (ver Outras-Janelinhas) impede LER LIXO, mas ler PRETO tambem nao serve - o Read-Level ia
+  # falhar do mesmo jeito. Entao elas ficam onde nao ha nada pra ler.
+  # Passo de 28px: da pra ver as 4 barras de titulo (e saber qual e qual) sem sair da area segura. A 4a termina
+  # em x=396 e sobe ate 572px da base - longe do captcha (que comeca em x~600) e do play (topo esquerdo).
+  $off = ($Slot - 1) * 28
+  New-Object System.Drawing.Point(($wa.X + 10 + $off), ($wa.Y + $wa.Height - $alturaJanela - 10 - $off))
 }
 function Show-Ui {
   $f = New-Object System.Windows.Forms.Form
-  $f.Text = 'MudinhoX RPA'; $f.Width = 400; $f.Height = 380; $f.TopMost = $true; $f.FormBorderStyle = 'FixedToolWindow'
+  # Janelinha COMPACTA (302x239, era 400x380 - 53% menos area). Nao e so estetica: o Capture-Raw pinta a area
+  # dela de PRETO em toda captura pra ela nao sujar o OCR, entao janela menor = menos tela do jogo cega, e o
+  # Fugir-Da-Area precisa move-la com menos frequencia.
+  # Grade de 3 colunas de 92px (6 + 92+4 + 92+4 + 92 + 6 = 296 de area cliente), botoes de 22-24px, fonte 7.5.
+  # Com quatro janelinhas iguais na tela nao daria pra saber qual e qual: o titulo carrega slot e spot.
+  $f.Text = $(if($Slot -gt 0){ "MudinhoX RPA - slot $Slot ($WarpCmd)" } else { 'MudinhoX RPA' })
+  $f.Width = 302; $f.Height = 239; $f.TopMost = $true; $f.FormBorderStyle = 'FixedToolWindow'
+  # AutoScaleMode 'None' ANTES da fonte: o padrao e 'Font', que reescala os controles filhos a partir da fonte do
+  # formulario. Como TODA a grade abaixo esta em pixel fixo (e o resto do bot tambem trabalha em pixel: $PlayBtn,
+  # $LevelBox, $MixNpcPos...), escala automatica so teria como estragar. 'None' deixa o layout deterministico.
+  $f.AutoScaleMode = 'None'
+  $f.Font = New-Object System.Drawing.Font('Segoe UI', 7.5)
   $f.StartPosition = 'Manual'; $f.Location = Canto-Da-Tela-Do-Jogo $f.Height
-  $script:status = New-Object System.Windows.Forms.Label; $script:status.SetBounds(10,12,160,22); $script:status.Text = 'iniciando...'
-  $script:btnPause = New-Object System.Windows.Forms.Button; $script:btnPause.SetBounds(175,6,100,28); $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'
-  $btn = New-Object System.Windows.Forms.Button; $btn.SetBounds(280,6,100,28); $btn.Text = 'PARAR'; $btn.BackColor = 'IndianRed'
-  # linha 2: comando manual de fase
-  $script:btnWarmup = New-Object System.Windows.Forms.Button; $script:btnWarmup.SetBounds(10,40,122,32);  $script:btnWarmup.Text = "Warmup LT7`n($WarmupResets resets)"; $script:btnWarmup.BackColor = 'SteelBlue'
-  $script:btnNormal = New-Object System.Windows.Forms.Button; $script:btnNormal.SetBounds(137,40,122,32); $script:btnNormal.Text = "Normal $WarpCmd`n(ate MT)"; $script:btnNormal.BackColor = 'MediumSeaGreen'
-  $script:btnMR     = New-Object System.Windows.Forms.Button; $script:btnMR.SetBounds(264,40,120,32);     $script:btnMR.Text = "Atribuir tudo`n+ MR"; $script:btnMR.BackColor = 'MediumPurple'
-  $script:btnMix    = New-Object System.Windows.Forms.Button; $script:btnMix.SetBounds(10,76,122,26);    $script:btnMix.Text = 'MODO JOIAS'; $script:btnMix.BackColor = 'DarkCyan'
-  $script:btnGold   = New-Object System.Windows.Forms.Button; $script:btnGold.SetBounds(137,76,247,26); $script:btnGold.Text = "MODO DRAGOES ($GoldCmd)"; $script:btnGold.BackColor = 'Teal'   # NAO usar tom dourado: o -TestGold roda em processo separado (nao mascara a UI) e detectava o proprio botao como dragao
-  $script:btnMixJa = New-Object System.Windows.Forms.Button; $script:btnMixJa.SetBounds(10,106,374,26); $script:btnMixJa.Text = "MIXAR AGORA (nao espera encher)"; $script:btnMixJa.BackColor = 'SteelBlue'
+  # O rotulo de status saiu: ele mostrava a ULTIMA linha de log, que a caixa de log logo abaixo ja mostra
+  # inteira - duas coisas dizendo o mesmo, e a versao dele truncava no meio da frase.
+  $script:btnPause = New-Object System.Windows.Forms.Button; $script:btnPause.SetBounds(6,4,92,24);   $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'
+  $btn = New-Object System.Windows.Forms.Button;             $btn.SetBounds(102,4,92,24);             $btn.Text = 'PARAR'; $btn.BackColor = 'IndianRed'
+  $script:btnMR     = New-Object System.Windows.Forms.Button; $script:btnMR.SetBounds(198,4,92,24);    $script:btnMR.Text = 'TUDO + MR'; $script:btnMR.BackColor = 'MediumPurple'
+  $script:btnWarmup = New-Object System.Windows.Forms.Button; $script:btnWarmup.SetBounds(6,32,92,22);   $script:btnWarmup.Text = "Warmup ($WarmupResets)"; $script:btnWarmup.BackColor = 'SteelBlue'
+  $script:btnNormal = New-Object System.Windows.Forms.Button; $script:btnNormal.SetBounds(102,32,92,22); $script:btnNormal.Text = "Normal $WarpCmd"; $script:btnNormal.BackColor = 'MediumSeaGreen'
+  $script:btnMixJa  = New-Object System.Windows.Forms.Button; $script:btnMixJa.SetBounds(198,32,92,22);  $script:btnMixJa.Text = 'MIXAR JA'; $script:btnMixJa.BackColor = 'SteelBlue'
+  # Os dois de MODO ficam mais largos: sao os unicos que mudam de texto e de cor sozinhos (ver Sync-BotoesModo)
+  $script:btnMix  = New-Object System.Windows.Forms.Button; $script:btnMix.SetBounds(6,58,140,22);    $script:btnMix.BackColor = 'DarkCyan'
+  $script:btnGold = New-Object System.Windows.Forms.Button; $script:btnGold.SetBounds(150,58,140,22); $script:btnGold.BackColor = 'Teal'   # NAO usar tom dourado: o -TestGold roda em processo separado (nao mascara a UI) e detectava o proprio botao como dragao
   # Barra = caminho ate o proximo /darmr (os 4 atributos do zero ao cap), NAO "quantos resets faltam": reset e so
   # o meio de juntar pontos, e quantos cabem num MR muda com o alvo, com o spot e com a fase. Pontos e o que conta.
   $script:barra = New-Object System.Windows.Forms.ProgressBar
-  $script:barra.SetBounds(10,138,374,18); $script:barra.Minimum = 0; $script:barra.Maximum = 1000   # milesimos: com 100 passos pra 131068 pontos a barra parecia travada
-  $script:contador = New-Object System.Windows.Forms.Label; $script:contador.SetBounds(10,159,374,18); $script:contador.Text = 'sessao: 0 resets | 0 MR'
-  $script:logBox = New-Object System.Windows.Forms.TextBox; $script:logBox.SetBounds(10,181,374,150); $script:logBox.Multiline = $true; $script:logBox.ReadOnly = $true; $script:logBox.ScrollBars = 'Vertical'
+  $script:barra.SetBounds(6,84,284,12); $script:barra.Minimum = 0; $script:barra.Maximum = 1000   # milesimos: com 100 passos pra 131068 pontos a barra parecia travada
+  $script:contador = New-Object System.Windows.Forms.Label; $script:contador.SetBounds(6,99,284,14); $script:contador.Text = 'sessao: 0 resets | 0 MR'
+  $script:logBox = New-Object System.Windows.Forms.TextBox; $script:logBox.SetBounds(6,116,284,86); $script:logBox.Multiline = $true; $script:logBox.ReadOnly = $true; $script:logBox.ScrollBars = 'Vertical'
   $script:btnPause.Add_Click({ $script:paused = -not $script:paused; $script:btnPause.Text = $(if($script:paused){ 'RETOMAR' } else { 'PAUSAR' }); $script:btnPause.BackColor = $(if($script:paused){ 'ForestGreen' } else { 'Goldenrod' }); Log $(if($script:paused){ 'PAUSADO pelo usuario (mixe as joias; clique RETOMAR pra voltar)' } else { 'retomado pelo usuario' }) })
   $btn.Add_Click({ $script:stopReason = 'usuario'; $script:stop = $true })
   $script:btnWarmup.Add_Click({ $script:phase = 'warmup'; $script:warmupCount = 0; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Save-Estado; Log "[BOTAO] modo WARMUP: /losttower7 ate $WarmupResets resets" })
-  $script:btnNormal.Add_Click({ $script:modo = 'reset'; $script:btnMix.Text = 'MODO JOIAS'; $script:btnMix.BackColor = 'DarkCyan'; $script:btnGold.Text = "MODO DRAGOES ($GoldCmd)"; $script:btnGold.BackColor = 'Teal'; $script:phase = 'normal'; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Save-Estado; Log "[BOTAO] modo NORMAL: $WarpCmd ate os atributos encherem" })
+  # "Normal" durante o descanso da cota fura a cota DE PROPOSITO, mas so por um MR: com o $mrsDia ja no limite,
+  # o proximo master reset re-arma o descanso sozinho. Override explicito seu, que se desfaz sozinho.
+  $script:btnNormal.Add_Click({ $script:modo = 'reset'; $script:cotaJoias = $false; Sync-BotoesModo; $script:phase = 'normal'; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Save-Estado; Log "[BOTAO] modo NORMAL: $WarpCmd ate os atributos encherem" })
   $script:btnMR.Add_Click({ $script:forceMR = $true; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Log "[BOTAO] ATRIBUIR TUDO + MR" })
+  # Os botoes de MODO LIGAM o modo, nao alternam. Alternar custou caro em 04/09: dois cliques (o bot estava
+  # ocupado num /resetar e o primeiro clique nao pareceu fazer nada, porque a UI so anda no DoEvents do Log)
+  # ligaram e desligaram o modo joias em 6 segundos - 03:14:54 "MODO JOIAS", 03:15:00 "modo JOIAS desligado" -
+  # e o bot emendou um /darmr (MASTER RESET #13) em vez de ir mixar. Quem sai do modo e o botao "Normal $WarpCmd".
   $script:btnMix.Add_Click({
-    $script:modo = if($script:modo -eq 'joias'){ 'reset' } else { 'joias' }
+    $script:modo = 'joias'; $script:cotaJoias = $false   # ligado por VOCE, nao pela cota: virar o dia nao pode te tirar dele
     $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'
-    $script:btnMix.Text = if($script:modo -eq 'joias'){ 'MODO JOIAS (ligado)' } else { 'MODO JOIAS' }
-    $script:btnGold.Text = "MODO DRAGOES ($GoldCmd)"; $script:btnGold.BackColor = 'Teal'
-    $script:btnMix.BackColor = if($script:modo -eq 'joias'){ 'ForestGreen' } else { 'DarkCyan' }
+    Sync-BotoesModo
     Save-Estado
-    Log $(if($script:modo -eq 'joias'){ "[BOTAO] MODO JOIAS: farma em $WarpCmd ate encher, mixa no $MixCmd, repete. Sem reset e sem /darmr." } else { '[BOTAO] modo JOIAS desligado: volta ao ciclo de reset/master reset' })
+    Log "[BOTAO] MODO JOIAS: farma em $WarpCmd ate encher, mixa no $MixCmd, repete. Sem reset e sem /darmr. (pra sair: Normal $WarpCmd)"
   })
   $script:btnGold.Add_Click({
-    $script:modo = if($script:modo -eq 'dragoes'){ 'reset' } else { 'dragoes' }
+    $script:modo = 'dragoes'; $script:cotaJoias = $false   # botao seu manda mais que a cota; ela re-arma no proximo master reset
     $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'
-    $script:btnGold.Text = if($script:modo -eq 'dragoes'){ 'MODO DRAGOES (ligado)' } else { "MODO DRAGOES ($GoldCmd)" }
-    $script:btnGold.BackColor = if($script:modo -eq 'dragoes'){ 'ForestGreen' } else { 'Teal' }
-    $script:btnMix.Text = 'MODO JOIAS'; $script:btnMix.BackColor = 'DarkCyan'
+    Sync-BotoesModo
     Save-Estado
-    Log $(if($script:modo -eq 'dragoes'){ "[BOTAO] MODO DRAGOES: so caca em $GoldCmd, sem reset/darmr/inventario" } else { '[BOTAO] modo DRAGOES desligado: volta ao ciclo de reset/master reset' })
+    Log "[BOTAO] MODO DRAGOES: so caca em $GoldCmd, sem reset/darmr/inventario. (pra sair: Normal $WarpCmd)"
   })
   # Quando o botao de mix virou alternador de MODO, ficou sem jeito de mandar mixar AGORA. Este devolve isso:
   # com o inventario cheio na sua frente, nao faz sentido esperar o teto de tempo.
@@ -443,7 +546,8 @@ function Show-Ui {
     Log "[BOTAO] MIXAR AGORA: indo pro $MixCmd no proximo tick"
   })
   $f.Add_FormClosing({ $script:stopReason = 'janela fechada'; $script:stop = $true })
-  $f.Controls.AddRange(@($script:status,$script:btnPause,$btn,$script:btnWarmup,$script:btnNormal,$script:btnMR,$script:btnMix,$script:btnGold,$script:btnMixJa,$script:barra,$script:contador,$script:logBox)); $f.Show(); $script:ui = $f
+  $f.Controls.AddRange(@($script:btnPause,$btn,$script:btnWarmup,$script:btnNormal,$script:btnMR,$script:btnMix,$script:btnGold,$script:btnMixJa,$script:barra,$script:contador,$script:logBox)); $f.Show(); $script:ui = $f
+  Sync-BotoesModo   # texto/cor iniciais dos dois botoes de modo saem daqui tambem - nao ha copia deles no SetBounds
 }
 
 # ---------- janela do jogo / foco ----------
@@ -465,8 +569,14 @@ function Game-IsAdmin { -not (Get-Process mudx -ErrorAction SilentlyContinue | s
 $script:gameH = [IntPtr]::Zero
 function Get-Game {   # handle da janela do jogo, EM CACHE: Get-Process enumera todos os processos do Windows e isto e chamado ~6x por comando
   if($script:gameH -ne [IntPtr]::Zero -and [W]::IsWindow($script:gameH)){ return $script:gameH }
-  $p = Get-Process mudx -ErrorAction SilentlyContinue | ? { $_.MainWindowHandle -ne 0 } | select -First 1
-  if(-not $p){ throw "MudinhoX (mudx.exe) nao esta rodando" }
+  # MULTIBOX: cada slot manda numa janela. Ordena por Id porque a ordem do Get-Process nao e estavel entre
+  # chamadas - sem ordenar, o slot 2 poderia trocar de cliente no meio da noite e misturar dois personagens.
+  $todas = @(Get-Process mudx -ErrorAction SilentlyContinue | ? { $_.MainWindowHandle -ne 0 } | sort Id)
+  if(-not $todas.Count){ throw "MudinhoX (mudx.exe) nao esta rodando" }
+  $p = if($GamePid -gt 0){ $todas | ? { $_.Id -eq $GamePid } | select -First 1 }
+       elseif($Slot -gt 0){ $todas | select -Skip ($Slot - 1) -First 1 }
+       else{ $todas | select -First 1 }
+  if(-not $p){ throw $(if($GamePid -gt 0){ "MudinhoX com PID $GamePid nao esta rodando" } else { "slot $Slot pediu a ${Slot}a janela do mudx, mas so ha $($todas.Count)" }) }
   $script:gameH = $p.MainWindowHandle; $script:gameH
 }
 function Set-Foreground($h){   # traz janela pra frente sem teclas sinteticas (AttachThreadInput); fallback: toque no Alt
@@ -481,14 +591,41 @@ $script:gameWasFg = $true   # jogo ja estava na frente antes do Focus-Game (defi
 $script:gameFg = $false     # jogo ficou na frente apos o Focus-Game (Windows nega se voce esta digitando em outra janela)
 function Is-OwnUi($h){ $script:ui -and -not $script:ui.IsDisposed -and $h -eq $script:ui.Handle }   # janela do proprio bot nao conta como "outra janela"
 $script:focusHeld = $false; $script:focusPrev = $null   # bloco de foco: traz o jogo 1x, faz tudo, devolve 1x (menos "pisca" com voce numa janela por cima)
+# ---------- MULTIBOX: trava global de ENTRADA ----------
+# keybd_event e mouse_event sao GLOBAIS: vao pra janela que estiver em primeiro plano, seja qual for. Com quatro
+# bots rodando, dois trazendo janelas pra frente ao mesmo tempo significa o /resetar de um caindo no cliente do
+# outro. Esta trava faz o revezamento: quem vai mexer no jogo pega o mutex, faz o que tem que fazer, solta.
+# E um mutex do SISTEMA (Global\), nao um lock em processo - os slots sao processos separados.
+$script:mtx = $null
+if($Slot -gt 0){ $script:mtx = New-Object System.Threading.Mutex($false, 'Global\MudinhoX-Input') }
+$script:lockHeld = $false
+function Input-Lock {
+  # IDEMPOTENTE de proposito. O Focus-Game e chamado solto em varios lugares (Read-Status reafirma o foco a cada
+  # tecla, por exemplo) sem um Restore-Focus casado. Um mutex conta reentradas, entao "pegar" duas vezes e soltar
+  # uma vazaria a trava e travaria os outros tres bots pra sempre. Com a flag, N chamadas = uma aquisicao so.
+  if(-not $script:mtx -or $script:lockHeld){ return }
+  try { $null = $script:mtx.WaitOne(120000) }   # teto: bot morto com a trava na mao nao pode parar a fila pra sempre
+  catch [System.Threading.AbandonedMutexException] { }   # dono anterior morreu sem soltar; o mutex e nosso agora
+  $script:lockHeld = $true
+}
+function Input-Unlock {
+  if(-not $script:lockHeld){ return }
+  $script:lockHeld = $false
+  try { $script:mtx.ReleaseMutex() } catch {}
+}
 function Focus-Game {
+  Input-Lock   # so mexe no primeiro plano com a vez na mao
   $h = Get-Game
   if($script:focusHeld){   # dentro de um bloco: nao mexe no prev nem devolve; so garante o jogo na frente
     $script:gameFg = ([W]::GetForegroundWindow() -eq $h); if(-not $script:gameFg){ Set-Foreground $h; $script:gameFg = ([W]::GetForegroundWindow() -eq $h) }; return $script:focusPrev
   }
   $prev = [W]::GetForegroundWindow(); $script:gameWasFg = ($prev -eq $h) -or (Is-OwnUi $prev); Set-Foreground $h; $script:gameFg = ([W]::GetForegroundWindow() -eq $h); $prev
 }
-function Restore-Focus($prev){ if($script:focusHeld){ return }; if($prev -and $prev -ne (Get-Game) -and -not (Is-OwnUi $prev)){ Set-Foreground $prev } }   # dentro de bloco nao devolve; senao devolve pra janela anterior (nao a do bot)
+function Restore-Focus($prev){   # dentro de bloco nao devolve; senao devolve pra janela anterior (nao a do bot)
+  if($script:focusHeld){ return }
+  if($prev -and $prev -ne (Get-Game) -and -not (Is-OwnUi $prev)){ Set-Foreground $prev }
+  Input-Unlock   # fora de bloco, quem chamou Focus-Game solto devolve a vez aqui
+}
 function Hold-Focus {   # inicia bloco: guarda a janela do usuario, traz o jogo 1x
   if($script:focusHeld){ return }
   $script:focusPrev = [W]::GetForegroundWindow(); $script:gameWasFg = ($script:focusPrev -eq (Get-Game)) -or (Is-OwnUi $script:focusPrev)
@@ -504,6 +641,49 @@ function Release-Focus {   # fim do bloco: devolve o foco pra janela do usuario 
   $script:focusHeld = $false; Restore-Focus $script:focusPrev
 }
 function Client-Origin { $h = Get-Game; $pt = New-Object W+POINT; [W]::ClientToScreen($h,[ref]$pt) | Out-Null; $pt }
+# ---------- MULTIBOX: ver a janela sem roubar o teclado ----------
+function Ver-Janela {   # sobe a janela do slot na pilha, SEM ativar. Barato (ms) e nao tira o foco de onde voce esta.
+  # Com 2 clientes empilhados por monitor, so o de cima aparece - e a leitura sai de CopyFromScreen, que pega o
+  # que esta NA TELA. Trazer pra ver com SetForegroundWindow custaria o foco do sistema inteiro e ~2s; aqui e so
+  # Z-order. E a diferenca entre "cada bot precisa de 40-60% do primeiro plano" (nao cabe) e "10-15%" (cabe).
+  if($Slot -le 0){ return }
+  # HWND_TOP=0, SWP_NOSIZE=1 | SWP_NOMOVE=2 | SWP_NOACTIVATE=0x10 = 0x13
+  [W]::SetWindowPos((Get-Game), [IntPtr]::Zero, 0,0,0,0, 0x13) | Out-Null
+  Start-Sleep -Milliseconds 60   # o compositor precisa de um frame pra desenhar por cima do irmao do par
+}
+function Janela-Na-Frente {   # os pixels da area cliente sao MESMO desta janela?
+  # Sem isto, dois slots empilhados no MESMO ponto da tela leriam um o jogo do outro - e nada no log denunciaria:
+  # o mapa e o mesmo, o level e parecido, e o bot distribuiria os pontos do char errado.
+  if($Slot -le 0){ return $true }
+  try {
+    $h = Get-Game; $c = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c) | Out-Null
+    $o = Client-Origin; $p = New-Object W+POINT
+    $p.X = $o.X + [int]($c.R/2); $p.Y = $o.Y + [int]($c.B/2)
+    $w = [W]::WindowFromPoint($p)
+    if($w -eq [IntPtr]::Zero){ return $false }
+    ($w -eq $h) -or ([W]::GetAncestor($w, 2) -eq $h)   # GA_ROOT=2: o ponto pode cair num controle filho do jogo
+  } catch { $false }
+}
+$script:outrasUi = @(); $script:outrasUiAt = [datetime]::MinValue
+function Outras-Janelinhas {   # retangulos das janelinhas DOS OUTROS slots (vazio fora do modo multibox)
+  # EM CACHE: o Capture-Raw roda a cada leitura e o Get-Process enumera todos os processos do Windows - o mesmo
+  # motivo pelo qual o Get-Game ja e cacheado. As janelinhas so mudam de lugar quando um bot sobe, cai, ou o
+  # Fugir-Da-Area move alguma, entao 30s de validade sobra.
+  if($Slot -le 0){ return @() }
+  if(((Get-Date) - $script:outrasUiAt).TotalSeconds -lt 30){ return $script:outrasUi }
+  $script:outrasUiAt = Get-Date
+  $meu = if($script:ui -and -not $script:ui.IsDisposed){ $script:ui.Handle } else { [IntPtr]::Zero }
+  $out = @()
+  try {
+    foreach($p in (Get-Process powershell -ErrorAction SilentlyContinue)){
+      $h = $p.MainWindowHandle
+      if($h -eq 0 -or $h -eq $meu -or $p.MainWindowTitle -notlike 'MudinhoX RPA*'){ continue }
+      $r = New-Object W+RECT
+      if([W]::GetWindowRect($h,[ref]$r)){ $out += New-Object System.Drawing.Rectangle($r.L, $r.T, ($r.R-$r.L), ($r.B-$r.T)) }
+    }
+  } catch {}
+  $script:outrasUi = $out; $out
+}
 $script:capOk = $true   # a ultima captura foi mesmo do jogo? (Read-Status/Inv-Free usam pra nao ler nem salvar print de outra janela)
 function Capture-Raw {   # bitmap da area cliente, sem mexer no foco (so chamar com o jogo na frente). Janelinha do bot fica preta (nao suja OCR/pixels)
   $h = Get-Game; $b = $null
@@ -512,17 +692,29 @@ function Capture-Raw {   # bitmap da area cliente, sem mexer no foco (so chamar 
   # mudx. Com a mensagem 'nao esta rodando' ele cai no caminho que ja existe: espera o cliente voltar e retoma.
   $c0 = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c0) | Out-Null
   if($c0.R -le 0 -or $c0.B -le 0){ $script:gameH = [IntPtr]::Zero; throw "MudinhoX (mudx.exe) nao esta rodando: janela sem area cliente (minimizada ou fechando)" }
+  Ver-Janela   # multibox: sobe a janela deste slot (sem roubar teclado) antes de fotografar
   for($i = 0; $i -lt 2; $i++){
     $c = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c) | Out-Null; $o = Client-Origin
     $b = New-Object System.Drawing.Bitmap($c.R,$c.B); $g = [System.Drawing.Graphics]::FromImage($b)
     $g.CopyFromScreen($o.X,$o.Y,0,0,$b.Size)
     if($script:ui -and -not $script:ui.IsDisposed){ $r = $script:ui.Bounds; $g.FillRectangle([System.Drawing.Brushes]::Black, $r.X-$o.X, $r.Y-$o.Y, $r.Width, $r.Height) }
+    # MULTIBOX: apaga tambem a janelinha DOS OUTROS slots. Cada bot so conhecia a propria ($script:ui), e com
+    # quatro na tela a do slot 2 em cima do $LevelBox do cliente 1 viraria leitura de lixo - o tipo de bug que
+    # este projeto ja caçou por horas. Mascarar sai mais barato e mais seguro que tentar posicionar as quatro
+    # fora de tudo que o bot le (o inventario e o modal do mix nem tem posicao fixa).
+    foreach($r in (Outras-Janelinhas)){ $g.FillRectangle([System.Drawing.Brushes]::Black, $r.X-$o.X, $r.Y-$o.Y, $r.Width, $r.Height) }
     $g.Dispose()
     # confere DEPOIS da foto: so checar antes nao basta, outra janela sobe no meio e o bot acaba lendo (e salvando print d)a tela do usuario
-    $script:capOk = $NoFocusRead -or ([W]::GetForegroundWindow() -eq $h)   # com $NoFocusRead voce garante o jogo visivel (2o monitor) e o bot nao rouba foco pra ler
+    # No MULTIBOX o teste nao pode ser "estou em primeiro plano" (a leitura nem pede foco) nem um "confio e sigo":
+    # dois slots empilhados no MESMO ponto da tela leriam um o jogo do outro, e NADA no log denunciaria - mesmo
+    # mapa, level parecido, e o bot distribuindo os pontos do char errado. Pergunta-se ao Windows quem esta nos
+    # pixels: WindowFromPoint no centro da area cliente.
+    $script:capOk = if($Slot -gt 0){ Janela-Na-Frente } else { $NoFocusRead -or ([W]::GetForegroundWindow() -eq $h) }
     if($script:capOk){ return $b }
     $b.Dispose(); $b = $null
-    if($i -eq 0){ Set-Foreground $h; Start-Sleep -Milliseconds 250 }   # uma re-tentativa; se o Windows negar, devolve a foto marcada como suspeita
+    if($i -eq 0){   # uma re-tentativa; se ainda nao for a nossa janela nos pixels, devolve a foto marcada como suspeita
+      if($Slot -gt 0){ Ver-Janela; Start-Sleep -Milliseconds 150 } else { Set-Foreground $h; Start-Sleep -Milliseconds 250 }
+    }
   }
   $c = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c) | Out-Null; $o = Client-Origin
   $b = New-Object System.Drawing.Bitmap($c.R,$c.B); $g = [System.Drawing.Graphics]::FromImage($b)
@@ -667,6 +859,31 @@ function Save-Shot([string]$nome){   # print pra diagnostico (chamar com o jogo 
 }
 $script:modo = 'reset'   # 'reset' = ciclo normal (farm/reset/darmr). 'joias' = farma ate encher, mixa, repete
 $script:farmMap = ''; $script:phase = 'normal'; $script:warmupCount = 0; $script:restartCycle = $false; $script:forceMR = $false
+# Cota diaria de master resets. mrsDia conta os de HOJE (mrs, do estado, e da vida inteira do char). cotaJoias
+# lembra que foi a COTA que ligou o modo joias - sem isso, virar o dia arrancaria voce de um modo joias que
+# VOCE escolheu. Os tres vao pro estado.txt: reiniciar o bot nao pode ser jeito de furar a cota.
+$script:mrsDia = 0; $script:mrsDiaData = ''; $script:cotaJoias = $false
+function Hoje { (Get-Date).ToString('yyyy-MM-dd') }
+function Sync-BotoesModo {   # deixa os botoes coerentes com o $script:modo - tambem quando quem trocou de modo foi o BOT, nao voce
+  if(-not $script:ui -or $script:ui.IsDisposed){ return }
+  $script:btnMix.Text       = if($script:modo -eq 'joias'){ 'JOIAS: LIGADO' } else { 'modo JOIAS' }
+  $script:btnMix.BackColor  = if($script:modo -eq 'joias'){ 'ForestGreen' } else { 'DarkCyan' }
+  $script:btnGold.Text      = if($script:modo -eq 'dragoes'){ 'DRAGOES: LIGADO' } else { 'modo DRAGOES' }
+  $script:btnGold.BackColor = if($script:modo -eq 'dragoes'){ 'ForestGreen' } else { 'Teal' }
+}
+function Cota-Rolar {   # virou o dia? zera a cota de master resets e, se foi ELA que ligou o modo joias, volta a resetar
+  if($script:mrsDiaData -eq (Hoje)){ return }
+  $ontem = $script:mrsDiaData; $script:mrsDiaData = Hoje
+  if($ontem){ Log "cota diaria: virou o dia ($ontem -> $($script:mrsDiaData)), zerando os $($script:mrsDia) master resets contados" }
+  $script:mrsDia = 0
+  if($script:cotaJoias){
+    $script:cotaJoias = $false
+    if($script:modo -eq 'joias'){ $script:modo = 'reset'; $script:restartCycle = $true; Sync-BotoesModo }   # so sai do joias se ainda estiver nele (voce pode ter trocado na mao)
+    Log "cota diaria: descanso terminado, voltando ao ciclo de reset/master reset"
+    Notify "MudinhoX" "Dia novo: cota de $MrsPorDia master resets zerada, voltei a resetar."
+  }
+  Save-Estado
+}
 function Save-Estado {   # fase/warmup E as metricas do MR. Medir um MR leva horas e reiniciar o bot zerava tudo.
   try {
     @(
@@ -682,6 +899,9 @@ function Save-Estado {   # fase/warmup E as metricas do MR. Medir um MR leva hor
       "joiasMix=$($script:joiasMix)"
       "joiasCiclos=$($script:joiasCiclos)"
       "mrs=$($script:mrs)"
+      "mrsDia=$($script:mrsDia)"
+      "mrsDiaData=$($script:mrsDiaData)"
+      "cotaJoias=$(if($script:cotaJoias){1}else{0})"
       "mrStart=$($script:mrStart.Ticks)"
       "ciclos=$(@($script:ciclos) -join ",")"
       "alvo=$TargetLevel"
@@ -728,6 +948,16 @@ function Load-Estado {
       if($kv.resets){ $script:resets = [int]$kv.resets }
       if($kv.ptsSent){ $script:ptsSent = [int]$kv.ptsSent }
       if($kv.mrs){ $script:mrs = [int]$kv.mrs }
+      # Cota do dia: so vale se for do MESMO dia. Estado de ontem entra zerado - e por isso que o bot "volta
+      # sozinho no dia seguinte" mesmo se a maquina tiver ficado desligada a noite toda.
+      if($kv.mrsDiaData -eq (Hoje)){
+        if($kv.mrsDia){ $script:mrsDia = [int]$kv.mrsDia }
+        if($kv.cotaJoias){ $script:cotaJoias = ($kv.cotaJoias -eq '1') }
+      } elseif($kv.mrsDia -and [int]$kv.mrsDia -gt 0){
+        Log "cota diaria: o estado e de $($kv.mrsDiaData), hoje e $(Hoje) - contagem de master resets zerada"
+        if($kv.cotaJoias -eq '1' -and $script:modo -eq 'joias'){ $script:modo = 'reset'; Log "cota diaria: o modo joias tinha sido a COTA de ontem, voltando ao ciclo de reset" }
+      }
+      $script:mrsDiaData = Hoje
       if($kv.runStart){ $script:runStart = [datetime]::new([long]$kv.runStart) }
       if($kv.ativoSeg){ $script:ativoSeg = [double]$kv.ativoSeg }
       if($kv.joiasMix){ $script:joiasMix = [int]$kv.joiasMix }
@@ -759,7 +989,18 @@ function Load-Estado {
   } catch { Log "estado.txt ilegivel, comecando do zero: $_" }
 }
 function Same-Map($a,$b){ $a -and $b -and $a.Substring(0,[Math]::Min(4,$a.Length)) -eq $b.Substring(0,[Math]::Min(4,$b.Length)) }   # mesmo mapa pelos 4 primeiros caracteres (tolera ruido do OCR nas coords/fim)
-function Close-Popup { Press-Vk 0x1B; Start-Sleep -Milliseconds 300; Press-Vk 0x1B }   # ESC fecha popups do jogo (ex "precisa estar fora da cidade" apos /darmr)
+function Close-Popup {   # ESC fecha popup do jogo (ex "precisa estar fora da cidade" apos /darmr) - mas com NADA
+  # aberto o ESC ABRE o menu principal (Shop / Inventario / Personagem / ... / Sair), e esse painel tapa o
+  # MINIMAPA. Dois ESC as cegas eram um a mais sempre que o primeiro fechava alguma coisa: em 04/09 o mix
+  # terminou com a lista aberta, o 1o ESC fechou a lista, o 2o abriu o menu, e o bot passou 4+ min cego em
+  # "NAO CONSEGUI LER o nome do mapa" reenviando /k37 pra um minimapa tapado. Entao aperta e CONFERE.
+  # Os dois ESC de sempre ficam: fecham popup empilhado no MEIO da tela, que o sensor abaixo nao enxerga.
+  Press-Vk 0x1B; Start-Sleep -Milliseconds 300; Press-Vk 0x1B
+  # Sensor: o proprio rotulo do minimapa. Menu do jogo aberto = rotulo tapado = Read-Map vazio -> mais um ESC fecha.
+  Start-Sleep -Milliseconds 450
+  for($i = 0; $i -lt 2 -and -not (Read-Map $null); $i++){ Press-Vk 0x1B; Start-Sleep -Milliseconds 450 }
+  if(-not (Read-Map $null)){ Log "ESC: minimapa continua ilegivel (menu do jogo aberto? minimapa recolhido?)" }
+}
 function Is-FarmMap($m){ $m -and ($m -notmatch $CityWords) }   # nao e cidade conhecida
 function Spot-Map { if($script:phase -eq 'warmup'){ $WarmupMap } else { $WarpMap } }   # nome esperado do spot da fase atual
 function In-Farm($img){ Same-Map (Read-Map $img) (Spot-Map) }   # $true so se esta no spot CORRETO da fase (nao qualquer mapa; ex AIDA nao conta)
@@ -795,14 +1036,37 @@ function Find-Captcha($img){   # centro do texto "Selecione a mesma imagem abaix
   $y1 = ($r | % { $_.Y } | measure -Minimum).Minimum; $y2 = ($r | % { $_.Y + $_.Height } | measure -Maximum).Maximum
   @{ X = [int](($x1+$x2)/2); Y = [int](($y1+$y2)/2) }
 }
-function Solve-Captcha($img,$a,[switch]$NoClick){   # $true se clicou (ou, com -NoClick, se teria certeza)
+function Score-Captcha($img,$a){   # cada opcao contra a imagem de referencia (SAD: quanto MENOR, mais parecida)
   $ref = Crop-Bitmap $img ($a.X-40) ($a.Y+$CapRefDy-40) 80 80
   $cands = foreach($dy in $CapRowDy){ foreach($dx in $CapColDx){
     $o = Crop-Bitmap $img ($a.X+$dx-48) ($a.Y+$dy-48) 96 96; $s = [Img]::MinSad($ref,$o); $o.Dispose()
     [pscustomobject]@{ X = $a.X+$dx; Y = $a.Y+$dy; S = $s }
   } }
-  $ref.Dispose(); $c = $cands | sort S
+  $ref.Dispose(); $cands | sort S
+}
+function Solve-Captcha($img,$a,[switch]$NoClick){   # $true se clicou (ou, com -NoClick, se teria certeza)
+  $c = Score-Captcha $img $a
   Log ("captcha: melhor ({0},{1}) score={2} | segundo score={3}" -f $c[0].X,$c[0].Y,$c[0].S,$c[1].S)
+  # Ambiguo? Antes de desistir, tira OUTRA foto com o PONTEIRO FORA DO CAMINHO. O cursor aparece na captura e a
+  # seta cobre um pedaco do quadradinho embaixo dele - o mesmo problema que o Tirar-Cursor ja resolvia no mix.
+  # Em 04/09 o ponteiro parou em cima da opcao CERTA e o bot ficou preso das 06:09 as 07:00+, reiniciando sozinho
+  # no meio: score 320229 contra 327168 no segundo (0.98). Um acerto de verdade fica em 23-68 mil, 0.07-0.18 do
+  # segundo - o $CapConfidence estava certo em recusar, quem estava errado era a foto.
+  # -NoClick nao entra aqui: e o caminho do -TestImage/-Preflight, que roda sobre um PNG salvo e pode nem ter jogo aberto.
+  if(-not $NoClick -and $c[0].S -gt $CapConfidence * $c[1].S){
+    $volta = $null
+    if($NoFocusRead){ $pc = New-Object W+POINT; if([W]::GetCursorPos([ref]$pc)){ $volta = $pc } }   # o ponteiro e SEU: devolve onde estava
+    Tirar-Cursor
+    $img2 = Capture-Raw
+    try {
+      $a2 = Find-Captcha $img2
+      if($a2){
+        $c2 = Score-Captcha $img2 $a2
+        Log ("captcha: 2a foto sem o ponteiro: melhor ({0},{1}) score={2} | segundo score={3}" -f $c2[0].X,$c2[0].Y,$c2[0].S,$c2[1].S)
+        if($c2[0].S -le $CapConfidence * $c2[1].S){ $c = $c2 }
+      }
+    } finally { $img2.Dispose(); if($volta){ [W]::SetCursorPos($volta.X,$volta.Y) | Out-Null } }
+  }
   if($c[0].S -gt $CapConfidence * $c[1].S){ Log "captcha: ambiguo, nao vou chutar"; return $(if($NoClick){ $false } else { 'ambiguo' }) }
   if($NoClick){ return $true }
   $prev = Focus-Game; if(-not $script:gameFg){ Restore-Focus $prev; return 'falhou' }
@@ -937,8 +1201,14 @@ function Plan-Stats($st,[int]$p){   # TODOS os comandos que os $p pontos dao con
       $sc = $StatCmds | ? { $_.Key -eq $k } | select -First 1
       # /a tem perigo REAL documentado (abaixo de 100 teleporta pra AIDA). Pros outros o piso era so precaucao.
       # Na reta final ($StatPertoDoMax) o piso cai pra $StatMinPerto - inclusive no /a, que fica bem acima dos 100.
+      # $StatMinPerto existe pra BAIXAR o piso na reta final (de 1000 pra 500). Depois que o servidor aceitou
+      # abaixo do piso, o $StatMinOutros virou 100 - e ai pegar o $StatMinPerto direto SUBIA o piso de 100 pra
+      # 500 justamente no trecho onde fechar o cap e tudo que importa. Foi o travamento de 04/09: F=30000
+      # V=30000 (os 4 ja contam como "reta final"), 418 pontos em maos, 418 < 500, nenhum comando saiu. Ficaram
+      # 31 min parados, o /darmr sem sair, e o bot se reiniciou sozinho por "sem progresso". Na reta final o
+      # piso e o MENOR dos dois - nunca um piso maior que o do trecho normal.
       $minCmd = if($sc.Cmd -eq '/a'){ if($perto){ [Math]::Max($StatMinPerto, $StatMinAgi) } else { $StatMinCmd } }
-                else { if($perto){ $StatMinPerto } else { $StatMinOutros } }
+                else { if($perto){ [Math]::Min($StatMinPerto, $StatMinOutros) } else { $StatMinOutros } }
       $amt = [Math]::Min($p, $faltaEtapa)
       # se o que falta pra fechar a etapa e menor que o minimo por comando, passa um pouco da meta (limitado pelo cap):
       # senao a etapa inteira TRAVA por causa de um atributo faltando <1000, e os pontos ficam empilhando pra sempre
@@ -1031,7 +1301,10 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
           }
         }
         if($testou){ continue }   # com o veredito na mao, refaz o plano ja com o piso novo
-        Log "stats: nada a distribuir agora ($p pontos; minimo $StatMinOutros por comando)"
+        # Mostrar o piso REAL: na reta final ele nao e o $StatMinOutros, e a mensagem "418 pontos; minimo 100"
+        # fez a recusa parecer um absurdo quando o piso aplicado tinha sido 500.
+        $pisoReal = if($script:pertoDoMax){ [Math]::Min($StatMinPerto, $StatMinOutros) } else { $StatMinOutros }
+        Log "stats: nada a distribuir agora ($p pontos; minimo $pisoReal por comando)"
       }
       $script:statVazias++   # leitura que nao rendeu comando: da proxima vez espera mais (ver Tick-Stats)
       return
@@ -1046,6 +1319,13 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
       $kc = ($StatCmds | ? { $_.Cmd -eq ($cmd -split ' ')[0] } | select -First 1).Key
       if($kc -and $null -ne $script:stCarry[$kc]){ $script:stCarry[$kc] += $qtd }
     }
+    # REVERTIDO em 08/09. Aqui havia um atalho que pulava a releitura de status quando a sobra simulada
+    # (pontos - soma do plano) ja estava abaixo do piso. Entrou no ar as 02:19 e a partir dessa sessao o painel
+    # de status NUNCA MAIS abriu: 1789 leituras boas / 0 falhas na sessao anterior contra 0 boas / 84 falhas na
+    # seguinte, e assim em todas depois. O char empilhou pontos contra a MEMORIA ($stCarry) e o MR nao fechava -
+    # 284 resets num MR que fecha com ~21. Nao achei o mecanismo por leitura do codigo, e o custo de investigar
+    # com o bot quebrado nao compensa o ~1 min por MR que o atalho economizava. Se voltar, volta com um teste
+    # que exercite Read-Status de verdade, nao so o Plan-Stats.
     Wait $StatRoundSec
   }
 }
@@ -1078,6 +1358,7 @@ function Tick-Stats {   # so roda enquanto upa (nunca durante captcha)
   $script:statDue = (Get-Date).AddSeconds((Jit $intervalo))
 }
 $script:lvlPrev = $null; $script:lvlChangedAt = Get-Date; $script:lvlLogged = $null; $script:lvlSame = 0   # lvlSame = leituras BEM-SUCEDIDAS seguidas com o level identico
+$script:stallPts = -1   # pontos disponiveis na ultima avaliacao de miss infinito (ver Check-Progress)
 function Check-Progress([int]$lvl, $img){   # level parado: se saiu do spot, re-teleporta (retorna $false p/ reiniciar o ciclo); se esta no spot parado, religa helper (miss infinito). $true = segue normal
   if($lvl -ne $script:lvlPrev){ $script:lvlPrev = $lvl; $script:lvlChangedAt = Get-Date; $script:lvlSame = 0; return $true }
   $script:lvlSame++
@@ -1086,6 +1367,15 @@ function Check-Progress([int]$lvl, $img){   # level parado: se saiu do spot, re-
   # Os segundos sao o piso pra nao disparar cedo logo apos o reset, com o char fraco.
   $parado = [int]((Get-Date) - $script:lvlChangedAt).TotalSeconds
   if($script:lvlSame -lt $StallReads -or $parado -lt $StallMinSec){ return $true }
+  # TERCEIRA condicao: os PONTOS DISPONIVEIS subiram? Entao o char esta matando, e nao esta travado - o level e
+  # que anda em degraus (level alto, mob fraco, ou o proprio teto). O bot ja tem esse numero na mao, da ultima
+  # leitura de status; nao custa uma captura a mais.
+  # Medido no MR #15, o melhor do log: dos 19 ciclos, os 3 com miss infinito somaram 646s de EXCESSO sobre o p25
+  # (61s) - um deles com 10 disparos seguidos e o char ganhando ponto o tempo todo (16, 32, 64...). Cada disparo
+  # custa ESC + pausa + anda + religa helper. Era a maior causa isolada da cauda lenta, acima ate do captcha.
+  # A base e atualizada SEMPRE, senao distribuir os pontos (que zera o disponivel) desligaria a guarda pro resto do ciclo.
+  $subiu = ($script:ptsLeft -gt $script:stallPts); $script:stallPts = $script:ptsLeft
+  if($subiu){ $script:lvlChangedAt = Get-Date; $script:lvlSame = 0; return $true }
   $script:lvlChangedAt = Get-Date; $script:lvlSame = 0
   # $null = : Start-Helper DEVOLVE $true/$false, e sem descartar isso a funcao saia com DOIS valores. O chamador
   # faz `if(-not (Check-Progress ...))` e um array de 2 itens e sempre "verdadeiro" em PowerShell: o $false daqui
@@ -1289,10 +1579,20 @@ function Master-Reset {   # atributos cheios: /darmr -> tela de selecao -> clica
       return
     }
     $script:mrs++; $script:mrsSessao++   # mrs = da vida do char (vem do estado.txt); mrsSessao = so deste processo, e o que a janelinha mostra
+    Cota-Rolar   # antes de contar: se o MR caiu depois da meia-noite, ele e do dia NOVO
+    $script:mrsDia++
     $dur = [Math]::Round(((Get-Date) - $script:mrStart).TotalHours, 2); $script:mrStart = Get-Date
-    Log "== MASTER RESET #$($script:mrs) FEITO (levou ${dur}h, $($script:resets) resets) =="   # o marco que interessa
+    Log "== MASTER RESET #$($script:mrs) FEITO (levou ${dur}h, $($script:resets) resets) | $($script:mrsDia) de $(if($MrsPorDia -gt 0){ $MrsPorDia } else { 'infinito' }) hoje =="   # o marco que interessa
     Notify "MudinhoX" "Master reset #$($script:mrs) feito em ${dur}h."
     $script:resets = 0; $script:ptsSent = 0; $script:runStart = Get-Date; $script:ativoSeg = 0   # zera pra medir o proximo MR limpo
+    # Bateu a cota do dia: para de resetar e vai mixar joias ate virar o dia. O modo joias ja e exatamente isso
+    # (farma no spot da fase, mixa, repete, sem /resetar e sem /darmr), entao o descanso nao precisou de modo novo.
+    # O Warp-To-Spot dele respeita a fase, entao o char recem-saido do /darmr vai pro $WarmupCmd, nao pro $WarpCmd.
+    if($MrsPorDia -gt 0 -and $script:mrsDia -ge $MrsPorDia -and -not $script:cotaJoias){
+      $script:cotaJoias = $true; $script:modo = 'joias'; Sync-BotoesModo
+      Log "== COTA DIARIA: $($script:mrsDia) master resets hoje (limite $MrsPorDia). Parando de resetar; vou mixar joias ate virar o dia. =="
+      Notify "MudinhoX" "Cota do dia: $($script:mrsDia) master resets. Parei de resetar, vou mixar joias ate amanha."
+    }
     # Antes ia direto pro warmup. Agora TESTA o spot normal: se o char aguentar, economiza os 37-56 min que o
     # warmup custava por MR. Se nao aguentar, Tick-WarmupTeste percebe e cai pro Lost Tower sem perder a noite.
     if($WarmupTeste){
@@ -1358,7 +1658,15 @@ function Start-Helper {   # liga o helper e CONFIRMA. Para de clicar apos PlayTr
   for($i = 0; $i -lt $PlayTries; $i++){
     $st = Get-HelperState
     if($st -eq 'running'){ if($i){ Log "helper rodando" }; return $true }
-    if($st -eq 'stopped'){ Log "clicando play ($($i+1)/$PlayTries)"; $null = Click-Client $PlayBtn.X $PlayBtn.Y; Wait 2.5; continue }
+    if($st -eq 'stopped'){
+      Log "clicando play ($($i+1)/$PlayTries)"; $null = Click-Client $PlayBtn.X $PlayBtn.Y
+      # Espera ATIVA dentro da mesma janela de 2.5s: o helper costuma ligar na hora, e dormir os 2.5s inteiros
+      # custava ~2s por ciclo (~42s por master reset). O piso ANTES do 2o clique continua igual - o play e um
+      # ALTERNADOR, e clicar de novo cedo demais DESLIGA o helper. Era so pra isso que o sleep cheio existia.
+      $ate = (Get-Date).AddSeconds(2.5)
+      while((Get-Date) -lt $ate){ if((Get-HelperState) -eq 'running'){ Log "helper rodando"; return $true }; Wait 0.4 }
+      continue
+    }
     Wait 2   # botao nao reconhecido (tela ainda carregando): espera sem clicar
   }
   if((Get-HelperState) -eq 'running'){ Log "helper rodando"; return $true }
@@ -1534,11 +1842,23 @@ function Abrir-Modal-Mix([int]$volta){   # NPC -> botao "Mixar Joias". $true se 
 function Mix-Jewels {   # /mixer -> NPC -> "Mixar Joias" -> mixa TODAS as opcoes verdes (reabrindo o modal a cada uma) ate sobrar so vermelho
   if(-not $MixNpcPos){ Notify "MudinhoX" "Nao sei onde o NPC do mix fica: rode -TestNpc e preencha `$MixNpcPos."; return $false }
   Tag-Ciclo 'mix'; Log "mix: indo pro $MixCmd"
-  if(-not (Send-Chat $MixCmd)){ return $false }
-  Wait $WarpWaitSec
+  # O return mudo daqui escondia a falha: o gatilho por tempo disparava, o comando morria e o log nao dizia nada.
+  if(-not (Send-Chat $MixCmd)){ Log "mix: nao consegui mandar $MixCmd (captcha na tela? jogo sem foco?) - tento de novo no proximo tick"; return $false }
+  # Relogio do mix por tempo: zerado depois que o $MixCmd SAIU, e AQUI porque e o unico ponto por onde os dois
+  # modos passam (Tick-Inventory e Ciclo-Joias). Zerar antes do Send-Chat gastaria a janela de $MixEveryMin
+  # inteira num comando que o jogo engoliu, sem o personagem ter saido do spot. Depois daqui ele ja saiu: se o
+  # NPC nao aparecer, nao adianta voltar la em 1 min.
+  $script:mixLast = Get-Date
+  # Era `Wait $WarpWaitSec` cravado (9s). Medido em 164 mixes do log: do /mixer ate achar o NPC davam 12.4s, e a
+  # maior fatia era esse sleep esperando um teleporte que cai em 2-3s. Agora espera pelo RESULTADO - o nome do
+  # mapa mudar - com o mesmo teto de antes. Estourou o teto, segue mesmo assim: o Hover-Npc logo abaixo confere
+  # o nome do NPC por OCR antes de clicar, entao chegar cedo demais nao clica em lugar nenhum.
+  $mapaAntes = Read-Map $null
+  $ate = (Get-Date).AddSeconds($WarpWaitSec)
+  do { Wait 1; $mapaAgora = Read-Map $null } until (($mapaAgora -and $mapaAgora -ne $mapaAntes) -or (Get-Date) -ge $ate)
   $prev = Focus-Game; if(-not $script:gameFg){ Restore-Focus $prev; return $false }
   try {
-    $mixados = 0
+    $mixados = 0; $anterior = $null   # $anterior = joia clicada na volta passada, ainda sem veredito
     for($round = 0; $round -lt $MixRounds; $round++){
       Tirar-Cursor   # depois de clicar, o cursor fica EM CIMA da lista e some com a palavra debaixo dele no OCR
       $img = Capture-Raw; $words = Screen-Words $img
@@ -1556,6 +1876,16 @@ function Mix-Jewels {   # /mixer -> NPC -> "Mixar Joias" -> mixa TODAS as opcoes
         if((Word-Color $img $w) -eq 'green'){ $verde = @{ J = $j; W = $w }; break }
       }
       $img.Dispose()
+      # VEREDITO DA VOLTA ANTERIOR, e nao a mensagem do chat: a joia clicada saiu do verde = mixou de verdade.
+      # Se o clique nao tivesse mixado, ela continuaria verde e seria escolhida DE NOVO nesta volta. O "Sucesso!
+      # voce mixou N" e leitura fraca - falhou em 5 dos 6 mixes que comprovadamente aconteceram (01/09 e 04/09),
+      # e o log fechava com "terminado (0 mix)" logo depois de mixar Soul, Life e Creation. Com o mix rodando
+      # sozinho a cada $MixEveryMin, um contador que sempre diz 0 esconde a falha de verdade quando ela vier.
+      if($anterior){
+        if(-not $verde -or $verde.J.Name -ne $anterior){ $mixados++; $script:joiasMix++; Log "mix: $anterior mixado (saiu do verde)" }
+        else { Log "mix: $anterior continua verde - o clique nao mixou" }
+      }
+      $anterior = $(if($verde){ $verde.J.Name } else { $null })
       if(-not $verde){ Log "mix: nenhuma opcao verde sobrou ($mixados mixados)"; break }
       $c = Word-Center $verde.W
       # print ANTES de clicar, igual ao captcha: fica o registro de qual opcao estava verde e onde o bot clicou
@@ -1577,15 +1907,12 @@ function Mix-Jewels {   # /mixer -> NPC -> "Mixar Joias" -> mixa TODAS as opcoes
       $cc = Word-Center $conf
       Log "mix: confirmando em ($($cc.X),$($cc.Y))"
       $null = Click-Client $cc.X $cc.Y -KeepFocus
-      # Antes o bot so CLICAVA e assumia que deu certo. O jogo responde "Sucesso! voce mixou N Soul Points" - ler
-      # isso troca "cliquei" por "confirmei que mixou", e se nao vier, ele sabe que algo falhou.
-      $ok = $false
-      for($t = 0; $t -lt $MixConfirmTentativas -and -not $ok; $t++){
-        Wait 1
-        if((Read-Msgs $null) -match $MixSucessoWords){ $ok = $true }
-      }
-      if($ok){ $mixados++; $script:joiasMix++; Log "mix: $($verde.J.Name) confirmado pelo jogo" }
-      else { Log "mix: cliquei em CONFIRMAR mas o jogo nao avisou sucesso - pode nao ter mixado" }
+      # "Sucesso! voce mixou N Soul Points" no chat e BONUS, nao veredito: a faixa vive cheia de anuncio de jogador
+      # e a leitura falha na maioria das vezes. Quem conta e a volta seguinte (a joia saiu do verde).
+      # Era um laco de $MixConfirmTentativas x (Wait 1 + OCR) esperando essa mensagem que quase nunca vem: com o
+      # $MixWaitSec somado deu 11.5s por joia em 197 medicoes. Agora e UMA leitura, e ela nem decide nada.
+      Wait 1
+      if((Read-Msgs $null) -match $MixSucessoWords){ Log "mix: $($verde.J.Name) confirmado pelo jogo" }
       Wait $MixWaitSec
     }
     Close-Popup
@@ -1670,11 +1997,19 @@ function Ciclo-Dragoes {   # MODO DRAGOES: so caca. Nao checa inventario, nao ch
   $script:ptsLastGain = Get-Date
 }
 $script:mixNow = $false; $script:semPlay = 0; $script:invFalhas = 0; $script:invDesligado = $false
-function Tick-Inventory {   # aviso do jogo (ou botao MIXAR JOIAS) -> vai mixar e reinicia o ciclo (volta pro spot)
+$script:mixLast = Get-Date   # quando o bot foi mixar pela ultima vez (gatilho por tempo do ciclo normal)
+function Tick-Inventory {   # aviso do jogo, teto de tempo (ou botao MIXAR AGORA) -> vai mixar e reinicia o ciclo (volta pro spot)
   # A contagem periodica de celulas saiu daqui: abria e fechava o inventario a cada 2 min (dois cliques, foco
   # roubado) pra produzir um numero que oscila com o alinhamento da grade - o MESMO inventario cheio leu 0 e 26
   # livres com 20px de diferenca na ancora. Sobrou o gatilho confiavel: a mensagem do proprio jogo. Inv-Free
   # continua existindo pro -Preflight e pro -TestInv, onde o numero e so informativo.
+  # ...so que a mensagem NUNCA chegou: 0 ocorrencias de "inventario cheio" em 42 mil linhas de rpa.log, e no
+  # mesmo periodo 68 pausas manuais suas pra mixar na mao. A faixa do $MsgBox e dominada por chat de jogador
+  # (anuncio de troca), e o aviso de inventario cheio nao cai la. O modo joias ja tinha o teto de tempo
+  # ($JoiasFarmMax) justamente por isso; o ciclo normal ficou sem gatilho nenhum. Agora tem o mesmo teto.
+  if($MixEveryMin -gt 0 -and -not $script:mixNow -and ((Get-Date) - $script:mixLast).TotalMinutes -ge $MixEveryMin){
+    $script:mixNow = $true; Log "inventario: $MixEveryMin min desde o ultimo mix -> indo mixar (o jogo nao avisa 'cheio' nesta faixa)"
+  }
   if(-not $script:mixNow){ return }
   $script:mixNow = $false
   $null = Mix-Jewels
@@ -1833,7 +2168,9 @@ function Ciclo-Joias {   # MODO JOIAS: farma no spot ate encher o inventario, va
   if(-not $ok){ Wait 15; return }
   $fim = (Get-Date).AddMinutes($JoiasFarmMax)
   $cheio = $false
-  Log "joias: farmando em $WarpCmd ate encher (ou $JoiasFarmMax min)"
+  # O spot e o da FASE (Warp-To-Spot escolhe): recem-saido de um /darmr o char e fraco e vai pro $WarmupCmd.
+  # A linha dizia "$WarpCmd" sempre, e no descanso da cota - que comeca logo depois de um MR - isso era mentira.
+  Log "joias: farmando em $(if($script:phase -eq 'warmup'){ $WarmupCmd } else { $WarpCmd }) ate encher (ou $JoiasFarmMax min)$(if($script:cotaJoias){ ' [descanso da cota diaria]' })"
   do {
     Wait (Poll-Interval); Bater-Heartbeat
     Hold-Focus
@@ -2164,11 +2501,31 @@ if($TestMix){   # abra o modal de mix NO JOGO antes de rodar
 
 Show-Ui
 if(Heartbeat-Fresco){   # ja tem bot vivo: dois no mesmo jogo brigam pelo teclado e estragam tudo
-  Log "ja existe um bot rodando (heartbeat fresco). Saindo pra nao duplicar."
+  Log $(if($Slot -gt 0){ "ja existe um bot no slot $Slot (heartbeat$Sfx.txt fresco). Saindo pra nao duplicar." } else { 'ja existe um bot rodando (heartbeat fresco). Saindo pra nao duplicar.' })
   if($script:ui){ $script:ui.Dispose() }; exit
 }
-Remove-Item $StopFile -ErrorAction SilentlyContinue; Bater-Heartbeat; Log "iniciando"
+Remove-Item $StopFile -ErrorAction SilentlyContinue
+if($Slot -gt 0){ Remove-Item $StopAllFile -ErrorAction SilentlyContinue }   # flag geral esquecida no disco derrubaria o start
+Bater-Heartbeat
+Log $(if($Slot -gt 0){ "iniciando (slot $Slot, spot $WarpCmd, arquivos rpa$Sfx.log / estado$Sfx.txt)" } else { 'iniciando' })
 try {   # preflight no start: 10s conferindo tudo evita a noite inteira perdida por algo obvio. Nao BLOQUEIA (o spot nem e checado, o bot ainda vai warpar)
+  # JANELA MENOR QUE A CALIBRACAO = para na hora, com instrucao. Nao e frescura de preflight: TODA coordenada do
+  # bot e fixa em $ClientEsperado ($PlayBtn, $LevelBox, $MixNpcPos, a grade do captcha...). Numa janela menor o
+  # Read-Level vai ler em x=1080 de uma tela de 958 e o GetPixel estoura - foi o que matou os 4 slots em 08/09,
+  # quando os clientes foram reduzidos pra 958x484 pra caberem os quatro no monitor. O erro que aparecia era
+  # "O parametro deve ser positivo e < Width", que nao diz nada sobre o tamanho da janela.
+  # Maior que a calibracao nao para: as coordenadas ainda caem dentro, e o $LevelBox/$ChatBox ja medem a partir
+  # da BASE da area cliente, entao altura extra e tolerada (ja rodou assim em 1920x1061).
+  $cli = New-Object W+RECT; [W]::GetClientRect((Get-Game),[ref]$cli) | Out-Null
+  if($cli.R -lt $ClientEsperado.W -or $cli.B -lt $ClientEsperado.H){
+    Log "PARANDO: a area cliente do jogo esta $($cli.R)x$($cli.B), menor que a calibracao $($ClientEsperado.W)x$($ClientEsperado.H)."
+    Log "  Todas as coordenadas do bot sao fixas nesse tamanho - numa janela menor ele le fora da tela e quebra."
+    Log "  Ponha a janela do jogo em $($ClientEsperado.W)x$($ClientEsperado.H) e suba de novo."
+    if($Slot -gt 0){ Log "  No multibox as janelas FICAM EMPILHADAS mesmo, uma por cima da outra - o bot traz pra frente a que ele precisa, uma de cada vez." }
+    Notify "MudinhoX" "Janela do jogo em $($cli.R)x$($cli.B); precisa ser $($ClientEsperado.W)x$($ClientEsperado.H). Bot parado."
+    if($script:logW){ $script:logW.Dispose() }; if($script:ui){ $script:ui.Dispose() }
+    exit
+  }
   Log "preflight de inicializacao:"
   $pf = Run-Preflight $false
   if($pf){ Notify "MudinhoX" "$pf verificacao(oes) falharam no start - veja o log. O bot vai tentar rodar mesmo assim." }
@@ -2182,11 +2539,10 @@ if($script:phase -eq 'warmup' -and $script:warmupCount -ge $WarmupResets){
   Log "warmup ja cumprido ($($script:warmupCount)/$WarmupResets pelo estado.txt) -> indo direto pro spot normal ($WarpCmd)"
 }
 if($script:ui){   # botoes tem que refletir o modo retomado do estado.txt
+  Sync-BotoesModo   # UM lugar decide texto e cor dos botoes de modo; antes eram seis, e cada layout novo tinha que caçar todos
   if($script:modo -eq 'joias'){
-    $script:btnMix.Text = 'MODO JOIAS (ligado)'; $script:btnMix.BackColor = 'ForestGreen'
     Log "retomando em MODO JOIAS: farma em $WarpCmd ate encher, mixa no $MixCmd, repete"
   } elseif($script:modo -eq 'dragoes'){
-    $script:btnGold.Text = 'MODO DRAGOES (ligado)'; $script:btnGold.BackColor = 'ForestGreen'
     Log "retomando em MODO DRAGOES: so caca em $GoldCmd"
   }
 }
@@ -2195,6 +2551,7 @@ while(-not $script:stop){   # envelope: se o cliente cair, o catch espera ele vo
 try {
 while($true){
   Pause-Gate
+  Cota-Rolar   # meia-noite: zera a cota do dia e tira o bot do descanso. Aqui em cima porque no descanso quem roda e o Ciclo-Joias, que da `continue`
   if($script:modo -eq 'joias'){ Ciclo-Joias; continue }       # farma ate encher, mixa, repete. Sem reset/darmr.
   if($script:modo -eq 'dragoes'){ Ciclo-Dragoes; continue }   # so caca. Sem inventario, sem atributos, sem reset/darmr.
   if($script:mixNow){ Hold-Focus; try { Tick-Inventory } finally { Release-Focus } }   # botao MIXAR JOIAS: atende ANTES do warp (senao so era visto la dentro do loop de farm, e o bot parecia ignorar o botao)
@@ -2236,13 +2593,22 @@ while($true){
       }
     } finally { Release-Focus }
   } until (($null -ne $lvl -and $lvl -ge $TargetLevel) -or $script:restartCycle)
-  # gasta os pontos ANTES de resetar: assim nunca sobra mais que o ganho de um reset (~2000) alem do necessario, e o /darmr sai assim que fecha o cap
-  # se ainda sobrar mais de $StatMaxLeftover, tenta de novo (leitura ruim do OCR costuma resolver na releitura) antes de gerar mais 2000 pontos com o reset
-  for($d = 0; $d -lt 3 -and -not $script:restartCycle; $d++){
-    Hold-Focus; try { Distribute-Points } finally { Release-Focus }
-    if($script:ptsLeft -le $StatMaxLeftover){ break }
-    Log "stats: ainda sobram $($script:ptsLeft) pontos (limite $StatMaxLeftover), segurando o reset e tentando de novo ($($d+1)/3)"
-    Wait 3
+  # CHEGOU NO ALVO: reseta JA. Distribuir aqui custava 11.1s por reset (medido em 82 resets: `level alvo ->
+  # /resetar`), ~3.7 min por master reset, e nao era necessario - os pontos nao somem, so esperam. Quem gasta
+  # e o Tick-Stats durante a SUBIDA do proximo ciclo, que e quando o char esta upando e as leituras ja acontecem
+  # de qualquer forma. Pedido seu em 11/09: distribuir do level 1 ao alvo, e no alvo so resetar.
+  # A guarda de pontos parados FICA: se a ultima leitura ja mostrava mais que $StatMaxLeftover sobrando, aqui e
+  # o lugar de gastar antes de gerar mais uns 2000 com o reset. Foi assim que um char empilhou 1.66 MILHAO de
+  # pontos em 08/09 - sem esse freio a pilha cresce sem ninguem ver. $script:ptsLeft vem da ultima leitura de
+  # status do farm, entao a decisao nao custa uma leitura nova.
+  if($script:ptsLeft -gt $StatMaxLeftover){
+    Log "stats: $($script:ptsLeft) pontos sobrando (limite $StatMaxLeftover) - gastando antes de resetar"
+    for($d = 0; $d -lt 3 -and -not $script:restartCycle; $d++){
+      Hold-Focus; try { Distribute-Points } finally { Release-Focus }
+      if($script:ptsLeft -le $StatMaxLeftover){ break }
+      Log "stats: ainda sobram $($script:ptsLeft) pontos (limite $StatMaxLeftover), segurando o reset e tentando de novo ($($d+1)/3)"
+      Wait 3
+    }
   }
   # O Close-Popup aqui esta FORA de qualquer bloco de foco (o Release-Focus acima ja devolveu): sem o Hold-Focus,
   # o ESC ia parar na janela de quem estivesse na frente. Agora ele pega o jogo, manda o ESC e devolve.
@@ -2252,8 +2618,13 @@ while($true){
   Hold-Focus; try { while(-not (Send-Chat "/resetar")){ Release-Focus; Wait 10; Hold-Focus } } finally { Release-Focus }
   $sent = Get-Date; $resends = 0; $warned = $null; $inicio = Get-Date
   $resetOk = $false
+  # 1a conferida em 1s, depois no ritmo de 4s. Medido no MR #15: `/resetar -> reset feito` deu mediana 5s e
+  # MINIMO 5s em 19 resets - piso artificial, ninguem estava esperando o servidor, era o Wait 4 mais a leitura.
+  # Sao 139s por master reset so pra PERCEBER um reset que ja tinha acontecido. Conferir cedo nao arrisca nada:
+  # se o frame ainda estiver velho, cai na volta seguinte exatamente como antes.
+  $espera = 1
   do {
-    Wait 4; $lvl = $null
+    Wait $espera; $espera = 4; $lvl = $null
     Hold-Focus
     try {
       $img = Capture-Game
@@ -2309,7 +2680,7 @@ while($true){
   if($script:spotTeste){   # fechou um reset no spot normal dentro do prazo: o warmup era desperdicio
     $seg = [int]((Get-Date) - $script:spotTesteIni).TotalSeconds
     $script:spotTeste = $false
-    Log "pos-MR: o spot normal fechou um reset em ${seg}s - PULANDO o warmup (economia medida: 37-56 min por MR)"
+    Log "pos-MR: o spot normal fechou um reset em ${seg}s - PULANDO o warmup (medido: o warmup custa ~14 min, 33% do MR)"
     Save-Estado
   }
   if($script:phase -eq 'warmup'){

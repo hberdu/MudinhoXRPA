@@ -113,7 +113,7 @@ $PlayBtn = @{ X = 77; Y = 33 }
 if($src -notmatch '(?s)(function Check-Progress.*?\r?\n\})'){ throw "nao achei a Check-Progress" }
 . ([scriptblock]::Create($Matches[1]))
 
-function ZeraStall($segAtras){ $script:lvlPrev = 100; $script:lvlSame = 0; $script:lvlChangedAt = (Get-Date).AddSeconds(-$segAtras); $script:noSpot = $true; $script:destravouStall = 0; $script:reteleportou = 0 }
+function ZeraStall($segAtras){ $script:lvlPrev = 100; $script:lvlSame = 0; $script:lvlChangedAt = (Get-Date).AddSeconds(-$segAtras); $script:noSpot = $true; $script:destravouStall = 0; $script:reteleportou = 0; $script:ptsLeft = 0; $script:stallPts = 0 }
 
 # level parado ha bastante tempo, mas ainda nao houve $StallReads leituras: nao dispara
 ZeraStall 60
@@ -134,6 +134,28 @@ $null = Check-Progress 100 $null; $null = Check-Progress 101 $null
 Chk 'level novo zera o contador'             $script:lvlSame            0
 $null = Check-Progress 101 $null
 Chk 'e recomeca a contagem do zero'          $script:destravouStall     0
+
+# PONTOS SUBINDO = char matando, mesmo com o level parado. O level anda em degraus (level alto, mob fraco, teto),
+# e os pontos disponiveis sao a prova direta de que ele nao esta travado. Medido no MR #15, o melhor do log: 3
+# dos 19 ciclos tiveram miss infinito e somaram 646s de excesso sobre o p25 - um com 10 disparos seguidos e o
+# char ganhando ponto o tempo todo (16, 32, 64...). Maior causa isolada da cauda lenta, acima do captcha.
+ZeraStall 60
+$script:ptsLeft = 64   # subiu de 0 pra 64 entre as leituras
+$null = Check-Progress 100 $null; $null = Check-Progress 100 $null; $null = Check-Progress 100 $null
+Chk 'pontos subindo NAO dispara'             $script:destravouStall     0
+Chk '  (e o contador de leituras zera)'      $script:lvlSame            0
+# ...mas pontos PARADOS com o level parado continua sendo travamento de verdade
+ZeraStall 60
+$null = Check-Progress 100 $null; $null = Check-Progress 100 $null; $null = Check-Progress 100 $null
+Chk 'pontos parados ainda dispara'           $script:destravouStall     1
+# distribuir zera o disponivel: a base tem que acompanhar, senao a guarda ficaria desligada o resto do ciclo
+ZeraStall 60
+$script:ptsLeft = 900; $null = Check-Progress 100 $null; $null = Check-Progress 100 $null; $null = Check-Progress 100 $null
+$script:ptsLeft = 16    # gastou os 900 num /f
+# ver progresso reinicia o relogio dos $StallMinSec (igual a quando o level muda): o tempo precisa correr de novo
+$script:lvlChangedAt = (Get-Date).AddSeconds(-60)
+1..3 | ForEach-Object { $null = Check-Progress 100 $null }
+Chk 'apos distribuir, volta a detectar'      $script:destravouStall     1
 
 # fora do spot o remedio e outro: re-teleporta em vez de dancar no lugar
 ZeraStall 60; $script:noSpot = $false

@@ -93,6 +93,52 @@ if($pl[0] -notmatch '^/e 700$'){ throw "esperava '/e 700' (energia e a primeira 
 if(($pl | Where-Object { $_ -match '^/a (\d+)$' -and [int]$Matches[1] -lt $StatMinCmd })){ throw "/a nao pode ir abaixo de $StatMinCmd" }
 $StatMinOutros = 1000
 
+# 6c. RETA FINAL nao pode ter piso MAIOR que o do trecho normal. Estado real de 04/09: F=30000 V=30000 (os 4 ja
+#     contam como reta final, o teste e >= 30000), 418 pontos em maos. Com o piso aprendido em 100, pegar o
+#     $StatMinPerto (500) direto SUBIA o piso e nenhum comando saia: 418 pontos parados, /darmr travado, 31 min
+#     perdidos e auto-restart por "sem progresso".
+$StatMinOutros = 100
+$pl = Plan-Stats (St 30000 32767 30000 32767) 418
+if($pl.Count -eq 0){ throw "reta final com piso aprendido 100: 418 pontos TEM que render comando (travou o /darmr em 04/09)" }
+if($pl[0] -notmatch '^/f 418$'){ throw "esperava '/f 418' (Ene e Agi ja no cap, Forca e a proxima da ordem), veio '$($pl[0])'" }
+# com o piso NAO aprendido (1000) o menor dos dois ainda e o 500 da reta final: 418 continua recusado, de proposito
+$StatMinOutros = 1000
+if((Plan-Stats (St 30000 32767 30000 32767) 418).Count -ne 0){ throw "sem piso aprendido, a reta final ainda usa 500 e 418 nao passa" }
+# e o /a segue protegido: na reta final o piso dele e 500, nunca os 100 da AIDA
+$StatMinOutros = 100
+if((Plan-Stats (St 32767 30000 32767 32767) 418).Count -ne 0){ throw "/a nao pode sair com 418 na reta final (piso 500)" }
+$StatMinOutros = 1000
+
+# 6d. O bot pula a releitura de status apos distribuir quando a SOBRA SIMULADA (pontos - soma do plano) ja esta
+#     abaixo do piso. Isso so e seguro se o plano nunca gastar MAIS do que ha em maos: sobra negativa faria o bot
+#     concluir "acabou" e seguir pro /resetar com pontos na mesa. Invariante checada em varios estados.
+foreach($piso in 100, 1000){
+  $StatMinOutros = $piso
+  foreach($caso in @(@(0,0,0,0,200000), @(5000,5000,5000,5000,700), @(30000,32767,30000,32767,418),
+                     @(32000,32000,32000,32000,3000), @(32767,32767,32767,30000,2767), @(1500,1500,1500,1500,6200))){
+    $st = St $caso[0] $caso[1] $caso[2] $caso[3]; $p = $caso[4]
+    $gasto = 0; foreach($c in (Plan-Stats $st $p)){ $gasto += [int](($c -split ' ')[1]) }
+    if($gasto -gt $p){ throw "piso ${piso}: plano gastou $gasto com apenas $p pontos (F=$($caso[0]) A=$($caso[1]) V=$($caso[2]) E=$($caso[3]))" }
+  }
+}
+$StatMinOutros = 1000
+
+# 6e. No ALVO o bot reseta direto, sem parar pra distribuir (custava 11.1s por reset, ~3.7 min por master reset).
+#     Os pontos nao somem: quem gasta e o Tick-Stats na subida do ciclo seguinte. MAS a guarda de pontos parados
+#     tem que continuar - foi sem ela que um char empilhou 1.66 MILHAO de pontos em 08/09, e a pilha cresce sem
+#     ninguem ver. Assercao no FONTE porque esse trecho vive no laco principal, fora de qualquer funcao.
+$fonte = Get-Content "$PSScriptRoot\mudinhox_rpa.ps1" -Raw
+if($fonte -notmatch 'if\(\$script:ptsLeft -gt \$StatMaxLeftover\)\{'){
+  throw "a guarda de pontos parados antes do reset sumiu: sem ela a pilha de pontos cresce sem limite"
+}
+if($fonte -notmatch '(?s)if\(\$script:ptsLeft -gt \$StatMaxLeftover\)\{.*?Distribute-Points'){
+  throw "a guarda existe mas nao chama Distribute-Points: ela so serve se GASTAR os pontos"
+}
+# e o caminho normal (sobra pequena) NAO pode distribuir: e justamente o tempo que estamos cortando
+if($fonte -match '(?m)^  for\(\$d = 0; \$d -lt 3 -and -not \$script:restartCycle; \$d\+\+\)\{'){
+  throw "o laco de distribuir antes do reset voltou a ser incondicional"
+}
+
 # 7. Points-Needed / Stat-Stage
 if((Points-Needed (St 0 0 0 0)) -ne 131068){ throw "Points-Needed do zero errado" }
 if((Stat-Stage (St 5000 5000 5000 4999)) -ne 5000){ throw "etapa deveria continuar em 5000 ate todos chegarem" }

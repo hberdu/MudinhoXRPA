@@ -14,6 +14,9 @@ $script:stCarry = @{}
 function Log($m){ }
 
 $src = Get-Content "$PSScriptRoot\mudinhox_rpa.ps1" -Raw
+# O Load-Estado usa a Hoje (cota diaria): pega a de verdade do .ps1, nao uma copia - copia mentiria se o formato mudasse
+if($src -notmatch '(?s)(function Hoje \{.*?\})'){ throw "nao achei a Hoje" }
+. ([scriptblock]::Create($Matches[1]))
 if($src -notmatch '(?s)(function Save-Estado.*?)\r?\nfunction Same-Map'){ throw "nao achei Save-Estado..Load-Estado no mudinhox_rpa.ps1" }
 . ([scriptblock]::Create($Matches[1]))
 
@@ -172,6 +175,25 @@ Load-Estado
 Chk 'so grava o que conhece'      $script:stCarry.Count 1
 Chk 'e nao inventa For'           ($null -eq $script:stCarry['For']) $true
 
+# COTA DIARIA: reiniciar o bot nao pode ser jeito de furar o limite de master resets do dia.
+$script:mrsDia = 13; $script:mrsDiaData = (Hoje); $script:cotaJoias = $true; $script:modo = 'joias'
+Save-Estado
+$script:mrsDia = 0; $script:cotaJoias = $false; $script:modo = 'reset'
+Load-Estado
+Chk 'cota do dia sobrevive ao restart'  $script:mrsDia 13
+Chk 'e o descanso junto'                $script:cotaJoias $true
+Chk 'inclusive o modo joias'            $script:modo 'joias'
+
+# ...mas estado de ONTEM entra zerado, mesmo com a maquina desligada a noite toda
+$script:mrsDiaData = '2020-01-01'; $script:mrsDia = 13; $script:cotaJoias = $true; $script:modo = 'joias'
+Save-Estado
+$script:mrsDia = 0; $script:cotaJoias = $false
+Load-Estado
+Chk 'cota de ontem nao conta hoje'      $script:mrsDia 0
+Chk 'descanso de ontem nao volta'       $script:cotaJoias $false
+Chk 'e o bot ja acorda resetando'       $script:modo 'reset'
+Chk 'carimbo passa a ser hoje'          $script:mrsDiaData (Hoje)
+
 Remove-Item $EstadoFile -ErrorAction SilentlyContinue
-if($script:erros -eq 0){ "OK: estado sobrevive ao round-trip, ao formato antigo e a arquivo corrompido" }
+if($script:erros -eq 0){ "OK: estado sobrevive ao round-trip, ao formato antigo, a arquivo corrompido e a cota diaria" }
 else { "$($script:erros) FALHA(S)"; exit 1 }
