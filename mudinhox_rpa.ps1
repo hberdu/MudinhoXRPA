@@ -131,7 +131,10 @@ $MixJewels     = @(       # tipos da lista, na ordem; Pat = como o OCR pode ler 
 $MixConfirmWords = '(?i)^confirmar$'   # 2o dialogo do mix: "Deseja continuar?" com CONFIRMAR/CANCELAR. NUNCA casar com CANCELAR
 $CursorParkX   = 40      # canto pra onde o mouse e levado antes de ler a tela (o ponteiro aparece na captura e some com o texto debaixo)
 $CursorParkY   = 400
-$MixListaWords = '(?i)^(soul|life|creation|chaos|fragment|stone|jewel)'   # alguma dessas na tela = a LISTA de joias esta aberta
+# "Selecione a Jewel que voce quer mixar" so existe na tela da LISTA (nao no 1o modal, nem no chat).
+# Antes eu procurava nomes de joia soltos - e o CHAT casava ("Sucesso! voce mixou N Life Points", "Obtido Jewel of
+# Soul"), entao o bot achava que a lista continuava aberta, nao reabria o modal e mixava so a primeira joia.
+$MixListaWords = '(?i)selecione'
 $MixWaitSec    = 5        # espera entre o mix de um tipo e o proximo
 $MixRounds     = 12      # no maximo N voltas (a lista tem 7 opcoes; sobra folga)
 $InvKey        = 0x56     # V = inventario
