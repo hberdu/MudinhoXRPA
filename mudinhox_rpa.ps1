@@ -220,6 +220,17 @@ $AutoTuneAlvos = 350, 380   # alvos a testar. NAO usar abaixo de $LevelMinReset:
 $LevelMaximo   = 400     # teto de level do servidor ("voce esta no nivel maximo"). No modo joias o char fica parado nele, entao o detector de miss infinito nao pode usar o level la
 $LevelMinReset = 305     # level minimo pra resetar. Era 350, confirmado pela mensagem do servidor ("Voce precisa de estar
                          # no level 350 para resetar!"); com FENRIR a conta reseta 45 levels antes, entao 305.
+$ResetRetestResets = 20  # PISO APRENDIDO NAO PODE SER DEFINITIVO. Quando o servidor recusa o alvo do CONFIG, o bot
+                         # sobe o piso pro que a mensagem disser - e ate 12/09 ficava la pra sempre, gravado no
+                         # estado.txt. Isso e errado pro caso que interessa aqui: o FENRIR baixa a exigencia em 45
+                         # levels, e se ele estiver desequipado (ou vencido) numa unica tentativa o bot desistiria
+                         # do 305 pro resto da vida do char. A cada N resets ele tenta o alvo do CONFIG de novo;
+                         # com o Fenrir valendo o servidor aceita e o piso CAI na hora, sozinho.
+                         # Custo de um teste que falha: um /resetar recusado (~11s), uma vez a cada ~MR inteiro.
+# O ALVO DO CONFIG, guardado antes que alguem mexa. O $TargetLevel e mutavel em runtime (o aprendizado do piso e
+# o Load-Estado escrevem nele), entao depois da primeira recusa ele NAO e mais "o que voce pediu" - e o que o
+# servidor impos. Sem esta copia nao havia como voltar pro 305 depois, nem como saber que 305 era o pedido.
+$TargetLevelConfig = $TargetLevel
                          # O bot re-aprende sozinho pela mensagem do servidor se estiver errado - mas so pra CIMA
                          # (ver Master-Reset), entao um valor baixo demais se corrige e um alto demais nao.
                          # ATENCAO: o Load-Estado restaura minReset= do estado.txt SEMPRE (diferente do alvo=, que so
@@ -2140,16 +2151,62 @@ function Tag-Ciclo([string]$t){ if($script:tagsCiclo -notcontains $t){ $script:t
 function CicloSeg($c){ [int](("$c" -split ':')[0]) }        # ciclo e "segundos" ou "segundos:tag+tag"
 function CicloTags($c){ $p = "$c" -split ':'; if($p.Count -gt 1){ $p[1] } else { '' } }
 function Mediana($a){ if(-not $a -or $a.Count -eq 0){ return 0 }; $s = @(@($a | % { CicloSeg $_ }) | sort); [int]$s[[int]($s.Count/2)] }
+# ---------- quantos resets ainda faltam pro /darmr ----------
+# O $porReset de antes era $ptsSent / $resets: media do MR INTEIRO, e ela mistura coisas que nao se parecem.
+# Os $WarmupResets do Lost Tower fecham com o char fraco e rendem MUITO menos que um reset no spot normal, e no
+# comeco do MR os atributos ainda estao baixos. Media com essas duas caudas nao serve pra projetar o que vem.
+# Aqui a medida e POR RESET (quanto o ganho acumulado andou entre um reset e o proximo), so da fase normal, e o
+# resumo e a MEDIANA - a mesma escolha que ja se fez pro ciclo, e pelo mesmo motivo: um reset travado ou um
+# captcha no meio nao pode mover a projecao.
+$script:ganhoPorReset = @()   # ultimos ganhos medidos, fase normal
+$script:ganhoMarco = -1       # ganho acumulado no reset anterior (-1 = ainda nao ha marco)
+$CapGanhos = 12               # ~metade de um MR: acompanha o char ficando mais forte sem virar media da vida toda
+$script:resetsDesdeTeste = 0
+function Ajustar-Alvo-Do-Proximo-Ciclo {   # re-testa o alvo do CONFIG de tempos em tempos (ver $ResetRetestResets)
+  if($script:TargetLevel -le $TargetLevelConfig){ $script:resetsDesdeTeste = 0; return }   # ja esta no alvo pedido: nada a testar
+  $script:resetsDesdeTeste++
+  if($script:resetsDesdeTeste -lt $ResetRetestResets){ return }
+  $script:resetsDesdeTeste = 0
+  Log "testando de novo o alvo do CONFIG (lvl $TargetLevelConfig) contra o piso aprendido ($($script:LevelMinReset)): com o Fenrir valendo o servidor aceita e o piso cai sozinho"
+  $script:TargetLevel = $TargetLevelConfig   # o teste E resetar no alvo pedido; recusando, o aprendizado sobe o piso de novo
+}
+function Marcar-Ganho-Do-Reset {   # chamar UMA vez por reset, logo apos ele fechar
+  $ganho = $script:ptsSent + $script:ptsLeft   # ptsSent nao conta o que ainda nao foi distribuido; a soma conta
+  if($script:ganhoMarco -ge 0 -and $script:phase -eq 'normal'){
+    $d = $ganho - $script:ganhoMarco
+    # Descarta o reset que atravessou o /darmr (o $ptsSent zera la, entao $d sai negativo) e o warmup->normal,
+    # onde o marco anterior e de um reset de Lost Tower e a diferenca nao mede reset nenhum.
+    if($d -gt 0){ $script:ganhoPorReset = @(@($script:ganhoPorReset) + $d | select -Last $CapGanhos) }
+  }
+  $script:ganhoMarco = $ganho
+}
+function Pontos-Por-Reset {   # mediana dos ganhos medidos; $null enquanto nao ha medida propria
+  if(@($script:ganhoPorReset).Count -lt 2){ return $null }   # 1 medida nao tem mediana que preste
+  $o = @($script:ganhoPorReset | sort); $o[[int]($o.Count / 2)]
+}
+function Resets-Faltando {   # projecao: quantos resets ainda faltam pro /darmr. $null = ainda nao da pra dizer
+  if($script:ptsNeeded -lt 0){ return $null }     # status nunca lido
+  if($script:ptsNeeded -eq 0){ return 0 }
+  $pr = Pontos-Por-Reset
+  # Sem medida propria ainda, cai na media do MR - pior, mas melhor que nao dizer nada nos primeiros resets.
+  if(-not $pr -and $script:resets -gt 0){ $pr = [int]($script:ptsSent / $script:resets) }
+  if(-not $pr -or $pr -le 0){ return $null }
+  [Math]::Ceiling($script:ptsNeeded / $pr)
+}
 function Metrics {   # o objetivo e o /darmr, nao o reset: o numero que importa e PONTOS/HORA e o ETA do MR. Reset e so o meio.
   $h = $script:ativoSeg / 3600.0   # TEMPO ATIVO, nao relogio de parede: downtime nao pode afundar a taxa
   if($h -le 0.01){ return }
   $ph = [int]($script:ptsSent / $h)
   $eta = if($ph -gt 0 -and $script:ptsNeeded -gt 0){ [Math]::Round($script:ptsNeeded / $ph, 1) } else { -1 }
-  $porReset = if($script:resets -gt 0){ [int]($script:ptsSent / $script:resets) } else { 0 }
+  # MEDIDO por reset (mediana da fase normal) em vez da media do MR: e o que vale pra projetar o que ainda vem.
+  $medido = Pontos-Por-Reset
+  $porReset = if($medido){ $medido } elseif($script:resets -gt 0){ [int]($script:ptsSent / $script:resets) } else { 0 }
+  $faltamR = Resets-Faltando
   $rh = if($h -gt 0){ [Math]::Round($script:resets / $h, 1) } else { 0 }
   $script:resumo = if($eta -ge 0){ "ETA MR ${eta}h | $ph pts/h" } else { "$ph pts/h" }   # vai pro titulo da janelinha
-  Log ("== MR: faltam {0} pontos | {1} pontos/h | ETA ~{2} | {3} resets/h a {4} pts/reset (alvo lvl {5}, warmup {6}) | MRs: {7} ==" -f `
-       $script:ptsNeeded, $ph, $(if($eta -ge 0){"${eta}h"}else{'?'}), $rh, $porReset, $TargetLevel, $WarmupResets, $script:mrs)
+  Log ("== MR: faltam {0} pontos ({1} resets) | {2} pontos/h | ETA ~{3} | {4} resets/h a {5} pts/reset{6} (alvo lvl {7}, piso {8}, warmup {9}) | MRs: {10} ==" -f `
+       $script:ptsNeeded, $(if($null -ne $faltamR){ "~$faltamR" }else{'?'}), $ph, $(if($eta -ge 0){"${eta}h"}else{'?'}), $rh, $porReset,
+       $(if($medido){ " (medido em $(@($script:ganhoPorReset).Count))" }else{ ' (media do MR)' }), $TargetLevel, $script:LevelMinReset, $WarmupResets, $script:mrs)
   # MEDIANA, nao media: numa noite a media do ciclo deu 756s e a mediana 88s - a media mentiu por 8x por causa de poucos ciclos travados.
   # O que decide o ETA do MR nao e o ciclo bom, e quanto tempo vaza nos ruins (69% do tempo numa noite medida).
   if($script:ciclos.Count -ge 4){
@@ -2795,6 +2852,7 @@ while($true){
   if($script:restartCycle){ $script:restartCycle = $false; $pf = Focus-Game; Close-Popup; Restore-Focus $pf; Log "recomecando ciclo (pos-/darmr ou pos-mix, fase $($script:phase))"; continue }   # /darmr acabou de re-logar na cidade: nao reseta, vai direto pro warp da fase
 
   # reset: espera captcha (resolve) ou level cair
+  $lvlEnvio = $lvl   # em que level este /resetar saiu. Se ele for aceito de primeira, o servidor PROVOU que aceita aqui.
   Hold-Focus; try { while(-not (Send-Chat "/resetar")){ Release-Focus; Wait 10; Hold-Focus } } finally { Release-Focus }
   $sent = Get-Date; $resends = 0; $warned = $null; $inicio = Get-Date
   $resetOk = $false
@@ -2855,6 +2913,18 @@ while($true){
   $script:tagsCiclo = @()   # ciclo novo comeca sem etiqueta
   $script:ultimoReset = $agora
   Log "reset feito, recomecando"
+  # ACEITO DE PRIMEIRA abaixo do piso que estava gravado = o piso estava errado (Fenrir equipado, ou o servidor
+  # mudou a regra). Sem isto o aprendizado so sabia SUBIR: uma recusa unica - com o Fenrir desequipado, por
+  # exemplo - prendia o char em 350 pra sempre, inclusive depois de reequipar. $resends -eq 0 e a prova: com
+  # reenvio o char subiu de level no meio e nao da pra dizer em qual delas o servidor cedeu.
+  if($resends -eq 0 -and $null -ne $lvlEnvio -and $lvlEnvio -lt $script:LevelMinReset){
+    Log "servidor ACEITOU reset no level $lvlEnvio (piso gravado era $($script:LevelMinReset)): baixando o piso - e o Fenrir valendo"
+    $script:LevelMinReset = $lvlEnvio
+    if($script:TargetLevel -gt $TargetLevelConfig){ $script:TargetLevel = [Math]::Max($TargetLevelConfig, $lvlEnvio) }   # volta pro alvo pedido, que o aprendizado tinha empurrado pra cima
+    Save-Estado
+  }
+  Ajustar-Alvo-Do-Proximo-Ciclo
+  Marcar-Ganho-Do-Reset
   Tick-AutoTune
   Save-Estado   # metricas do MR sobrevivem a reinicio do bot (medir um MR leva horas)
   if(($script:resets % $MetricsEvery) -eq 0){ Metrics }
