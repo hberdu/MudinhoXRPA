@@ -26,7 +26,22 @@ Loop automático: `/k37` -> play (MU Helper) -> espera level 350 -> `/resetar` -
 - De vez em quando (2–7 min, aleatório) faz algo "humano": anda um pouco e volta, abre/fecha status ou chat, mexe o mouse. Os intervalos de tudo variam ±25% (`$JitterPct`) — só o **ritmo**, nunca os valores dos stats.
 - Captcha de imagem: resolve sozinho (seleciona, confere a borda vermelha, confirma). Se não tiver certeza, avisa (toast + beep) e espera você. **Errou 2 vezes -> PAUSA e espera você** (`$CapKillGame = $true` volta a regra antiga de fechar o jogo).
 - Se cair pra tela de login/servidor no meio do farm, ele detecta e volta sozinho. **Nunca clica em coordenada chutada** numa tela que tenha "CRIAR NOVA CONTA" ou "Sair" — avisa e espera.
-- Se o jogo fechar, o bot não morre junto: espera o cliente voltar, re-entra e retoma.
+- Se o jogo fechar, o bot não morre junto: espera o cliente voltar, re-entra e retoma. Janela com **área cliente 0x0** (minimizando, ou o cliente reiniciando) entra nesse mesmo caminho — antes `New-Object Bitmap(0,0)` estourava com "Parâmetro inválido" e o `catch` do loop tratava como erro fatal.
+
+## Jogo num monitor, você no outro
+
+`$NoFocusRead = $true` (ligado). Modo **"não brigo por foco nem pelo seu mouse"**, pra deixar o jogo rodando num monitor enquanto você trabalha no outro:
+
+- **Lê sem foco.** Level, mapa, status, captcha, inventário — a maior parte do que o bot faz — sai da captura direta da área cliente, sem trazer o jogo pra frente.
+- **`Hold-Focus` não puxa mais o jogo a cada volta do loop.** Era isso que fazia o bot brigar com você mesmo quando só ia ler o level: uma vez *por iteração*, sempre. Agora só quem manda comando (`Send-Chat`, `Click-Client`, `Read-Status`) pede foco, e devolve no fim do bloco.
+- **O ponteiro volta pra onde você deixou** depois de cada clique — guardado antes e restaurado depois do `mouse_up` (antes disso o jogo não registra o clique).
+- **O "humano: mexe o mouse" é pulado**: arrastaria o *seu* ponteiro por até ~5s. Os outros disfarces (andar, abrir/fechar status e chat) continuam.
+- **A janelinha do bot nasce no monitor do jogo**, canto inferior esquerdo. Usava `PrimaryScreen`, e aqui o monitor 2 fica em **X negativo** (`-1920..0`) — a conta antiga jogava a janela pro monitor errado. Vale também pro `Fugir-Da-Area`, que a move quando ela tapa algo que o bot precisa ler.
+- **Rede de segurança no `Press-Vk`**: `keybd_event` é global, vai pra janela que estiver na frente. A guarda fica no primitivo, não em cada chamador, então nenhum caminho novo pode esquecer dela — sem o jogo em foco, a tecla **não é enviada** (e o log avisa, no máximo 1× por minuto). Sem isso um `ESC`/`Enter`/`C` perdido cairia no que você está fazendo no outro monitor.
+
+Em troca, **a janela do jogo precisa ficar visível e destapada**: sem foco pra conferir, uma janela por cima dela vira leitura de lixo. `$NoFocusRead = $false` volta ao comportamento antigo (um monitor só).
+
+Verificado ao vivo com `-Check`: leu `level 400 | helper running`, e o foco (`HX Chat`) e o mouse `(173,907)` ficaram exatamente onde estavam.
 
 ## Uso
 

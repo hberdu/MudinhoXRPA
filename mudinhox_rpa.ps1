@@ -25,7 +25,13 @@ $LevelBox      = @{ X = 1080; W = 140; H = 40; YFromBottom = 82 }    # numero do
 $PollSec       = 6       # intervalo de leitura do level com o jogo na frente
 $PollNearSec   = 2       # perto do level alvo le a cada N seg: o level sobe ~150 entre leituras e o reset saia com 400 em vez de 350 (farm jogado fora)
 $PollNearFrom  = 0.82    # "perto" = a partir de N% do $TargetLevel
-$NoFocusRead   = $false  # $true: LE sem trazer o jogo pra frente (so pra jogo sempre visivel, ex 2o monitor). Comandos continuam exigindo foco
+$NoFocusRead   = $true   # JOGO NOUTRO MONITOR, sempre visivel. Liga o modo "nao brigo por foco nem pelo seu mouse":
+                         #  - LE (level, mapa, status, captcha) sem trazer o jogo pra frente. E a maior parte do que o bot faz
+                         #  - o Hold-Focus para de trazer o jogo UMA VEZ POR VOLTA do loop; so quem manda comando pede foco
+                         #  - o ponteiro do mouse volta pra onde voce deixou depois de cada clique
+                         #  - o "humano: mexe o mouse" e pulado (arrastaria o SEU ponteiro por varios segundos)
+                         # Em troca voce garante que a janela do jogo fica visivel e destapada: sem foco pra conferir,
+                         # uma janela por cima dela vira leitura de lixo. $false = comportamento antigo (jogo em 1 monitor so).
 $PollBgSec     = 60      # intervalo quando outra janela esta na frente (cada leitura rouba o foco por ~1s)
 $WarpCmd       = '/k37'   # comando de teleporte pro spot de farm normal (troque aqui se mudar de spot). Era /s18 (Stadium)
 $WarmupCmd     = '/losttower7'   # apos /darmr o personagem volta fraco em Lorencia: farma AQUI (Lost Tower 7) ate juntar os primeiros resets
@@ -375,10 +381,21 @@ function Wait([double]$sec){   # Start-Sleep que mantem a janelinha viva e obede
     Start-Sleep -Milliseconds 100
   } while((Get-Date) -lt $end)
 }
+function Canto-Da-Tela-Do-Jogo([int]$alturaJanela){
+  # Canto INFERIOR ESQUERDO do monitor DO JOGO. Duas razoes: ali nao cobre nada que o bot le (play=topo-esq,
+  # minimapa=topo-dir, inventario=dir, chat/level=centro-baixo), e com o jogo noutro monitor a janelinha nao tem
+  # o que fazer na frente do que VOCE esta usando. PrimaryScreen nao serve: aqui o monitor 2 fica em X NEGATIVO
+  # (-1920..0), entao a conta antiga jogava a janela pro monitor errado. Jogo fechado ainda -> primario.
+  $t = $null
+  try { $t = [System.Windows.Forms.Screen]::FromHandle((Get-Game)) } catch { }
+  if(-not $t){ $t = [System.Windows.Forms.Screen]::PrimaryScreen }
+  $wa = $t.WorkingArea
+  New-Object System.Drawing.Point(($wa.X + 10), ($wa.Y + $wa.Height - $alturaJanela - 10))
+}
 function Show-Ui {
   $f = New-Object System.Windows.Forms.Form
   $f.Text = 'MudinhoX RPA'; $f.Width = 400; $f.Height = 380; $f.TopMost = $true; $f.FormBorderStyle = 'FixedToolWindow'
-  $f.StartPosition = 'Manual'; $f.Location = New-Object System.Drawing.Point(10, ([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height - 355))   # canto INFERIOR ESQUERDO: nao cobre play(topo-esq), minimapa(topo-dir), inventario(dir) nem chat/level(centro-baixo)
+  $f.StartPosition = 'Manual'; $f.Location = Canto-Da-Tela-Do-Jogo $f.Height
   $script:status = New-Object System.Windows.Forms.Label; $script:status.SetBounds(10,12,160,22); $script:status.Text = 'iniciando...'
   $script:btnPause = New-Object System.Windows.Forms.Button; $script:btnPause.SetBounds(175,6,100,28); $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'
   $btn = New-Object System.Windows.Forms.Button; $btn.SetBounds(280,6,100,28); $btn.Text = 'PARAR'; $btn.BackColor = 'IndianRed'
@@ -475,7 +492,12 @@ function Restore-Focus($prev){ if($script:focusHeld){ return }; if($prev -and $p
 function Hold-Focus {   # inicia bloco: guarda a janela do usuario, traz o jogo 1x
   if($script:focusHeld){ return }
   $script:focusPrev = [W]::GetForegroundWindow(); $script:gameWasFg = ($script:focusPrev -eq (Get-Game)) -or (Is-OwnUi $script:focusPrev)
-  $script:focusHeld = $true; $null = Focus-Game
+  $script:focusHeld = $true
+  # Com o jogo noutro monitor NAO adianta puxar o jogo aqui: quase toda volta do loop e so LEITURA, e o
+  # $NoFocusRead ja le sem foco. Quem precisa de foco (Send-Chat, Click-Client, Read-Status) chama Focus-Game
+  # sozinho, e o Release-Focus devolve no fim do bloco. Antes o foco era roubado uma vez POR VOLTA, sempre -
+  # era isso que fazia o bot brigar com voce mesmo quando so ia ler o level.
+  if(-not $NoFocusRead){ $null = Focus-Game }
 }
 function Release-Focus {   # fim do bloco: devolve o foco pra janela do usuario (1x)
   if(-not $script:focusHeld){ return }
@@ -485,6 +507,11 @@ function Client-Origin { $h = Get-Game; $pt = New-Object W+POINT; [W]::ClientToS
 $script:capOk = $true   # a ultima captura foi mesmo do jogo? (Read-Status/Inv-Free usam pra nao ler nem salvar print de outra janela)
 function Capture-Raw {   # bitmap da area cliente, sem mexer no foco (so chamar com o jogo na frente). Janelinha do bot fica preta (nao suja OCR/pixels)
   $h = Get-Game; $b = $null
+  # Janela fechando/minimizando devolve area cliente 0x0, e New-Object Bitmap(0,0) estoura com "Parametro
+  # invalido" - erro que o catch do loop principal trata como fatal e PARA o bot. Visto ao vivo, num restart do
+  # mudx. Com a mensagem 'nao esta rodando' ele cai no caminho que ja existe: espera o cliente voltar e retoma.
+  $c0 = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c0) | Out-Null
+  if($c0.R -le 0 -or $c0.B -le 0){ $script:gameH = [IntPtr]::Zero; throw "MudinhoX (mudx.exe) nao esta rodando: janela sem area cliente (minimizada ou fechando)" }
   for($i = 0; $i -lt 2; $i++){
     $c = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c) | Out-Null; $o = Client-Origin
     $b = New-Object System.Drawing.Bitmap($c.R,$c.B); $g = [System.Drawing.Graphics]::FromImage($b)
@@ -509,7 +536,20 @@ function Capture-Game {   # bitmap da area cliente, ou $null se o jogo nao ficou
 }
 
 # ---------- input ----------
-function Press-Vk([int]$vk,[int]$hold=$KeyHoldMs,[int]$gap=$KeyGapMs){ $sc = [W]::MapVirtualKey($vk,0); [W]::keybd_event($vk,$sc,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds $hold; [W]::keybd_event($vk,$sc,2,[UIntPtr]::Zero); Start-Sleep -Milliseconds $gap }
+$script:teclaAviso = $null
+function Press-Vk([int]$vk,[int]$hold=$KeyHoldMs,[int]$gap=$KeyGapMs){
+  # REDE DE SEGURANCA: keybd_event e GLOBAL, vai pra janela que estiver na frente. Com o jogo noutro monitor o
+  # bot passa a maior parte do tempo sem o foco, e um ESC/Enter/C perdido cairia no que VOCE esta fazendo.
+  # A guarda fica AQUI, no primitivo, e nao em cada chamador: assim nenhum caminho novo pode esquecer dela.
+  # Nao devolve valor de proposito - Press-Vk e chamado como statement dentro de funcoes cujo retorno importa.
+  if([W]::GetForegroundWindow() -ne (Get-Game)){
+    if(-not $script:teclaAviso -or ((Get-Date) - $script:teclaAviso).TotalSeconds -ge 60){
+      $script:teclaAviso = Get-Date; Log "tecla ignorada: o jogo nao esta na frente (nao digito na sua janela)"
+    }
+    return
+  }
+  $sc = [W]::MapVirtualKey($vk,0); [W]::keybd_event($vk,$sc,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds $hold; [W]::keybd_event($vk,$sc,2,[UIntPtr]::Zero); Start-Sleep -Milliseconds $gap
+}
 function Clear-ChatLine { 1..30 | % { Press-Vk 0x08 $KeyClearMs $KeyClearMs } }   # apaga residuo da caixa de chat (30 backspaces: o gap normal aqui custava 2.4s)
 function Type-Text([string]$s){   # $KeyHoldMs de hold + $KeyGapMs de gap por tecla (abaixo de ~30ms comeca a embaralhar)
   foreach($ch in $s.ToCharArray()){
@@ -554,8 +594,13 @@ function Click-Client([int]$x,[int]$y,[switch]$KeepFocus){   # $false se o jogo 
     # -KeepFocus nao pode significar "clica sem olhar": se a janela do usuario subiu, o clique cairia DENTRO do programa dele
     if([W]::GetForegroundWindow() -ne (Get-Game)){ Log "jogo nao esta na frente, nao cliquei (KeepFocus)"; return $false }
   } else { $prev = Focus-Game; if(-not $script:gameFg){ Log "jogo nao esta na frente, nao cliquei"; return $false } }
+  # Com o jogo noutro monitor o ponteiro e SEU: guarda onde estava e devolve depois do clique. Devolver so
+  # DEPOIS do mouse_up - mexer antes disso e clique que o jogo nao registra.
+  $volta = $null
+  if($NoFocusRead){ $pc = New-Object W+POINT; if([W]::GetCursorPos([ref]$pc)){ $volta = $pc } }
   $o = Client-Origin; [W]::SetCursorPos($o.X+$x,$o.Y+$y) | Out-Null; Start-Sleep -Milliseconds 80
   [W]::mouse_event(2,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 50; [W]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
+  if($volta){ Start-Sleep -Milliseconds 60; [W]::SetCursorPos($volta.X,$volta.Y) | Out-Null }
   if(-not $KeepFocus){ Restore-Focus $prev }; $true
 }
 
@@ -603,8 +648,7 @@ function Fugir-Da-Area([int]$x,[int]$y,[int]$w,[int]$h,[string]$oque){   # a jan
   $o = Client-Origin; $r = $script:ui.Bounds
   $ax = $o.X + $x; $ay = $o.Y + $y
   if($r.Left -lt ($ax + $w) -and $r.Right -gt $ax -and $r.Top -lt ($ay + $h) -and $r.Bottom -gt $ay){
-    $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
-    $script:ui.Location = New-Object System.Drawing.Point(10, ($wa.Height - $script:ui.Height - 10))
+    $script:ui.Location = Canto-Da-Tela-Do-Jogo $script:ui.Height   # canto do monitor DO JOGO (era o primario, que com o jogo no monitor 2 e o lado errado)
     Log "janela do bot estava em cima de: $oque (o bot se cegava sozinho). Movi pro canto inferior esquerdo."
     return $true
   }
@@ -843,7 +887,10 @@ if($TestImage){
 }
 if($Check){
   $img = Capture-Game; if(-not $img){ Log "jogo nao ficou na frente, nada lido"; exit }; $a = Find-Captcha $img
-  Log "level lido: $(Read-Level $img) | helper: $(Get-HelperState $img) | captcha: $(if($a){"sim ($($a.X),$($a.Y))"}else{'nao'}) | jogo na frente: $($script:gameWasFg) | chat aberto: $(Chat-Open $img)"
+  # "jogo na frente" mostrava o $gameWasFg, que o $NoFocusRead forca pra True - dizia sempre "True" mesmo com o
+  # jogo noutro monitor e sem foco nenhum. Pergunta ao Windows na hora.
+  $naFrente = [W]::GetForegroundWindow() -eq (Get-Game)
+  Log "level lido: $(Read-Level $img) | helper: $(Get-HelperState $img) | captcha: $(if($a){"sim ($($a.X),$($a.Y))"}else{'nao'}) | jogo na frente: $naFrente$(if($NoFocusRead){' (NoFocusRead ligado: leitura nao precisa de foco)'}) | chat aberto: $(Chat-Open $img)"
   if($a){ $null = Solve-Captcha $img $a -NoClick }
   if((Game-IsAdmin) -and -not (Is-Admin)){ Log "AVISO: o jogo roda como administrador e eu nao -> Windows ignora meu teclado/mouse. O loop principal se eleva sozinho (aceite o UAC)." }
   exit
@@ -1035,6 +1082,7 @@ function Check-Progress([int]$lvl, $img){   # level parado: se saiu do spot, re-
   if(-not (In-Farm $img)){ Log "level parado e fora do spot: re-teleportando"; if(Warp-To-Spot){ $null = Start-Helper }; return $false }
   Log "level parado ha ${parado}s no spot ($StallReads leituras iguais, miss infinito): ESC + pausa + anda + despausa"
   Tag-Ciclo 'stall'
+  $null = Focus-Game   # o Hold-Focus nao traz mais o jogo sozinho (ver $NoFocusRead) e o ESC abaixo precisa dele
   Close-Popup   # se o que travou foi uma janela/modal aberta por acidente, andar nao resolve - ESC resolve
   $null = Click-Client $PlayBtn.X $PlayBtn.Y; Wait 2   # pausa o helper
   Walk-Forward                                          # anda um pouco (desbuga o miss infinito)
@@ -1050,7 +1098,9 @@ function Tick-Human {   # de vez em quando, em ordem aleatoria, faz algo que um 
     0 { $dx = Get-Random -Minimum -160 -Maximum 160; $dy = Get-Random -Minimum -110 -Maximum 110; Log "humano: anda ($dx,$dy) e volta"
         Restore-Focus $prev; $null = Click-Client ($cx+$dx) ($cy+$dy); Wait (Get-Random -Minimum 1.5 -Maximum 3.5); $null = Click-Client ($cx-$dx) ($cy-$dy); Wait 2; Start-Helper; return }
     1 { Log "humano: abre e fecha o status"; Close-Chat; Press-Vk $StatusKey $HotkeyHoldMs; Wait (Get-Random -Minimum 1 -Maximum 3); Press-Vk $StatusKey $HotkeyHoldMs }
-    2 { Log "humano: mexe o mouse"; $o = Client-Origin; 1..(Get-Random -Minimum 3 -Maximum 8) | % { [W]::SetCursorPos($o.X + (Get-Random -Maximum $c.R), $o.Y + (Get-Random -Maximum $c.B)) | Out-Null; Start-Sleep -Milliseconds (Get-Random -Minimum 150 -Maximum 600) } }
+    2 { # Este arrastaria o SEU ponteiro por ate ~5s. Com o jogo noutro monitor nao vale o disfarce: pula.
+        if($NoFocusRead){ Log "humano: pulei o 'mexe o mouse' (jogo noutro monitor, o ponteiro e seu)"; break }
+        Log "humano: mexe o mouse"; $o = Client-Origin; 1..(Get-Random -Minimum 3 -Maximum 8) | % { [W]::SetCursorPos($o.X + (Get-Random -Maximum $c.R), $o.Y + (Get-Random -Maximum $c.B)) | Out-Null; Start-Sleep -Milliseconds (Get-Random -Minimum 150 -Maximum 600) } }
     3 { Log "humano: abre e fecha o chat"; if(-not (Chat-Open)){ Press-Vk 0x0D; Wait (Get-Random -Minimum 1 -Maximum 3) }; Close-Chat }
   }
   Restore-Focus $prev
@@ -2167,7 +2217,9 @@ while($true){
     Log "stats: ainda sobram $($script:ptsLeft) pontos (limite $StatMaxLeftover), segurando o reset e tentando de novo ($($d+1)/3)"
     Wait 3
   }
-  if($script:restartCycle){ $script:restartCycle = $false; Close-Popup; Log "recomecando ciclo (pos-/darmr ou pos-mix, fase $($script:phase))"; continue }   # /darmr acabou de re-logar na cidade: nao reseta, vai direto pro warp da fase
+  # O Close-Popup aqui esta FORA de qualquer bloco de foco (o Release-Focus acima ja devolveu): sem o Hold-Focus,
+  # o ESC ia parar na janela de quem estivesse na frente. Agora ele pega o jogo, manda o ESC e devolve.
+  if($script:restartCycle){ $script:restartCycle = $false; $pf = Focus-Game; Close-Popup; Restore-Focus $pf; Log "recomecando ciclo (pos-/darmr ou pos-mix, fase $($script:phase))"; continue }   # /darmr acabou de re-logar na cidade: nao reseta, vai direto pro warp da fase
 
   # reset: espera captcha (resolve) ou level cair
   Hold-Focus; try { while(-not (Send-Chat "/resetar")){ Release-Focus; Wait 10; Hold-Focus } } finally { Release-Focus }
