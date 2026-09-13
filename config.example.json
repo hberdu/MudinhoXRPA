@@ -1,9 +1,0 @@
-{
-  "play_point": [100, 100],
-  "level_region": [0, 0, 300, 100],
-  "captcha_region": [0, 0, 500, 250],
-  "level_target": 350,
-  "poll_seconds": 2,
-  "key_delay_seconds": 0.15,
-  "captcha_keywords": ["captcha", "verification", "verificacao", "código", "codigo"]
-}

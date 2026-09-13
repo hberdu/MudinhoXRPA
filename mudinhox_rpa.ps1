@@ -1,6 +1,6 @@
 <#
   MudinhoX RPA - loop: /s18 -> play (MU Helper) -> espera level 350 -> /resetar -> repete.
-  Stats: /f, /a, /e em ciclo, valor escala com os levels ganhos (nunca repete). Atributos cheios -> /darmr e entra de novo.
+  Stats: distribui de 5k em 5k ate 32767, na ordem energia, agilidade, forca, vitalidade. Atributos cheios -> /darmr e entra de novo.
   Level parado (miss infinito) -> religa o helper. De vez em quando faz algo "humano". Captcha: resolve sozinho (compara imagens);
   se nao tiver certeza, toast + beep e espera voce.
 
@@ -8,16 +8,22 @@
          parar por fora: crie o arquivo stop.flag na pasta. Log completo em rpa.log.
          powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -Check              (le level/botao/captcha, nao clica)
          powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestImage x.png    (testa solver num print salvo)
+         powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestInv          (com o inventario ABERTO: salva print e mostra as celulas ocupadas)
+         powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestMix          (com o modal de mix ABERTO: mostra o que o OCR le e a cor de cada opcao)
+         powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestNpc          (no /mixer, mouse em cima do Lahap: mostra a coordenada dele)
   Requisito: o jogo precisa estar visivel na hora da leitura. Se outra janela estiver na frente, o bot traz o jogo
   por ~1s, le, e devolve o foco pra janela que voce estava usando (nesse caso le a cada 60s em vez de 10s).
 #>
-param([switch]$Check, [string]$TestImage)
+param([switch]$Check, [string]$TestImage, [switch]$TestInv, [switch]$TestMix, [switch]$TestNpc, [switch]$TestGold, [switch]$TestVisao)
 
 # ---------- CONFIG (coordenadas relativas a area cliente do jogo, 1920x1009) ----------
 $TargetLevel   = 350
 $PlayBtn       = @{ X = 77;   Y = 33 }                     # centro do botao play/pause (canto sup. esquerdo)
 $LevelBox      = @{ X = 1080; W = 140; H = 40; YFromBottom = 82 }    # numero do level na barra inferior; Y medido a partir da BASE da area cliente (aguenta resolucao/altura diferente)
-$PollSec       = 10      # intervalo de leitura do level com o jogo na frente
+$PollSec       = 6       # intervalo de leitura do level com o jogo na frente
+$PollNearSec   = 2       # perto do level alvo le a cada N seg: o level sobe ~150 entre leituras e o reset saia com 400 em vez de 350 (farm jogado fora)
+$PollNearFrom  = 0.82    # "perto" = a partir de N% do $TargetLevel
+$NoFocusRead   = $false  # $true: LE sem trazer o jogo pra frente (so pra jogo sempre visivel, ex 2o monitor). Comandos continuam exigindo foco
 $PollBgSec     = 60      # intervalo quando outra janela esta na frente (cada leitura rouba o foco por ~1s)
 $WarpCmd       = '/s18'   # comando de teleporte pro spot de farm normal (troque aqui se mudar de spot)
 $WarmupCmd     = '/losttower7'   # apos /darmr o personagem volta fraco em Lorencia: farma AQUI (Lost Tower 7) ate juntar os primeiros resets
@@ -26,7 +32,8 @@ $WarpMap       = 'stad'      # nome esperado do mapa do /s18 (Stadium), 4 primei
 $WarmupMap     = 'lost'      # nome esperado do mapa do /losttower7 (Lost Tower). Evita aceitar mapa errado (ex AIDA) como spot
 $WarpWaitSec   = 9       # espera apos o teleporte (dar tempo do mapa trocar)
 $ResetWaitSec  = 15      # sem captcha e level ainda alto apos N seg -> reenvia /resetar
-$ResetRetries  = 2       # quantas vezes reenvia /resetar antes de avisar
+$ResetRetries  = 2       # apos N reenvios de /resetar avisa (mas NUNCA para de reenviar)
+$ResetStuckMin = 5       # preso no reset por N minutos -> reinicia o ciclo (re-warp) em vez de ficar so avisando
 $RenotifySec   = 120     # re-avisa a cada N segundos enquanto espera humano
 $StatCmds      = @(      # ciclo: /f apos 3min, /a apos +2min, /v apos +2min, /e apos +3min, repete. Atributo ja cheio e pulado.
   @{ Cmd = '/f'; AfterSec = 180; Key = 'For' },   # /darmr exige TODOS os atributos no maximo, entao vitalidade tambem entra no ciclo
@@ -34,20 +41,30 @@ $StatCmds      = @(      # ciclo: /f apos 3min, /a apos +2min, /v apos +2min, /e
   @{ Cmd = '/v'; AfterSec = 120; Key = 'Vit' },
   @{ Cmd = '/e'; AfterSec = 180; Key = 'Ene' }
 )
-$StatMin = 500; $StatMax = 3000   # StatMax = teto por comando; StatMin so vale quando nao consegue ler os pontos (estimativa)
-$StatMinAvail  = 50      # menos que isso de pontos disponiveis: nao distribui
+$StatOrder     = 'Ene','Agi','For','Vit'          # ordem de distribuicao: energia -> agilidade -> forca -> vitalidade
+$StatStep      = 5000    # sobe de 5k em 5k: 5000, 10000, ... 30000 e por fim o cap. Etapas montadas logo abaixo de $StatMaxValue
+$StatMaxLeftover = 10000 # nao pode sobrar mais que isso de pontos nao distribuidos; acima disso o bot avisa em vez de continuar resetando
+$StatMinAvail  = 1       # menos que isso de pontos disponiveis: nao distribui (1 = sempre tenta; um atributo pode fechar o cap com poucos pontos)
 $StatMinCmd    = 1000    # valor MINIMO por comando de stat. /a com valor pequeno (<100) teleporta pra AIDA; abaixo de 1000 o atributo nem recebe (fica pro proximo, com mais pontos)
-$StatEverySec  = 90      # distribui os pontos a cada N seg enquanto upa (alem de logo apos cada reset)
+$StatEverySec  = 15      # distribui os pontos a cada N seg enquanto upa (alem de logo apos cada reset e antes de cada /resetar)
+$StatRoundSec  = 0.5     # espera entre uma rodada de distribuicao e a releitura do status
+# Velocidade do teclado/chat. 40/40 e o valor testado que NAO embaralha - nao baixe (ja fez /s18 sair invalido e queimar 4 warps).
+$KeyHoldMs     = 40      # tempo segurando cada tecla ao digitar
+$KeyGapMs      = 40      # pausa entre uma tecla e a proxima
+$KeyClearMs    = 12      # backspaces pra limpar o chat (sao 30 seguidos, e so apagar: aguenta ser rapido)
+$ChatOpenMs    = 130     # espera a caixa de chat abrir antes de digitar
+$ChatSendMs    = 70      # espera em volta do Enter que envia
 $StatCol       = @{ X = 1155; Y = 108; W = 195; H = 380 }   # coluna da janela de status (rotulos+valores); OCR isolado dessa faixa le os 4 atributos + pontos
-$PointsPerLevel = 4      # pontos de atributo por level  (calibrar pro servidor: "adicionou 2000, restam 48" no level 12 -> ~4/level)
-$PointsPerReset = 2000   # pontos ganhos por reset       (idem). Valor do comando = pontos ganhos desde o ultimo comando * 0.55..1.0, nunca repete
 $StatMaxValue  = 32767   # atributo cheio (cap real do servidor). /darmr SO funciona com Forca, Agilidade, Vitalidade E Energia TODOS = 32767; abaixo disso o jogo recusa ("precisa 32767 em todos status")
+$StatStages    = @(1..([Math]::Floor(($StatMaxValue - 1) / $StatStep)) | % { $_ * $StatStep }) + $StatMaxValue   # 5000,10000,...,30000,32767
 $StatusKey     = 0x43    # C = janela de status
 $HotkeyHoldMs  = 150     # hotkey (C) segurada mais tempo que tecla de texto
 $LoginBtn      = @{ X = 960; Y = 940 }    # botao pra entrar com o personagem apos /darmr (centro embaixo). Antes disso procura o texto abaixo por OCR
-$LoginWords    = 'Entrar|Conectar|Iniciar|Jogar|Selecionar|Enter|Start|Login'
+$LoginWords    = 'Entrar|Conectar|Iniciar|Jogar|Selecionar|Enter|Start|Login'   # tela de selecao de PERSONAGEM
+$LoginServerWords = '(?i)server vip gold'   # tela de selecao de SERVIDOR: regex do botao a clicar (ex 'Server Principal'). Vazio = nao clica, avisa
+$LoginDangerWords = '(?i)(criar nova conta|create account|^sair$|delete)'   # se isso esta na tela, NUNCA clicar em coordenada chutada
 $ChatBox       = @{ X1 = 870; X2 = 1130; Y1FromBottom = 111; Y2FromBottom = 87 }   # bordas vermelhas da caixa de chat aberta; Y medido a partir da BASE da area cliente
-$StallSec      = 75      # no spot com level parado N seg (miss infinito) -> pausa e religa o helper
+$StallSec      = 40      # no spot com level parado N seg (miss infinito) -> pausa e religa o helper. 75 gastava tempo demais so PRA DETECTAR (disparou 5x numa noite)
 $CityWords     = 'lorencia|noria|devias|elbeland|lorenmarket|karutan|elveland'   # mapas-cidade onde NAO se farma (personagem cai aqui apos reset). Qualquer outro mapa = spot de farm (ex Stadium do /s18)
 # teleporte confirmado quando o mapa e um spot de farm (nao-cidade). $farmMap guarda o ultimo spot.
 $MapLabel      = @{ X = 1690; Y = 68; W = 230; H = 30 }   # rotulo do minimapa
@@ -56,17 +73,63 @@ $PlayTries     = 3       # clica no play ate N vezes; se nao ligar, para de clic
 $HumanMinSec   = 120; $HumanMaxSec = 420   # a cada X seg (aleatorio) faz algo "humano": anda um pouco, abre/fecha janela, mexe o mouse
 $LogFile       = Join-Path $PSScriptRoot 'rpa.log'
 $StopFile      = Join-Path $PSScriptRoot 'stop.flag'
+$EstadoFile    = Join-Path $PSScriptRoot 'estado.txt'   # fase + contagem de warmup, pra sobreviver a reinicio do bot
+$LogMaxMB      = 5       # rpa.log maior que isso no start vira .bak (a pasta sincroniza no OneDrive)
+$LogKeepBaks   = 5       # quantos .bak manter
 $WarmupFile    = Join-Path $PSScriptRoot 'warmup.flag'   # se existir no start, o bot comeca em modo warmup (/losttower7) — use apos dar MR manualmente
 # Captcha: offsets a partir do centro do texto "Selecione a mesma imagem abaixo:" (achado por OCR)
 $CapRefDy      = -80                          # imagem de referencia (acima do texto)
 $CapRowDy      = 80, 210                      # 2 linhas de opcoes
 $CapColDx      = -260, -130, 0, 130, 260      # 5 colunas
 $CapConfirmDy  = 355                          # botao Confirmar
-$CapMaxTries   = 2                            # errou N vezes -> fecha o jogo (mudx.exe) e para; nao arrisca a proxima
+$CapMaxTries   = 2       # errou N vezes -> para de tentar (nao arrisca a proxima)
+$CapKillGame   = $false  # $true volta a regra antiga (fecha o mudx.exe e encerra). $false = pausa e espera voce
 $CapSelHalf    = 61                           # distancia do centro ate a borda vermelha (3px) da opcao selecionada; varre +-5px
 $WalkDist      = 140                          # apos /icarus anda ~4 passos (pixels a partir do centro) numa direcao aleatoria a cada chegada, antes do play
 $CapConfidence = 0.5                          # melhor precisa ser < 50% do segundo, senao nao chuta
 $CaptchaShotDir = Join-Path $PSScriptRoot 'captcha'   # print salvo aqui a cada captcha
+$FixtureDir    = Join-Path $PSScriptRoot 'fixtures'   # prints guardados pro -TestVisao (regressao das funcoes de leitura de tela)
+# Mensagens do jogo (faixa acima da caixa de chat). O servidor responde tudo por texto e o bot ignorava:
+# "Voce adicionou N pontos", "Bem-vindo(a) a Lorencia", "Resta ainda N Golden Tantalo vivo(s)".
+$MsgBox        = @{ X = 760; W = 400; Y1FromBottom = 250; Y2FromBottom = 135 }
+$MsgCheckSec   = 20      # le as mensagens a cada N seg (recorte pequeno, usa a captura que ja existe)
+$MsgGoldWords  = '(?i)(golden tantalo|drago.?es dourados|invas.o de drag)'   # evento -> vai cacar sozinho
+$MsgInvWords   = '(?i)(invent.rio.{0,12}cheio|espa.o insuficiente|inventory full)'   # inventario cheio -> vai mixar
+$ClientEsperado = @{ W = 1920; H = 1009 }   # resolucao pra qual as coordenadas fixas foram calibradas; muda isso se recalibrar noutra
+$MetricsEvery  = 5       # a cada N resets loga resumo: resets/h, pontos/h e ETA do master reset
+$JitterPct     = 0.25    # varia +-25% os intervalos (stats, inventario, mensagens, poll). Valores dos stats seguem EXATOS - so o RITMO varia
+# Mix de joias: inventario cheio -> /mixer -> clica no NPC -> "Mixar Joias" -> clica cada tipo em VERDE -> volta pro farm
+$MixCmd        = '/mixer'
+$MixNpcWords   = '(?i)^(lahap|mixador|mixer|goblin|joalheiro)'   # nome do NPC. So aparece com o mouse EM CIMA dele, entao serve de CONFIRMACAO do hover, nao de busca
+$MixNpcPos     = @{ X = 805; Y = 285 }   # onde o Lahap fica (area cliente), medido nos prints do usuario. Hover-Npc confirma pelo nome antes de clicar; se errar, ajuste com -TestNpc
+$MixNpcSweep   = 0, -45, 45, -90, 90   # se o nome nao aparecer na posicao exata, tenta esses deslocamentos (X e Y) em volta
+$MixNpcNameDy  = -70      # o nome aparece ~70px ACIMA do cursor; o OCR le so essa faixa (rapido)
+$MixMenuWords  = '(?i)^mixar$'   # botao "Mixar Joias" do modal do NPC. Ancora no "Mixar" sozinho (o texto de descricao e "mixar/dissolver"); entre os que casam, vale o MAIS DE BAIXO (o de cima e o titulo da janela)
+$MixJewels     = @(       # tipos da lista, na ordem; Pat = como o OCR pode ler o rotulo
+  @{ Name = 'Soul';     Pat = "(?i)^soul" },
+  @{ Name = 'Life';     Pat = "(?i)^life" },
+  @{ Name = 'Creation'; Pat = "(?i)^creation" },
+  @{ Name = 'Chaos';    Pat = "(?i)^chaos" }
+)
+$MixWaitSec    = 5        # espera entre o mix de um tipo e o proximo
+$MixRounds     = 8        # no maximo N voltas na lista antes de desistir (cada volta mixa os que estao verdes)
+$InvKey        = 0x56     # V = inventario
+$InvGrid       = @{ X = 1317; Y = 408; Cell = 34.4; Cols = 8; Rows = 8 }   # grade do inventario, medida no print do usuario (1920x1009): bate 64/64 celulas
+$InvCellLit    = 210      # soma R+G+B acima disso = pixel "com item" (celula vazia e escura)
+$InvCellMin    = 10       # N pixels claros na celula = ocupada
+$InvFreeMin    = 4        # menos que N celulas livres = inventario cheio -> vai mixar
+$InvCheckSec   = 300      # checa o inventario a cada N seg enquanto farma
+# Evento dos Dragoes Dourados: botao -> /tarkan2 -> procura mobs DOURADOS (Golden Tantalos) pela tela, anda ate eles e mata
+$GoldCmd       = '/tarkan2'
+$GoldMap       = 'tark'   # nome esperado do mapa (4 letras)
+$GoldMinutes   = 20       # tempo maximo cacando; depois volta pro farm sozinho
+$GoldArea      = @{ X1 = 70; Y1 = 100; X2FromRight = 70; Y2FromBottom = 150 }   # area util da tela (fora do HUD, minimapa e chat)
+$GoldPix       = @{ RMin = 185; GMin = 140; BMax = 125; RmB = 70; RmG = 75 }    # pixel "dourado": vermelho e verde altos, azul baixo, e R-B grande (o chao de Tarkan e marrom fosco)
+$GoldCell      = 26       # agrega os pixels dourados em blocos de N px (o mob e um borrao, nao um pixel)
+$GoldBlobMin   = 30       # minimo de pixels dourados no bloco pra considerar que tem mob ali
+$GoldSelfR     = 150      # ignora esse raio em volta do centro: e o SEU personagem (efeitos de fogo/asas dao falso positivo)
+$GoldStepSec   = 2.0      # espera depois de mandar o personagem pro bloco dourado
+$GoldRoamSec   = 4.0      # sem nada dourado na tela: anda pra um lado e procura de novo
 # ---------------------------------------------------------------------------------------
 
 Add-Type -AssemblyName System.Drawing
@@ -95,6 +158,7 @@ public class W {
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte sc, uint fl, UIntPtr ex);
   [DllImport("user32.dll")] public static extern void mouse_event(uint fl, int dx, int dy, uint data, UIntPtr ex);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
   [DllImport("user32.dll")] public static extern short VkKeyScan(char c);
   [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint code, uint type);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; }
@@ -118,6 +182,30 @@ public class Img {
     }
     a.UnlockBits(ra); b.UnlockBits(rb); return best;
   }
+  // varre a area util somando pixels "dourados" em blocos de 'cell' px; devolve {x,y,contagem} do bloco mais dourado
+  // (x=y=0 quando nenhum bloco passou de minCount). Ignora um raio 'selfR' em volta de (cx,cy): e o proprio personagem.
+  public static int[] BestGold(Bitmap b, int x1, int y1, int x2, int y2, int cell,
+                               int rMin, int gMin, int bMax, int rmB, int rmG,
+                               int cx, int cy, int selfR, int minCount){
+    var bd = b.LockBits(new Rectangle(0,0,b.Width,b.Height), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+    int stride = bd.Stride;
+    byte[] d = new byte[stride*b.Height]; Marshal.Copy(bd.Scan0, d, 0, d.Length); b.UnlockBits(bd);
+    int cols = (x2-x1)/cell + 1, rows = (y2-y1)/cell + 1;
+    int[] acc = new int[cols*rows];
+    int r2 = selfR*selfR;
+    for (int y = y1; y < y2; y++) for (int x = x1; x < x2; x++) {
+      int i = y*stride + x*3;
+      int bb = d[i], gg = d[i+1], rr = d[i+2];
+      if (rr < rMin || gg < gMin || bb > bMax) continue;   // dourado = R e G altos, B baixo
+      if (rr-bb < rmB || rr-gg > rmG) continue;            // R-B grande (chao marrom nao passa) e R-G pequeno (fogo/laranja nao passa)
+      int dx = x-cx, dy = y-cy; if (dx*dx + dy*dy < r2) continue;
+      acc[((y-y1)/cell)*cols + (x-x1)/cell]++;
+    }
+    int best = -1, bi = 0;
+    for (int i = 0; i < acc.Length; i++) if (acc[i] > best) { best = acc[i]; bi = i; }
+    if (best < minCount) return new int[]{0,0,best};
+    return new int[]{ x1 + (bi%cols)*cell + cell/2, y1 + (bi/cols)*cell + cell/2, best };
+  }
   public static void Invert(Bitmap a){
     var r = a.LockBits(new Rectangle(0,0,a.Width,a.Height), ImageLockMode.ReadWrite, PixelFormat.Format24bppRgb);
     byte[] d = new byte[r.Stride*a.Height]; Marshal.Copy(r.Scan0, d, 0, d.Length);
@@ -129,6 +217,12 @@ public class Img {
 
 # ---------- UI / log / espera ----------
 $script:stop = $false; $script:paused = $false; $script:ui = $null; $script:logW = $null
+# rotaciona o log antes de abrir: a pasta sincroniza no OneDrive e ja tinha .bak de centenas de KB
+try {
+  $lf = Get-Item $LogFile -ErrorAction SilentlyContinue
+  if($lf -and $lf.Length -gt ($LogMaxMB * 1MB)){ Move-Item $LogFile (Join-Path $PSScriptRoot ("rpa_{0}.log.bak" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))) -Force }
+  Get-ChildItem $PSScriptRoot -Filter 'rpa_*.log.bak' -ErrorAction SilentlyContinue | sort LastWriteTime -Descending | select -Skip $LogKeepBaks | Remove-Item -Force -ErrorAction SilentlyContinue
+} catch {}
 try { $script:logW = New-Object System.IO.StreamWriter([System.IO.FileStream]::new($LogFile, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)); $script:logW.AutoFlush = $true } catch {}
 function Log($m){
   $line = "[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $m; Write-Host $line
@@ -163,20 +257,30 @@ function Show-Ui {
   $script:btnWarmup = New-Object System.Windows.Forms.Button; $script:btnWarmup.SetBounds(10,40,122,32);  $script:btnWarmup.Text = "Warmup LT7`n(10 resets)"; $script:btnWarmup.BackColor = 'SteelBlue'
   $script:btnNormal = New-Object System.Windows.Forms.Button; $script:btnNormal.SetBounds(137,40,122,32); $script:btnNormal.Text = "Normal /s18`n(ate MT)"; $script:btnNormal.BackColor = 'MediumSeaGreen'
   $script:btnMR     = New-Object System.Windows.Forms.Button; $script:btnMR.SetBounds(264,40,120,32);     $script:btnMR.Text = "Atribuir tudo`n+ MR"; $script:btnMR.BackColor = 'MediumPurple'
-  $script:logBox = New-Object System.Windows.Forms.TextBox; $script:logBox.SetBounds(10,78,375,180); $script:logBox.Multiline = $true; $script:logBox.ReadOnly = $true; $script:logBox.ScrollBars = 'Vertical'
+  $script:btnMix    = New-Object System.Windows.Forms.Button; $script:btnMix.SetBounds(10,76,122,26);    $script:btnMix.Text = 'MIXAR JOIAS'; $script:btnMix.BackColor = 'DarkCyan'
+  $script:btnGold   = New-Object System.Windows.Forms.Button; $script:btnGold.SetBounds(137,76,247,26); $script:btnGold.Text = 'DRAGOES DOURADOS (/tarkan2)'; $script:btnGold.BackColor = 'DarkGoldenrod'
+  $script:logBox = New-Object System.Windows.Forms.TextBox; $script:logBox.SetBounds(10,108,375,150); $script:logBox.Multiline = $true; $script:logBox.ReadOnly = $true; $script:logBox.ScrollBars = 'Vertical'
   $script:btnPause.Add_Click({ $script:paused = -not $script:paused; $script:btnPause.Text = $(if($script:paused){ 'RETOMAR' } else { 'PAUSAR' }); $script:btnPause.BackColor = $(if($script:paused){ 'ForestGreen' } else { 'Goldenrod' }); Log $(if($script:paused){ 'PAUSADO pelo usuario (mixe as joias; clique RETOMAR pra voltar)' } else { 'retomado pelo usuario' }) })
   $btn.Add_Click({ $script:stop = $true })
-  $script:btnWarmup.Add_Click({ $script:phase = 'warmup'; $script:warmupCount = 0; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Log "[BOTAO] modo WARMUP: /losttower7 ate $WarmupResets resets" })
-  $script:btnNormal.Add_Click({ $script:phase = 'normal'; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Log "[BOTAO] modo NORMAL: /s18 ate os atributos encherem" })
+  $script:btnWarmup.Add_Click({ $script:phase = 'warmup'; $script:warmupCount = 0; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Save-Estado; Log "[BOTAO] modo WARMUP: /losttower7 ate $WarmupResets resets" })
+  $script:btnNormal.Add_Click({ $script:phase = 'normal'; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Save-Estado; Log "[BOTAO] modo NORMAL: /s18 ate os atributos encherem" })
   $script:btnMR.Add_Click({ $script:forceMR = $true; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Log "[BOTAO] ATRIBUIR TUDO + MR" })
+  $script:btnMix.Add_Click({ $script:mixNow = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Log "[BOTAO] MIXAR JOIAS no proximo tick ($MixCmd)" })
+  $script:btnGold.Add_Click({ $script:goldNow = $true; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Log "[BOTAO] DRAGOES DOURADOS: $GoldCmd por ate $GoldMinutes min" })
   $f.Add_FormClosing({ $script:stop = $true })
-  $f.Controls.AddRange(@($script:status,$script:btnPause,$btn,$script:btnWarmup,$script:btnNormal,$script:btnMR,$script:logBox)); $f.Show(); $script:ui = $f
+  $f.Controls.AddRange(@($script:status,$script:btnPause,$btn,$script:btnWarmup,$script:btnNormal,$script:btnMR,$script:btnMix,$script:btnGold,$script:logBox)); $f.Show(); $script:ui = $f
 }
 
 # ---------- janela do jogo / foco ----------
 function Is-Admin { ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) }
 function Game-IsAdmin { -not (Get-Process mudx -ErrorAction SilentlyContinue | select -First 1).Path }   # processo elevado nao expoe o Path pra processo comum
-function Get-Game { $p = Get-Process mudx -ErrorAction SilentlyContinue | ? { $_.MainWindowHandle -ne 0 } | select -First 1; if(-not $p){ throw "MudinhoX (mudx.exe) nao esta rodando" }; $p.MainWindowHandle }
+$script:gameH = [IntPtr]::Zero
+function Get-Game {   # handle da janela do jogo, EM CACHE: Get-Process enumera todos os processos do Windows e isto e chamado ~6x por comando
+  if($script:gameH -ne [IntPtr]::Zero -and [W]::IsWindow($script:gameH)){ return $script:gameH }
+  $p = Get-Process mudx -ErrorAction SilentlyContinue | ? { $_.MainWindowHandle -ne 0 } | select -First 1
+  if(-not $p){ throw "MudinhoX (mudx.exe) nao esta rodando" }
+  $script:gameH = $p.MainWindowHandle; $script:gameH
+}
 function Set-Foreground($h){   # traz janela pra frente sem teclas sinteticas (AttachThreadInput); fallback: toque no Alt
   if(-not $h -or -not [W]::IsWindow($h) -or [W]::GetForegroundWindow() -eq $h){ return }
   [W]::ShowWindow($h, $(if([W]::IsIconic($h)){ 9 } else { 5 })) | Out-Null   # SW_RESTORE / SW_SHOW: sem isso o SetForegroundWindow e ignorado
@@ -207,26 +311,40 @@ function Release-Focus {   # fim do bloco: devolve o foco pra janela do usuario 
   $script:focusHeld = $false; Restore-Focus $script:focusPrev
 }
 function Client-Origin { $h = Get-Game; $pt = New-Object W+POINT; [W]::ClientToScreen($h,[ref]$pt) | Out-Null; $pt }
+$script:capOk = $true   # a ultima captura foi mesmo do jogo? (Read-Status/Inv-Free usam pra nao ler nem salvar print de outra janela)
 function Capture-Raw {   # bitmap da area cliente, sem mexer no foco (so chamar com o jogo na frente). Janelinha do bot fica preta (nao suja OCR/pixels)
-  $h = Get-Game; $c = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c) | Out-Null; $o = Client-Origin
+  $h = Get-Game; $b = $null
+  for($i = 0; $i -lt 2; $i++){
+    $c = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c) | Out-Null; $o = Client-Origin
+    $b = New-Object System.Drawing.Bitmap($c.R,$c.B); $g = [System.Drawing.Graphics]::FromImage($b)
+    $g.CopyFromScreen($o.X,$o.Y,0,0,$b.Size)
+    if($script:ui -and -not $script:ui.IsDisposed){ $r = $script:ui.Bounds; $g.FillRectangle([System.Drawing.Brushes]::Black, $r.X-$o.X, $r.Y-$o.Y, $r.Width, $r.Height) }
+    $g.Dispose()
+    # confere DEPOIS da foto: so checar antes nao basta, outra janela sobe no meio e o bot acaba lendo (e salvando print d)a tela do usuario
+    $script:capOk = $NoFocusRead -or ([W]::GetForegroundWindow() -eq $h)   # com $NoFocusRead voce garante o jogo visivel (2o monitor) e o bot nao rouba foco pra ler
+    if($script:capOk){ return $b }
+    $b.Dispose(); $b = $null
+    if($i -eq 0){ Set-Foreground $h; Start-Sleep -Milliseconds 250 }   # uma re-tentativa; se o Windows negar, devolve a foto marcada como suspeita
+  }
+  $c = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c) | Out-Null; $o = Client-Origin
   $b = New-Object System.Drawing.Bitmap($c.R,$c.B); $g = [System.Drawing.Graphics]::FromImage($b)
-  $g.CopyFromScreen($o.X,$o.Y,0,0,$b.Size)
-  if($script:ui -and -not $script:ui.IsDisposed){ $r = $script:ui.Bounds; $g.FillRectangle([System.Drawing.Brushes]::Black, $r.X-$o.X, $r.Y-$o.Y, $r.Width, $r.Height) }
-  $g.Dispose(); $b
+  $g.CopyFromScreen($o.X,$o.Y,0,0,$b.Size); $g.Dispose(); $script:capOk = $false; $b
 }
 function Capture-Game {   # bitmap da area cliente, ou $null se o jogo nao ficou na frente (nunca le/clica em outra janela)
+  if($NoFocusRead){ $script:gameWasFg = $true; return Capture-Raw }   # jogo sempre visivel: LER nao precisa roubar o foco (comandos ainda precisam)
   $prev = Focus-Game
   if(-not $script:gameFg){ Restore-Focus $prev; Log "jogo nao esta na frente (outra janela ativa), pulando leitura"; return $null }
   $b = Capture-Raw; Restore-Focus $prev; $b
 }
 
 # ---------- input ----------
-function Press-Vk([int]$vk,[int]$hold=40){ $sc = [W]::MapVirtualKey($vk,0); [W]::keybd_event($vk,$sc,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds $hold; [W]::keybd_event($vk,$sc,2,[UIntPtr]::Zero); Start-Sleep -Milliseconds 40 }
-function Type-Text([string]$s){   # ~40ms hold + ~40ms gap por tecla (rapido; sobe se comecar a embaralhar)
+function Press-Vk([int]$vk,[int]$hold=$KeyHoldMs,[int]$gap=$KeyGapMs){ $sc = [W]::MapVirtualKey($vk,0); [W]::keybd_event($vk,$sc,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds $hold; [W]::keybd_event($vk,$sc,2,[UIntPtr]::Zero); Start-Sleep -Milliseconds $gap }
+function Clear-ChatLine { 1..30 | % { Press-Vk 0x08 $KeyClearMs $KeyClearMs } }   # apaga residuo da caixa de chat (30 backspaces: o gap normal aqui custava 2.4s)
+function Type-Text([string]$s){   # $KeyHoldMs de hold + $KeyGapMs de gap por tecla (abaixo de ~30ms comeca a embaralhar)
   foreach($ch in $s.ToCharArray()){
     $k = [W]::VkKeyScan($ch); $vk = $k -band 0xFF; $shift = ($k -shr 8) -band 1
     if($shift){ [W]::keybd_event(0x10,0x2A,0,[UIntPtr]::Zero) }
-    Press-Vk $vk 40
+    Press-Vk $vk
     if($shift){ [W]::keybd_event(0x10,0x2A,2,[UIntPtr]::Zero) }
   }
 }
@@ -240,19 +358,24 @@ function Chat-Open($img){   # caixa de chat aberta = bordas vermelhas no topo e 
   }
   if($own){ $img.Dispose() }; $ok
 }
-function Close-Chat { if(Chat-Open){ 1..30 | % { Press-Vk 0x08 }; Press-Vk 0x0D; Start-Sleep -Milliseconds 300 } }   # apaga residuo e fecha (Enter vazio fecha); chamar com o jogo na frente
+function Close-Chat { if(Chat-Open){ Clear-ChatLine; Press-Vk 0x0D; Start-Sleep -Milliseconds 200 } }   # apaga residuo e fecha (Enter vazio fecha); chamar com o jogo na frente
 function Send-Chat([string]$text){   # $false se o jogo nao ficou na frente (nao digita em outra janela)
   $prev = Focus-Game
   if(-not $script:gameFg){ Log "jogo nao esta na frente, nao enviei '$text'"; return $false }
-  if(Chat-Open){ 1..30 | % { Press-Vk 0x08 } } else { Press-Vk 0x0D; Start-Sleep -Milliseconds 200 }   # ja aberta (residuo seu?) -> so apaga; fechada -> Enter abre
-  Log "chat: $text"; Type-Text $text; Start-Sleep -Milliseconds 130; Press-Vk 0x0D
-  Start-Sleep -Milliseconds 150; if(Chat-Open){ Press-Vk 0x0D }   # se continuou aberta apos enviar, Enter vazio fecha (senao letras viram hotkey)
+  $img = Capture-Raw   # uma captura so decide o estado da caixa (antes eram duas, uma por Chat-Open)
+  $aberta = Chat-Open $img; $img.Dispose()
+  if($aberta){ Clear-ChatLine } else { Press-Vk 0x0D; Start-Sleep -Milliseconds $ChatOpenMs }   # ja aberta (residuo seu?) -> so apaga; fechada -> Enter abre
+  Log "chat: $text"; Type-Text $text; Start-Sleep -Milliseconds $ChatSendMs; Press-Vk 0x0D
+  Start-Sleep -Milliseconds $ChatSendMs; if(Chat-Open){ Press-Vk 0x0D }   # se continuou aberta apos enviar, Enter vazio fecha (senao letras viram hotkey)
   Restore-Focus $prev; $true
 }
-function Click-Client([int]$x,[int]$y,[switch]$KeepFocus){   # $false se o jogo nao ficou na frente. -KeepFocus: jogo ja esta na frente, nao mexe no foco (varios cliques em sequencia)
-  if(-not $KeepFocus){ $prev = Focus-Game; if(-not $script:gameFg){ Log "jogo nao esta na frente, nao cliquei"; return $false } }
-  $o = Client-Origin; [W]::SetCursorPos($o.X+$x,$o.Y+$y) | Out-Null; Start-Sleep -Milliseconds 150
-  [W]::mouse_event(2,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 80; [W]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
+function Click-Client([int]$x,[int]$y,[switch]$KeepFocus){   # $false se o jogo nao ficou na frente. -KeepFocus: nao MEXE no foco (varios cliques em sequencia) - mas continua CONFERINDO
+  if($KeepFocus){
+    # -KeepFocus nao pode significar "clica sem olhar": se a janela do usuario subiu, o clique cairia DENTRO do programa dele
+    if([W]::GetForegroundWindow() -ne (Get-Game)){ Log "jogo nao esta na frente, nao cliquei (KeepFocus)"; return $false }
+  } else { $prev = Focus-Game; if(-not $script:gameFg){ Log "jogo nao esta na frente, nao cliquei"; return $false } }
+  $o = Client-Origin; [W]::SetCursorPos($o.X+$x,$o.Y+$y) | Out-Null; Start-Sleep -Milliseconds 80
+  [W]::mouse_event(2,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 50; [W]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
   if(-not $KeepFocus){ Restore-Focus $prev }; $true
 }
 
@@ -281,11 +404,43 @@ function Crop-Bitmap($src,[int]$x,[int]$y,[int]$w,[int]$h,[int]$scale=1,[int]$pa
 $LevelOcrVariants = @( @{S=8;Pad=0;Inv=$false}, @{S=8;Pad=40;Inv=$true}, @{S=4;Pad=40;Inv=$false}, @{S=4;Pad=0;Inv=$false} )
 function Read-Map($img){   # nome do mapa (rotulo do minimapa) em minusculo, ou '' se nao leu. Com $img=$null captura sozinho
   $own = -not $img; if($own){ $img = Capture-Game }; if(-not $img){ return '' }
-  $c = Crop-Bitmap $img $MapLabel.X $MapLabel.Y $MapLabel.W $MapLabel.H 4
-  $t = (Ocr-Bitmap $c).Text; $c.Dispose(); if($own){ $img.Dispose() }
-  ($t -replace '[^A-Za-z]','').ToLower()
+  $out = ''
+  foreach($v in @( @{ X=$MapLabel.X; Y=$MapLabel.Y; W=$MapLabel.W; H=$MapLabel.H; S=4 },                              # faixa exata do rotulo
+                   @{ X=$MapLabel.X-110; Y=[Math]::Max(0,$MapLabel.Y-25); W=$MapLabel.W+110; H=$MapLabel.H+50; S=3 } )){  # faixa larga: salva quando o painel desloca um pouco
+    $c = Crop-Bitmap $img $v.X $v.Y $v.W $v.H $v.S
+    $out = ((Ocr-Bitmap $c).Text -replace '[^A-Za-z]','').ToLower(); $c.Dispose()
+    if($out){ break }
+  }
+  if($own){ $img.Dispose() }
+  if(-not $out){ Unblock-MapLabel }   # nao leu nada: pode ser a JANELA DO BOT em cima do rotulo (Capture-Raw pinta ela de preto)
+  $out
+}
+function Unblock-MapLabel {   # se a janelinha do bot cobre o rotulo do minimapa, ela mesma se cega; desce ela pra fora
+  if(-not $script:ui -or $script:ui.IsDisposed){ return }
+  $o = Client-Origin; $r = $script:ui.Bounds
+  $lx = $o.X + $MapLabel.X; $ly = $o.Y + $MapLabel.Y
+  if($r.Left -lt ($lx + $MapLabel.W) -and $r.Right -gt $lx -and $r.Top -lt ($ly + $MapLabel.H) -and $r.Bottom -gt $ly){
+    $novoY = $ly + $MapLabel.H + 60
+    Log "janela do bot estava em cima do rotulo do minimapa (por isso o mapa saia vazio): descendo ela pra Y=$novoY"
+    $script:ui.Location = New-Object System.Drawing.Point($r.Left, $novoY)
+  }
+}
+function Save-Shot([string]$nome){   # print pra diagnostico (chamar com o jogo na frente)
+  $img = Capture-Game; if(-not $img){ return '' }
+  New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null
+  $f = Join-Path $CaptchaShotDir $nome; $img.Save($f); $img.Dispose(); $f
 }
 $script:farmMap = ''; $script:phase = 'normal'; $script:warmupCount = 0; $script:restartCycle = $false; $script:forceMR = $false
+function Save-Estado {   # guarda fase/contagem entre reinicios (sem isso todo restart voltava pro 'normal' e perdia o warmup em andamento)
+  try { "$($script:phase) $($script:warmupCount)" | Set-Content -Path $EstadoFile -Encoding ASCII } catch {}
+}
+function Load-Estado {
+  if(-not (Test-Path $EstadoFile)){ return }
+  try {
+    $p = (Get-Content $EstadoFile -Raw).Trim() -split '\s+'
+    if($p[0] -in 'normal','warmup'){ $script:phase = $p[0]; $script:warmupCount = [int]$p[1]; Log "estado retomado: fase $($script:phase), warmup $($script:warmupCount)/$WarmupResets" }
+  } catch {}
+}
 function Same-Map($a,$b){ $a -and $b -and $a.Substring(0,[Math]::Min(4,$a.Length)) -eq $b.Substring(0,[Math]::Min(4,$b.Length)) }   # mesmo mapa pelos 4 primeiros caracteres (tolera ruido do OCR nas coords/fim)
 function Close-Popup { Press-Vk 0x1B; Start-Sleep -Milliseconds 300; Press-Vk 0x1B }   # ESC fecha popups do jogo (ex "precisa estar fora da cidade" apos /darmr)
 function Is-FarmMap($m){ $m -and ($m -notmatch $CityWords) }   # nao e cidade conhecida
@@ -356,16 +511,29 @@ function Handle-Captcha($img){   # $true se captcha esta na tela (tentou resolve
   if(-not $img){ return $false }
   $a = Find-Captcha $img
   if(-not $a){ $script:capTries = 0; $script:capNotified = $null; return $false }
-  if($script:capTries -ge $CapMaxTries){   # ja errou N vezes e o captcha continua na tela: fecha o jogo e para (nao arrisca mais uma)
-    Log "captcha: errei $CapMaxTries vezes -> fechando o jogo (mudx.exe) e parando"
-    Notify "MudinhoX: CAPTCHA" "Errei o captcha $CapMaxTries vezes. Fechei o jogo e parei o bot."
-    Get-Process mudx -ErrorAction SilentlyContinue | Stop-Process -Force; if($script:ui){ $script:ui.Dispose() }; exit
+  if($script:capTries -ge $CapMaxTries){   # errou N vezes: nao arrisca mais uma
+    if($CapKillGame){   # regra antiga: fecha o jogo e para
+      Log "captcha: errei $CapMaxTries vezes -> fechando o jogo (mudx.exe) e parando"
+      Notify "MudinhoX: CAPTCHA" "Errei o captcha $CapMaxTries vezes. Fechei o jogo e parei o bot."
+      Get-Process mudx -ErrorAction SilentlyContinue | Stop-Process -Force; if($script:ui){ $script:ui.Dispose() }; exit
+    }
+    # padrao agora: PAUSA e espera voce. Matar o cliente perdia a sessao inteira, e parte dos erros vinha dos cliques
+    # indo pra outra janela (bug de foco corrigido em 2026-08-31), nao do solver.
+    if(-not $script:paused){
+      Log "captcha: errei $CapMaxTries vezes -> PAUSANDO e esperando voce (nao vou arriscar a proxima)"
+      Notify "MudinhoX: CAPTCHA" "Errei $CapMaxTries vezes. Bot PAUSADO - resolve o captcha e clique RETOMAR."
+      $script:paused = $true
+      if($script:ui -and -not $script:ui.IsDisposed){ $script:btnPause.Text = 'RETOMAR'; $script:btnPause.BackColor = 'ForestGreen' }
+      $script:capTries = 0   # ao retomar, comeca a contagem de novo
+    }
+    return $true
   }
   Save-CaptchaShot $img
   $r = Solve-Captcha $img $a
   if($r -eq 'enviado'){ $script:capTries++; Log "captcha: tentativa $($script:capTries) enviada"; Wait 5; return $true }
-  if($r -eq 'ambiguo' -and (-not $script:capNotified -or ((Get-Date) - $script:capNotified).TotalSeconds -ge $RenotifySec)){
-    Notify "MudinhoX: CAPTCHA" "Nao tenho certeza da imagem. Resolve ai que o bot continua sozinho."; $script:capNotified = Get-Date
+  if($r -ne 'enviado' -and (-not $script:capNotified -or ((Get-Date) - $script:capNotified).TotalSeconds -ge $RenotifySec)){
+    $motivo = if($r -eq 'ambiguo'){ "Nao tenho certeza da imagem." } else { "Cliquei mas a opcao nao ficou selecionada (o jogo pode ter perdido o foco)." }   # 'falhou' avisava NADA: o bot ficava preso no captcha em silencio
+    Notify "MudinhoX: CAPTCHA" "$motivo Resolve ai que o bot continua sozinho."; $script:capNotified = Get-Date
   }
   $true
 }
@@ -397,65 +565,79 @@ if($Check){
 
 # ---------- admin ----------
 # O jogo roda como administrador: o Windows descarta teclado/mouse sintetico vindo de processo comum (UIPI). Entao roda elevado.
-if(-not (Is-Admin)){
+if(-not (Is-Admin) -and -not ($TestInv -or $TestMix -or $TestNpc -or $TestGold -or $TestVisao)){   # -TestInv/-TestMix so LEEM a tela: nao precisam de admin (e elevar abriria janela oculta, sem saida no terminal)
   try { Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`"" }
   catch { [System.Windows.Forms.MessageBox]::Show("Precisa rodar como administrador: o jogo roda como admin e senao o Windows bloqueia o teclado/mouse do bot. Abra de novo e aceite o UAC.", 'MudinhoX RPA') | Out-Null }
   exit
 }
 
 # ---------- loop principal ----------
-$script:statIdx = 0; $script:statDue = (Get-Date).AddSeconds($StatCmds[0].AfterSec)
-$script:lvlLast = $null; $script:ptsGained = 0; $script:statHist = @(); $script:statVals = $null
-function Note-Level([int]$lvl){   # acumula pontos ganhos desde o ultimo comando de stat (level subiu, ou caiu = reset)
-  if($null -eq $script:lvlLast){ $script:lvlLast = $lvl; return }
-  if($lvl -ge $script:lvlLast){ $script:ptsGained += ($lvl - $script:lvlLast) * $PointsPerLevel }
-  else { $script:ptsGained += $PointsPerReset + ([Math]::Max(0, $TargetLevel - $script:lvlLast) + $lvl) * $PointsPerLevel }
-  $script:lvlLast = $lvl
+$script:statDue = (Get-Date).AddSeconds($StatCmds[0].AfterSec)
+$script:ptsLeft = 0
+function Points-Needed($st){ (@($StatOrder | % { $StatMaxValue - [int]$st[$_] }) | measure -Sum).Sum }   # quantos pontos ainda faltam pra fechar os 4 atributos
+function Stat-Stage($st){   # etapa atual = primeira meta (10k/20k/30k/cap) que algum atributo ainda nao alcancou
+  foreach($s in $StatStages){ if($StatOrder | ? { [int]$st[$_] -lt $s }){ return $s } }
+  $StatMaxValue
 }
-function Uniq-Amt([int]$v){   # varia levemente pra nao repetir o mesmo valor (parecer humano), sem descer abaixo de $StatMinCmd
-  for($i = 0; $i -lt 12 -and ($script:statHist -contains $v); $i++){ $v = [Math]::Max($StatMinCmd, $v - (Get-Random -Minimum 1 -Maximum 25)) }
-  $script:statHist = @($script:statHist + $v | select -Last 60); $v
+function Plan-Stats($st,[int]$p){   # TODOS os comandos que os $p pontos dao conta, ja atravessando as etapas (simula o efeito de cada comando).
+  $sim = @{}; foreach($k in $StatOrder){ $sim[$k] = [int]$st[$k] }   # assim uma leitura de status rende ate 16 comandos, em vez de 1 leitura por etapa
+  $out = @()
+  for($etapa = 0; $etapa -le $StatStages.Count; $etapa++){
+    $stage = Stat-Stage $sim; $mandou = $false
+    foreach($k in $StatOrder){   # enche um atributo ate a meta da etapa antes de passar pro proximo (energia, agilidade, forca, vitalidade)
+      if($p -le 0){ break }   # nao corta aqui pelo minimo de 1000: um atributo pode precisar de menos pra FECHAR o cap
+      $faltaEtapa = $stage - $sim[$k]
+      if($faltaEtapa -le 0){ continue }
+      $faltaCap = $StatMaxValue - $sim[$k]
+      $amt = [Math]::Min($p, $faltaEtapa)
+      # se o que falta pra fechar a etapa e menor que o minimo por comando, passa um pouco da meta (limitado pelo cap):
+      # senao a etapa inteira TRAVA por causa de um atributo faltando <1000, e os pontos ficam empilhando pra sempre
+      if($amt -lt $StatMinCmd){ $amt = [Math]::Min($p, [Math]::Min($StatMinCmd, $faltaCap)) }
+      $sc = $StatCmds | ? { $_.Key -eq $k } | select -First 1
+      $piso = if($sc.Cmd -ne '/a' -and $amt -eq $faltaCap){ 1 } else { $StatMinCmd }   # so manda <1000 quando e pra FECHAR o cap (e nunca no /a, que teleporta pra AIDA)
+      if($amt -lt $piso){ continue }
+      $out += ("{0} {1}" -f $sc.Cmd, $amt); $p -= $amt; $sim[$k] += $amt; $mandou = $true
+    }
+    if(-not $mandou -or $p -le 0){ break }   # etapa nao rendeu nada (ou acabaram os pontos): para
+  }
+  ,$out
 }
-function Distribute-Points {   # le os 4 atributos + pontos e distribui de verdade. VALIDA os valores: os 4 no maximo -> /darmr. Distribui so nos que ainda faltam.
+function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapas, na ordem $StatOrder. VALIDA os valores: os 4 no cap -> /darmr.
   $prevP = -1; $stuck = 0
-  for($guard = 0; $guard -lt 15 -and -not $script:stop; $guard++){
+  for($guard = 0; $guard -lt 8 -and -not $script:stop; $guard++){   # cada volta = 1 leitura de status + o plano inteiro; 8 volta e sobra
     $st = Read-Status
     if(-not $st){ Log "stats: nao consegui ler o status"; return }
-    $falta = @('For','Agi','Vit','Ene') | ? { [int]$st[$_] -lt $StatMaxValue }
-    if($falta.Count -eq 0){ if($script:phase -eq 'warmup'){ Log "stats: atributos no maximo durante o warmup, seguindo sem /darmr"; return }; Log "stats: F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) -> TODOS no maximo, /darmr"; Master-Reset; return }
-    $p = [int]$st['Pts']
+    $script:ptsNeeded = Points-Needed $st
+    if($script:ptsNeeded -le 0){ if($script:phase -eq 'warmup'){ Log "stats: atributos no maximo durante o warmup, seguindo sem /darmr"; return }; Log "stats: F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) -> TODOS no maximo, /darmr"; Master-Reset; return }
+    $p = [int]$st['Pts']; $script:ptsLeft = $p
     if($p -lt 0){ Log "stats: F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) (pontos ilegiveis)"; return }
     if($p -lt $StatMinAvail){ return }   # nada relevante a distribuir agora
     if($p -eq $prevP){ $stuck++ } else { $stuck = 0 }; $prevP = $p
-    if($stuck -ge 2){ Log "stats: $p pontos nao baixam (faltam: $($falta -join ',')). Parei pra nao repetir a toa."; return }
-    Log "stats: $p pontos | F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) | distribuindo em: $($falta -join ',')"
-    $enviados = 0
-    foreach($k in @('For','Agi','Vit','Ene')){   # uma volta: manda so nos atributos que faltam
-      if($falta -notcontains $k -or $script:stop){ continue }
-      $sc = $StatCmds | ? { $_.Key -eq $k } | select -First 1
-      $faltaCap = $StatMaxValue - [int]$st[$k]   # quanto falta pra fechar 32767 neste atributo
-      $amt = [Math]::Min([int]$p, [Math]::Min([int][Math]::Ceiling($p / $falta.Count), $faltaCap))
-      $fechando = ($amt -eq $faltaCap)   # este valor fecha exatamente o cap do atributo
-      $piso = if($sc.Cmd -ne '/a' -and $fechando){ 1 } else { $StatMinCmd }   # so manda <1000 quando e pra FECHAR o cap (e nunca no /a, que teleporta pra AIDA)
-      if($amt -lt $piso){ continue }
-      $val = if($fechando -and $amt -lt $StatMinCmd){ $amt } else { Uniq-Amt $amt }   # fechando o cap: valor exato (sem jitter); senao varia (>=1000)
-      $null = Send-Chat ("{0} {1}" -f $sc.Cmd, $val); $enviados++
+    if($stuck -ge 2){ Log "stats: $p pontos nao baixam (faltam $($script:ptsNeeded) pontos pro cap). Parei pra nao repetir a toa."; return }
+    $stage = Stat-Stage $st
+    Log "stats: $p pontos | etapa $stage | F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) | faltam $($script:ptsNeeded) pro cap"
+    $plano = Plan-Stats $st $p
+    if($plano.Count -eq 0){
+      if($p -gt $StatMaxLeftover){ Log "stats: ALERTA - $p pontos sobrando (limite $StatMaxLeftover) e nao consigo gastar nenhum. F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene)"; Notify "MudinhoX" "$p pontos parados e nao consigo distribuir. Da uma olhada." }
+      else { Log "stats: nada a distribuir agora ($p pontos; minimo $StatMinCmd por comando)" }
+      return
     }
-    if($enviados -eq 0){ Log "stats: nada a distribuir agora (restam $p pontos; /a espera >= $StatMinCmd)"; return }
-    Wait 2
+    Log "stats: plano ($($plano.Count) comandos): $($plano -join ' | ')"
+    foreach($cmd in $plano){ if($script:stop -or -not (Send-Chat $cmd)){ break }; $script:ptsSent += [int](($cmd -split ' ')[1]) }   # acumula pra metrica de pontos/h
+    Wait $StatRoundSec
   }
 }
 function Tick-Stats {   # so roda enquanto upa (nunca durante captcha)
   if((Get-Date) -lt $script:statDue){ return }
   Distribute-Points
-  $script:statDue = (Get-Date).AddSeconds($StatEverySec)
+  $script:statDue = (Get-Date).AddSeconds((Jit $StatEverySec))
 }
 $script:lvlPrev = $null; $script:lvlChangedAt = Get-Date
 function Check-Progress([int]$lvl, $img){   # level parado: se saiu do spot, re-teleporta (retorna $false p/ reiniciar o ciclo); se esta no spot parado, religa helper (miss infinito). $true = segue normal
   if($lvl -ne $script:lvlPrev){ $script:lvlPrev = $lvl; $script:lvlChangedAt = Get-Date; return $true }
   if(((Get-Date) - $script:lvlChangedAt).TotalSeconds -lt $StallSec){ return $true }
   $script:lvlChangedAt = Get-Date
-  if(-not (In-Farm $img)){ Log "level parado e fora do spot: re-teleportando"; if(Warp-To-Spot){ Walk-Forward; Start-Helper }; return $false }
+  if(-not (In-Farm $img)){ Log "level parado e fora do spot: re-teleportando"; if(Warp-To-Spot){ Start-Helper }; return $false }
   Log "level parado ha $StallSec s no spot (miss infinito): pausa + anda + despausa"
   $null = Click-Client $PlayBtn.X $PlayBtn.Y; Wait 2   # pausa o helper
   Walk-Forward                                          # anda um pouco (desbuga o miss infinito)
@@ -494,17 +676,46 @@ function Parse-Attrs($words){   # das words do OCR global: acha cada rotulo (For
   }
   $vals
 }
+$script:statBox = $null   # recorte onde o painel de status foi visto da ultima vez (evita OCR da tela inteira a cada 15s)
+function Ocr-Status($img){   # palavras do painel de status. Usa o recorte aprendido; se nao achar nada, cai pro OCR global e RE-APRENDE
+  if($script:statBox){
+    $b = $script:statBox
+    $c = Crop-Bitmap $img $b.X $b.Y $b.W $b.H 2
+    $w = @((Ocr-Bitmap $c).Lines | % { $_.Words }); $c.Dispose()
+    if(Status-Open $w){ return $w }   # Parse-Attrs so compara posicoes RELATIVAS entre rotulo e numero, entao funciona no recorte
+    $script:statBox = $null; Log "status: recorte nao serviu mais, voltando pro OCR da tela toda"
+  }
+  $w = @((Ocr-Bitmap $img).Lines | % { $_.Words })
+  if(Status-Open $w){   # aprende o recorte: caixa que envolve os rotulos + Pts, com folga
+    $r = $w | ? { $_.Text -match '(?i)^(pont|energia|vitalidade|agilidade|for|str|agi|ene|v(?!elo).*dade)' -or $_.Text -match '^\d{1,6}$' } | % { $_.BoundingRect }
+    if($r.Count -ge 5){
+      $x1 = ($r | % { $_.X } | measure -Minimum).Minimum; $x2 = ($r | % { $_.X + $_.Width } | measure -Maximum).Maximum
+      $y1 = ($r | % { $_.Y } | measure -Minimum).Minimum; $y2 = ($r | % { $_.Y + $_.Height } | measure -Maximum).Maximum
+      $x = [Math]::Max(0, [int]$x1 - 30); $y = [Math]::Max(0, [int]$y1 - 20)
+      $ww = [Math]::Min($img.Width - $x, [int]($x2 - $x1) + 60); $hh = [Math]::Min($img.Height - $y, [int]($y2 - $y1) + 40)
+      if($ww -gt 80 -and $hh -gt 80 -and $ww -lt $img.Width * 0.8){ $script:statBox = @{ X = $x; Y = $y; W = $ww; H = $hh }; Log "status: recorte aprendido ($x,$y ${ww}x${hh}) - proximas leituras nao usam a tela toda" }
+    }
+  }
+  $w
+}
 function Read-Status {   # abre a janela de status (C), le os 4 atributos + pontos, fecha. @{For;Agi;Vit;Ene;Pts} ou $null
   $prev = Focus-Game; if(-not $script:gameFg){ Restore-Focus $prev; return $null }
   Close-Chat; $out = $null
-  for($try = 0; $try -lt 4; $try++){
-    Press-Vk $StatusKey $HotkeyHoldMs; Start-Sleep -Milliseconds 900
+  for($try = 0; $try -lt 6; $try++){
+    # C ALTERNA: tentativa par aperta, impar le sem apertar (senao uma leitura ruim FECHA a janela e ele alterna pra sempre).
+    # 900ms e o tempo que a janela precisa pra aparecer - cortei pra 350 quando otimizei o tickrate e o "nao consegui ler o status" virou constante.
+    if($try % 2 -eq 0){
+      $null = Focus-Game   # reafirma o foco ANTES de cada tecla: so checar no inicio nao basta - se a sua janela volta, o C vai pra ELA e o status nunca abre (era a causa das falhas)
+      if(-not $script:gameFg){ Log "status: jogo perdeu o foco, nao vou apertar C"; Wait 1; continue }
+      Press-Vk $StatusKey $HotkeyHoldMs; Start-Sleep -Milliseconds 900
+    }
     $img = Capture-Raw
-    $words = @((Ocr-Bitmap $img).Lines | % { $_.Words })
+    if(-not $script:capOk){ $img.Dispose(); Log "status: a captura pegou outra janela, nao vou ler"; Wait 1; continue }   # nunca le (nem salva print) da tela de outro programa
+    $words = Ocr-Status $img
     if(Status-Open $words){
       $v = Parse-Attrs $words; $v['Pts'] = Get-Points $words
       for($k = 0; $k -lt 2 -and @('For','Agi','Vit','Ene' | ? { -not $v.ContainsKey($_) }).Count; $k++){   # faltou atributo: rele com a janela aberta e combina
-        $img.Dispose(); Start-Sleep -Milliseconds 400; $img = Capture-Raw; $words = @((Ocr-Bitmap $img).Lines | % { $_.Words })
+        $img.Dispose(); Start-Sleep -Milliseconds 400; $img = Capture-Raw; $words = Ocr-Status $img
         $v2 = Parse-Attrs $words; foreach($kk in $v2.Keys){ if(-not $v.ContainsKey($kk)){ $v[$kk] = $v2[$kk] } }; if($v2.ContainsKey('Pts')){ $v['Pts'] = $v2['Pts'] } else { $v['Pts'] = Get-Points $words }
       }
       New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null; $img.Save((Join-Path $CaptchaShotDir 'status_ultimo.png')) | Out-Null; $img.Dispose()
@@ -513,44 +724,97 @@ function Read-Status {   # abre a janela de status (C), le os 4 atributos + pont
       if($miss){ Log ("status: nao li " + ($miss -join ',') + " (li " + (($v.GetEnumerator() | % { "$($_.Key)=$($_.Value)" }) -join ',') + "). Print em captcha\status_ultimo.png") } else { $out = $v }
       break
     }
-    $img.Dispose(); Wait 2   # nao abriu (tecla ignorada logo apos reset): tenta de novo
+    if($try -eq 5){   # desistiu: salva a tela pra dar pra ver se a janela ESTAVA aberta (OCR falhou) ou nao abriu mesmo (tecla C engolida)
+      New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null
+      $img.Save((Join-Path $CaptchaShotDir 'status_falhou.png')); Log "status: nao abriu em 6 tentativas. Print em captcha\status_falhou.png"
+    }
+    $img.Dispose(); Wait 1   # nao abriu (tecla ignorada logo apos reset): tenta de novo
   }
   Restore-Focus $prev; $out
+}
+function Login-Btn($img){   # onde clicar pra voltar pro jogo, ou $null. DOIS sinais: botao play irreconhecivel (fora do jogo) + texto conhecido
+  if(-not $img -or (Get-HelperState $img) -ne 'unknown'){ return $null }   # play verde/vermelho = dentro do jogo; nem gasta OCR
+  $linhas = @((Ocr-Bitmap $img).Lines)
+  $perigo = [bool]($linhas | ? { $_.Text -match $LoginDangerWords })   # "CRIAR NOVA CONTA"/"Sair": nunca clicar por perto
+  $alvo = $null
+  foreach($l in $linhas){
+    if($LoginServerWords -and $l.Text -match $LoginServerWords){ $alvo = $l; break }   # tela de escolha de servidor
+  }
+  if(-not $alvo){ $alvo = $linhas | ? { $_.Text -match "^($LoginWords)$" } | select -First 1 }   # tela de personagem
+  if($alvo){
+    $r = @($alvo.Words)[0].BoundingRect
+    $x2 = (@($alvo.Words) | % { $_.BoundingRect.X + $_.BoundingRect.Width } | measure -Maximum).Maximum
+    return @{ X = [int](($r.X + $x2)/2); Y = [int]($r.Y + $r.Height/2); Perigo = $perigo }
+  }
+  if($perigo){ return @{ X = -1; Y = -1; Perigo = $true } }   # reconheci a tela mas NAO sei onde clicar: melhor avisar que chutar
+  $null
+}
+function Enter-Game([string]$motivo){   # clica pra entrar com o personagem ate o botao play aparecer. $true se voltou pro jogo
+  Log "tela de login detectada ($motivo): tentando entrar de novo"
+  for($i = 0; $i -lt 12 -and -not $script:stop; $i++){
+    $img = Capture-Game
+    if($img -and (Get-HelperState $img) -ne 'unknown'){ $img.Dispose(); Log "de volta no jogo"; return $true }
+    $btn = if($img){ Login-Btn $img } else { $null }
+    if($img){ $img.Dispose() }
+    if($btn -and $btn.X -lt 0){   # reconheci a tela (tem "CRIAR NOVA CONTA"/"Sair") mas nao sei em que botao clicar: JAMAIS chutar coordenada aqui
+      Notify "MudinhoX" "Estou na tela de servidor/login e nao sei qual botao clicar. Entra manualmente (ou ajuste \$LoginServerWords)."
+      Wait 30; continue
+    }
+    if(-not $btn){   # nao reconheci nada: pode ser so tela de loading. So usa a coordenada de config apos insistir
+      if($i -lt 3){ Log "tela de login: nao achei o botao ainda, esperando"; Wait 5; continue }
+      $btn = $LoginBtn
+    }
+    Log "tela de login: clicando ($($btn.X),$($btn.Y))"; $null = Click-Client $btn.X $btn.Y; Wait 8
+  }
+  Notify "MudinhoX" "Nao consegui entrar de novo na tela de login ($motivo). Da uma olhada."; $false
 }
 function Master-Reset {   # atributos cheios: /darmr -> tela de selecao -> clica pra entrar com o personagem -> volta pro loop
   if(-not (Send-Chat "/darmr")){ return }
   Notify "MudinhoX" "Atributos no maximo: mandei /darmr. Tentando entrar de novo com o personagem."
   Wait 10
-  for($i = 0; $i -lt 12; $i++){
-    $img = Capture-Game
-    if($img -and (Get-HelperState $img) -ne 'unknown'){ $img.Dispose(); $script:phase = 'warmup'; $script:warmupCount = 0; $script:restartCycle = $true; Log "de volta no jogo -> modo warmup ($WarmupCmd ate $WarmupResets resets)"; return }   # botao play visivel = dentro do jogo (na cidade); recomeca o ciclo em vez de clicar play aqui
-    $btn = $null
-    if($img){
-      $w = (Ocr-Bitmap $img).Lines | % { $_.Words } | ? { $_.Text -match "^($LoginWords)$" } | select -First 1
-      if($w){ $btn = @{ X = [int]($w.BoundingRect.X + $w.BoundingRect.Width/2); Y = [int]($w.BoundingRect.Y + $w.BoundingRect.Height/2) } }
-      $img.Dispose()
-    }
-    if(-not $btn){ $btn = $LoginBtn }
-    Log "tela de login: clicando ($($btn.X),$($btn.Y))"; $null = Click-Client $btn.X $btn.Y; Wait 8
+  if(Enter-Game '/darmr'){
+    $script:mrs++
+    $dur = [Math]::Round(((Get-Date) - $script:mrStart).TotalHours, 2); $script:mrStart = Get-Date
+    Log "== MASTER RESET #$($script:mrs) FEITO (levou ${dur}h, $($script:resets) resets) =="   # o marco que interessa
+    Notify "MudinhoX" "Master reset #$($script:mrs) feito em ${dur}h."
+    $script:resets = 0; $script:ptsSent = 0; $script:runStart = Get-Date   # zera pra medir o proximo MR limpo
+    $script:phase = 'warmup'; $script:warmupCount = 0; Save-Estado; $script:restartCycle = $true; Log "modo warmup ($WarmupCmd ate $WarmupResets resets)"
   }
-  Notify "MudinhoX" "Nao consegui entrar de novo apos /darmr. Da uma olhada."
 }
-function Walk-Forward {   # ~4 passos apos o /icarus numa direcao aleatoria (varia a cada chegada), antes de ligar o helper
+function Walk-Forward {   # ~4 passos numa direcao aleatoria. SO usado pra desbugar o miss infinito (o passeio pos-warp foi removido a pedido do usuario)
   $h = Get-Game; $c = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c) | Out-Null
   $ang = Get-Random -Minimum 0.0 -Maximum 6.2832; $dx = [int]($WalkDist * [Math]::Cos($ang)); $dy = [int]($WalkDist * 0.75 * [Math]::Sin($ang))   # isometrico: vertical mais curto
   Log "andando 4 passos ($dx,$dy)"; $null = Click-Client ([int]($c.R/2)+$dx) ([int]($c.B/2)+$dy); Wait 2.5
+}
+function Wait-Map([string]$want,[double]$maxSec){   # espera ATE o mapa mudar, em vez de dormir o tempo cravado.
+  $fim = (Get-Date).AddSeconds($maxSec)               # 18s dos 88s do ciclo eram Start-Sleep fixo: ~12s por ciclo recuperaveis (13 min por MR)
+  do {
+    Wait 1
+    $m = Read-Map $null
+    if($want){ if(Same-Map $m $want){ return $m } } elseif($m){ return $m }
+  } while((Get-Date) -lt $fim -and -not $script:stop)
+  Read-Map $null
 }
 function Warp-To-Spot {   # teleporta pro spot da fase atual (warmup=/losttower7, normal=/s18) e confirma pelo mapa. Sucesso = ja num mapa de farm ou chegou num. $false = desistiu
   $cmd = if($script:phase -eq 'warmup'){ $WarmupCmd } else { $WarpCmd }
   $want = Spot-Map
   $before = Read-Map $null
   if(Same-Map $before $want){ $script:farmMap = $before; Log "ja no spot (mapa: $before, fase: $($script:phase))"; return $true }   # ja no spot CORRETO da fase
+  $cego = 0
   for($t = 1; $t -le $WarpTries; $t++){
     if(-not (Send-Chat $cmd)){ Wait 10; continue }
-    Wait $WarpWaitSec
-    $now = Read-Map $null
+    $now = Wait-Map $want $WarpWaitSec   # chega e segue; nao dorme os 9s inteiros
     if(Same-Map $now $want){ $script:farmMap = $now; Log "no spot (mapa: $now, fase: $($script:phase))"; return $true }   # chegou no spot certo
-    Log "nao teleportou pro spot certo (mapa: '$now', esperado '$want', antes '$before'), tentativa $t/$WarpTries ($cmd)"
+    if($now){
+      Log "nao teleportou pro spot certo (mapa: '$now', esperado '$want', antes '$before'), tentativa $t/$WarpTries ($cmd)"
+      if($t -eq 1){ $null = Log-GameMsg $null "apos $cmd"; $null = Save-Shot 'warp_falhou.png' }   # le a resposta do servidor e fotografa na PRIMEIRA falha (a mensagem some rapido)
+    }
+    else { $cego++; Log "NAO CONSEGUI LER o nome do mapa (minimapa recolhido ou tapado?), tentativa $t/$WarpTries ($cmd)" }
+  }
+  if($cego -ge $WarpTries){   # nunca deu pra ler: o problema e a LEITURA, nao o teleporte. Reenviar /s18 nao resolve nada.
+    $f = Save-Shot 'mapa_ilegivel.png'
+    Notify "MudinhoX" "Nao consigo LER o nome do mapa no minimapa. Abra o painel do minimapa (setinha no canto). Print: $f"
+    return $false
   }
   Notify "MudinhoX" "Nao consegui teleportar com $cmd ($WarpTries tentativas). Da uma olhada."; $false
 }
@@ -564,16 +828,342 @@ function Start-Helper {   # liga o helper e CONFIRMA. Para de clicar apos PlayTr
   if((Get-HelperState) -eq 'running'){ Log "helper rodando"; return $true }
   Log "helper nao ligou apos $PlayTries cliques, parei de tentar"; $false
 }
-function Poll-Interval { if($script:gameWasFg){ $PollSec } else { $PollBgSec } }
+# ---------- inventario / mix de joias ----------
+function Screen-Words($img){ @((Ocr-Bitmap $img).Lines | % { $_.Words }) }
+function Word-Center($w){ @{ X = [int]($w.BoundingRect.X + $w.BoundingRect.Width/2); Y = [int]($w.BoundingRect.Y + $w.BoundingRect.Height/2) } }
+function Word-Color($img,$w){   # cor do texto da palavra: 'green' (opcao disponivel), 'red' (indisponivel) ou 'other'
+  $r = $w.BoundingRect; $g = 0; $rd = 0
+  $x1 = [Math]::Max(0,[int]$r.X); $y1 = [Math]::Max(0,[int]$r.Y)
+  $x2 = [Math]::Min($img.Width-1, [int]($r.X + $r.Width)); $y2 = [Math]::Min($img.Height-1, [int]($r.Y + $r.Height))
+  for($y = $y1; $y -le $y2; $y++){ for($x = $x1; $x -le $x2; $x++){
+    $p = $img.GetPixel($x,$y)
+    if($p.G -gt 110 -and $p.G -gt $p.R + 35 -and $p.G -gt $p.B + 35){ $g++ }
+    elseif($p.R -gt 110 -and $p.R -gt $p.G + 35 -and $p.R -gt $p.B + 35){ $rd++ }
+  } }
+  if($g -gt $rd -and $g -gt 12){ 'green' } elseif($rd -gt 12){ 'red' } else { 'other' }
+}
+function Inv-Occupancy($img){   # matriz de celulas ocupadas do inventario ($true = tem item). $null se $InvGrid nao esta calibrado
+  if(-not $InvGrid){ return $null }
+  $c = [double]$InvGrid.Cell   # celula tem tamanho fracionario (34.4): arredondar acumula 3px de erro na 8a coluna
+  @(for($r = 0; $r -lt $InvGrid.Rows; $r++){
+    ,@(for($k = 0; $k -lt $InvGrid.Cols; $k++){
+      $lit = 0
+      for($y = 5; $y -lt $c-5; $y += 2){ for($x = 5; $x -lt $c-5; $x += 2){
+        $px = [int]($InvGrid.X + $k*$c + $x); $py = [int]($InvGrid.Y + $r*$c + $y)
+        if($px -lt $img.Width -and $py -lt $img.Height){ $p = $img.GetPixel($px,$py); if(($p.R + $p.G + $p.B) -gt $InvCellLit){ $lit++ } }
+      } }
+      ($lit -gt $InvCellMin)
+    })
+  })
+}
+function Inv-Open($img){   # a janela do inventario esta MESMO aberta? Sem isso a grade cai em cima do chao do mapa e TUDO parece ocupado (= mix infinito)
+  if(-not $InvGrid){ return $false }
+  $y = [int]($InvGrid.Y + $InvGrid.Rows * [double]$InvGrid.Cell) + 2   # faixa do "Zen" logo abaixo da grade
+  $c = Crop-Bitmap $img ([int]$InvGrid.X - 20) $y 320 45 3
+  $t = (Ocr-Bitmap $c).Text; $c.Dispose()
+  [bool]($t -match '(?i)zen')
+}
+function Inv-Free {   # abre o inventario (V), conta celulas livres, fecha. -1 se nao calibrado, nao abriu ou nao deu pra ler
+  if(-not $InvGrid){ return -1 }
+  $prev = Focus-Game; if(-not $script:gameFg){ Restore-Focus $prev; return -1 }
+  Close-Chat
+  $map = $null
+  for($try = 0; $try -lt 4 -and -not $map; $try++){   # V ALTERNA igual o C: tentativa par aperta, impar le sem apertar (senao uma leitura ruim FECHA a janela e ele alterna pra sempre)
+    if($try % 2 -eq 0){
+      $null = Focus-Game   # reafirma o foco antes da tecla (mesmo motivo do Read-Status: sem isso o V vai pra janela do usuario)
+      if(-not $script:gameFg){ Log "inventario: jogo perdeu o foco, nao vou apertar V"; Wait 1; continue }
+      Press-Vk $InvKey $HotkeyHoldMs; Start-Sleep -Milliseconds 900
+    } else { Start-Sleep -Milliseconds 300 }
+    $img = Capture-Raw
+    if($script:capOk -and (Inv-Open $img)){ $map = Inv-Occupancy $img }
+    $img.Dispose()
+  }
+  if($map){ Press-Vk $InvKey $HotkeyHoldMs; Start-Sleep -Milliseconds 200 }   # fecha
+  Restore-Focus $prev
+  if(-not $map){ Log "inventario: nao consegui abrir/confirmar a janela (tecla V)"; return -1 }
+  @($map | % { $_ } | ? { -not $_ }).Count
+}
+function Hover-Npc {   # passa o mouse por $MixNpcPos (e uns vizinhos) ate o nome do NPC aparecer. Devolve o ponto confirmado ou $null. Chamar com o jogo na frente
+  if(-not $MixNpcPos){ return $null }
+  $o = Client-Origin
+  foreach($dy in $MixNpcSweep){ foreach($dx in $MixNpcSweep){
+    $x = $MixNpcPos.X + $dx; $y = $MixNpcPos.Y + $dy
+    [W]::SetCursorPos($o.X + $x, $o.Y + $y) | Out-Null; Start-Sleep -Milliseconds 350
+    $img = Capture-Raw
+    $c = Crop-Bitmap $img ([Math]::Max(0,$x-150)) ([Math]::Max(0,$y+$MixNpcNameDy-25)) 300 60 2   # o nome so aparece com o mouse em cima: le so a faixa acima do cursor
+    $txt = (Ocr-Bitmap $c).Text; $c.Dispose(); $img.Dispose()
+    if($txt -match $MixNpcWords){ Log "mix: NPC confirmado em ($x,$y) - OCR leu '$($txt.Trim())'"; return @{ X = $x; Y = $y } }
+  } }
+  $null
+}
+function Mix-Jewels {   # /mixer -> clica no NPC -> "Mixar Joias" -> clica cada tipo VERDE (espera $MixWaitSec entre eles) ate sobrar so vermelho. $true se mixou
+  if(-not $MixNpcPos){ Notify "MudinhoX" "Nao sei onde o NPC do mix fica: rode -TestNpc e preencha \$MixNpcPos."; return $false }
+  Log "mix: indo pro $MixCmd"
+  if(-not (Send-Chat $MixCmd)){ return $false }
+  Wait $WarpWaitSec
+  $prev = Focus-Game; if(-not $script:gameFg){ Restore-Focus $prev; return $false }
+  try {
+    $npc = Hover-Npc
+    if(-not $npc){ Notify "MudinhoX" "Cheguei no $MixCmd mas o NPC nao apareceu em volta de ($($MixNpcPos.X),$($MixNpcPos.Y)). Voltando pro farm sem mixar."; return $false }
+    Log "mix: clicando no NPC ($($npc.X),$($npc.Y))"
+    $null = Click-Client $npc.X $npc.Y -KeepFocus; Wait 2
+
+    $img = Capture-Raw
+    $menu = Screen-Words $img | ? { $_.Text -match $MixMenuWords } | sort { $_.BoundingRect.Y } | select -Last 1   # o de cima e o TITULO da janela; o botao e o de baixo
+    $img.Dispose()
+    if(-not $menu){ Notify "MudinhoX" "Cliquei no NPC mas nao abriu o modal 'Mixar Joias'. Voltando pro farm sem mixar."; return $false }
+    $c = Word-Center $menu; Log "mix: clicando '$($menu.Text)' em ($($c.X),$($c.Y))"
+    $null = Click-Client $c.X $c.Y -KeepFocus; Wait 2
+
+    $mixados = 0
+    for($round = 0; $round -lt $MixRounds; $round++){
+      $img = Capture-Raw; $words = Screen-Words $img
+      $verde = $null
+      foreach($j in $MixJewels){
+        $w = $words | ? { $_.Text -match $j.Pat } | select -First 1
+        if(-not $w){ continue }
+        if((Word-Color $img $w) -eq 'green'){ $verde = @{ J = $j; W = $w }; break }
+      }
+      $img.Dispose()
+      if(-not $verde){ Log "mix: nenhuma opcao verde sobrou ($mixados mixados)"; break }
+      $c = Word-Center $verde.W
+      Log "mix: $($verde.J.Name) verde em ($($c.X),$($c.Y)), mixando"
+      $null = Click-Client $c.X $c.Y -KeepFocus; $mixados++
+      Wait $MixWaitSec
+    }
+    Close-Popup
+    Log "mix: terminado ($mixados mix), voltando pro farm"
+    $mixados -gt 0
+  } finally { Restore-Focus $prev }
+}
+# ---------- evento dos dragoes dourados ----------
+function Find-Gold($img){   # centro do bloco mais dourado da tela (Golden Tantalos), ou $null
+  $x2 = $img.Width - $GoldArea.X2FromRight; $y2 = $img.Height - $GoldArea.Y2FromBottom
+  $r = [Img]::BestGold($img, $GoldArea.X1, $GoldArea.Y1, $x2, $y2, $GoldCell,
+        $GoldPix.RMin, $GoldPix.GMin, $GoldPix.BMax, $GoldPix.RmB, $GoldPix.RmG,
+        [int]($img.Width/2), [int]($img.Height/2), $GoldSelfR, $GoldBlobMin)
+  if($r[0] -eq 0 -and $r[1] -eq 0){ return $null }
+  @{ X = $r[0]; Y = $r[1]; N = $r[2] }
+}
+function Hunt-Golden {   # botao DRAGOES: /tarkan2 e caca os Golden Tantalos ate $GoldMinutes. Chamar com o jogo na frente
+  Log "dragoes: indo pro $GoldCmd"
+  if(-not (Send-Chat $GoldCmd)){ return }
+  Wait $WarpWaitSec
+  for($t = 1; $t -lt $WarpTries -and -not (Same-Map (Read-Map $null) $GoldMap); $t++){
+    Log "dragoes: nao cheguei em Tarkan, reenviando ($t/$WarpTries)"; $null = Send-Chat $GoldCmd; Wait $WarpWaitSec
+  }
+  if(-not (Same-Map (Read-Map $null) $GoldMap)){ Notify "MudinhoX" "Nao consegui chegar em Tarkan com $GoldCmd."; return }
+  Start-Helper   # o helper bate no que estiver perto; o bot so leva o personagem ate o mob dourado
+  $fim = (Get-Date).AddMinutes($GoldMinutes); $achados = 0; $vazios = 0
+  while((Get-Date) -lt $fim -and -not $script:stop -and -not $script:restartCycle){
+    $img = Capture-Game
+    if(-not $img){ Wait 2; continue }
+    if(Handle-Captcha $img){ $img.Dispose(); continue }
+    $alvo = Find-Gold $img; $img.Dispose()
+    if($alvo){
+      $vazios = 0; $achados++
+      Log "dragoes: dourado em ($($alvo.X),$($alvo.Y)) [$($alvo.N) px douradros], indo bater"
+      $null = Click-Client $alvo.X $alvo.Y
+      Wait $GoldStepSec
+      Start-Helper
+    } else {
+      $vazios++
+      if($vazios % 10 -eq 0){ Log "dragoes: nada dourado na tela ha $vazios varreduras, continuo procurando" }
+      Walk-Forward   # mapa grande e spawn variavel: anda pra um lado e procura de novo
+      Wait $GoldRoamSec
+    }
+  }
+  Log "dragoes: fim da caca ($achados alvos), voltando pro farm"
+  $script:restartCycle = $true
+}
+$script:invDue = (Get-Date).AddSeconds($InvCheckSec); $script:mixNow = $false; $script:goldNow = $false; $script:semPlay = 0
+function Tick-Inventory {   # de tempos em tempos checa o inventario; cheio (ou botao MIXAR) -> vai mixar e reinicia o ciclo (volta pro spot)
+  if(-not $script:mixNow){
+    if(-not $InvGrid -or (Get-Date) -lt $script:invDue){ return }
+    $script:invDue = (Get-Date).AddSeconds((Jit $InvCheckSec))
+    $free = Inv-Free
+    if($free -lt 0){ return }
+    Log "inventario: $free celulas livres"
+    if($free -ge $InvFreeMin){ return }
+  }
+  $script:mixNow = $false; $script:invDue = (Get-Date).AddSeconds((Jit $InvCheckSec))
+  $null = Mix-Jewels
+  $script:restartCycle = $true   # volta pro spot pelo caminho normal (warp + andar + play)
+}
+function Jit([double]$sec){ $sec * (1 + (Get-Random -Minimum (-$JitterPct) -Maximum $JitterPct)) }   # varia o RITMO (nunca os valores dos stats, que precisam ser exatos)
+$script:runStart = Get-Date; $script:resets = 0; $script:ptsSent = 0; $script:ptsNeeded = -1
+$script:mrs = 0; $script:mrStart = Get-Date; $script:resumo = ''; $script:ciclos = @(); $script:ultimoReset = $null
+function Mediana($a){ if(-not $a -or $a.Count -eq 0){ return 0 }; $s = @($a | sort); [int]$s[[int]($s.Count/2)] }
+function Metrics {   # o objetivo e o /darmr, nao o reset: o numero que importa e PONTOS/HORA e o ETA do MR. Reset e so o meio.
+  $h = ((Get-Date) - $script:runStart).TotalHours
+  if($h -le 0.01){ return }
+  $ph = [int]($script:ptsSent / $h)
+  $eta = if($ph -gt 0 -and $script:ptsNeeded -gt 0){ [Math]::Round($script:ptsNeeded / $ph, 1) } else { -1 }
+  $porReset = if($script:resets -gt 0){ [int]($script:ptsSent / $script:resets) } else { 0 }
+  $rh = if($h -gt 0){ [Math]::Round($script:resets / $h, 1) } else { 0 }
+  $script:resumo = if($eta -ge 0){ "ETA MR ${eta}h | $ph pts/h" } else { "$ph pts/h" }   # vai pro titulo da janelinha
+  Log ("== MR: faltam {0} pontos | {1} pontos/h | ETA ~{2} | {3} resets/h a {4} pts/reset (alvo lvl {5}, warmup {6}) | MRs: {7} ==" -f `
+       $script:ptsNeeded, $ph, $(if($eta -ge 0){"${eta}h"}else{'?'}), $rh, $porReset, $TargetLevel, $WarmupResets, $script:mrs)
+  # MEDIANA, nao media: numa noite a media do ciclo deu 756s e a mediana 88s - a media mentiu por 8x por causa de poucos ciclos travados.
+  # O que decide o ETA do MR nao e o ciclo bom, e quanto tempo vaza nos ruins (69% do tempo numa noite medida).
+  if($script:ciclos.Count -ge 4){
+    $med = Mediana $script:ciclos
+    $lentos = @($script:ciclos | ? { $_ -gt ($med * 1.5) })
+    $total = (@($script:ciclos) | measure -Sum).Sum
+    $perdido = if($lentos.Count){ (@($lentos | % { $_ - $med }) | measure -Sum).Sum } else { 0 }
+    $pctT = if($total -gt 0){ [int]($perdido * 100 / $total) } else { 0 }
+    Log ("   ciclo mediano {0}s | {1}/{2} ciclos lentos (>{3}s) | {4}% do tempo perdido neles | fase {5}" -f `
+         $med, $lentos.Count, $script:ciclos.Count, [int]($med*1.5), $pctT, $script:phase)
+  }
+  if($script:ui -and -not $script:ui.IsDisposed){ $script:ui.Text = "MudinhoX RPA - $($script:resumo)" }
+}
+function Read-Msgs($img){   # texto da faixa de mensagens do jogo (o servidor responde tudo por ali e o bot ignorava)
+  $own = -not $img; if($own){ $img = Capture-Game }; if(-not $img){ return '' }
+  $y = $img.Height - $MsgBox.Y1FromBottom; $h = $MsgBox.Y1FromBottom - $MsgBox.Y2FromBottom
+  $t = ''
+  if($y -ge 0 -and $h -gt 0 -and ($MsgBox.X + $MsgBox.W) -le $img.Width){
+    $c = Crop-Bitmap $img $MsgBox.X $y $MsgBox.W $h 2
+    $t = (Ocr-Bitmap $c).Text; $c.Dispose()
+  }
+  if($own){ $img.Dispose() }
+  ($t -replace '\s+',' ').Trim()
+}
+function Log-GameMsg($img,[string]$quando){   # loga o que o servidor respondeu (antes so sobrava tirar print e adivinhar)
+  $m = Read-Msgs $img
+  if($m){ Log "jogo diz ($quando): $m" }
+  $m
+}
+$script:msgDue = (Get-Date).AddSeconds(10)
+function Tick-Msgs($img){   # le as mensagens do jogo de vez em quando. A caca aos dragoes NAO dispara sozinha (so pelo botao) - pedido do usuario
+  if((Get-Date) -lt $script:msgDue){ return }
+  $script:msgDue = (Get-Date).AddSeconds((Jit $MsgCheckSec))
+  $m = Read-Msgs $img
+  if(-not $m){ return }
+  if($m -match $MsgGoldWords){ Log "evento dos dragoes no chat (use o botao DRAGOES DOURADOS se quiser ir)" }
+  elseif($m -match $MsgInvWords){ Log "jogo avisou inventario cheio -> vou mixar"; $script:mixNow = $true }
+}
+function Poll-Interval {   # perto do alvo le rapido: o level sobe ~150 entre leituras e o reset saia com 400 em vez de 350
+  if($null -ne $script:lvlPrev -and $script:lvlPrev -ge ($TargetLevel * $PollNearFrom)){ return $PollNearSec }
+  if($NoFocusRead -or $script:gameWasFg){ $PollSec } else { $PollBgSec }
+}
+
+# ---------- calibracao do inventario / mix (nao clica em nada) ----------
+if($TestInv){   # abra o inventario NO JOGO antes de rodar
+  $img = Capture-Game; if(-not $img){ Log "jogo nao ficou na frente, nada lido"; exit }
+  New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null
+  $f = Join-Path $CaptchaShotDir 'inventario.png'; $img.Save($f); Log "print do inventario salvo: $f  (me passe o X,Y do canto sup-esq da primeira celula e o tamanho da celula em pixels)"
+  if(-not (Inv-Open $img)){ Log "AVISO: nao achei a linha do 'Zen' abaixo da grade -> a janela do inventario NAO esta aberta (ou \$InvGrid esta errado). O mapa abaixo e do chao do mapa, ignore." }
+  $map = Inv-Occupancy $img
+  if($map){ Log "ocupacao ($((@($map | % { $_ } | ? { -not $_ }).Count)) livres):"; foreach($r in $map){ Log ("  " + (($r | % { if($_){'X'}else{'.'} }) -join '')) } }
+  else { Log "InvGrid ainda nao calibrado (veja o bloco CONFIG)" }
+  $img.Dispose(); exit
+}
+if($TestNpc){   # de /mixer no jogo e deixe o mouse EM CIMA do Lahap: mostra a coordenada e confirma que o OCR le o nome
+  $h = Get-Game
+  Log "TestNpc: clique no JOGO agora e deixe o mouse parado em cima do Lahap. Comeco em 5s, leio por 20s."
+  Start-Sleep 5
+  for($i = 0; $i -lt 20; $i++){
+    if([W]::GetForegroundWindow() -ne $h){ Log "  jogo nao esta na frente (clique nele)"; Start-Sleep 1; continue }
+    $o = Client-Origin; $c = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c) | Out-Null
+    $p = New-Object W+POINT; [W]::GetCursorPos([ref]$p) | Out-Null
+    $x = $p.X - $o.X; $y = $p.Y - $o.Y
+    if($x -lt 0 -or $y -lt 0 -or $x -ge $c.R -or $y -ge $c.B){ Log "  mouse fora da area do jogo"; Start-Sleep 1; continue }
+    $img = Capture-Raw
+    $crop = Crop-Bitmap $img ([Math]::Max(0,$x-150)) ([Math]::Max(0,$y+$MixNpcNameDy-25)) 300 60 2
+    $txt = ((Ocr-Bitmap $crop).Text).Trim(); $crop.Dispose(); $img.Dispose()
+    $ok = if($txt -match $MixNpcWords){ 'CONFERE' } else { '-' }
+    Log ("  cursor ({0},{1})  OCR acima do cursor: '{2}'  {3}" -f $x,$y,$txt,$ok)
+    Start-Sleep 1
+  }
+  Log "TestNpc: use a coordenada que apareceu com CONFERE em `$MixNpcPos = @{ X=..; Y=.. }"
+  exit
+}
+if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guardados em fixtures\ (nao precisa do jogo aberto)
+  $falhas = 0
+  function Ok([string]$nome,$cond,[string]$detalhe){ if($cond){ Log "  OK   $nome" } else { $script:falhas++; Log "  FALHOU $nome -> $detalhe" } }
+  function Fx([string]$n){ $p = Join-Path $FixtureDir $n; if(Test-Path $p){ [System.Drawing.Bitmap]::FromFile($p) } else { Log "  (sem fixture $n)"; $null } }
+  Log "TestVisao: rodando contra $FixtureDir"
+
+  $i = Fx 'lorencia_modal_mix.png'
+  if($i){
+    Ok 'Read-Map le lorencia' ((Read-Map $i) -match '^lorencia') "leu '$(Read-Map $i)'"
+    $ws = Screen-Words $i
+    $menu = $ws | ? { $_.Text -match $MixMenuWords } | sort { $_.BoundingRect.Y } | select -Last 1
+    # regressao: '^mixar' casava com o TITULO da janela (y~378) antes do BOTAO (y~535) e o bot clicaria no titulo
+    Ok 'menu do mix pega o BOTAO, nao o titulo' ($menu -and $menu.BoundingRect.Y -gt 450) "y=$(if($menu){$menu.BoundingRect.Y}else{'nao achou'})"
+    foreach($j in $MixJewels){ Ok "rotulo $($j.Name) reconhecido" ([bool]($ws | ? { $_.Text -match $j.Pat })) 'nenhuma palavra casou' }
+    $i.Dispose()
+  }
+  $i = Fx 'tela_servidor.png'
+  if($i){
+    $b = Login-Btn $i
+    Ok 'Login-Btn reconhece a tela de servidor' ([bool]$b) 'nao detectou (o bot ficaria mandando /s18 no vazio)'
+    # regressao critica: "CRIAR NOVA CONTA" fica em y=959 e o fallback cego $LoginBtn e (960,940) - clicaria em criar conta
+    Ok 'nao clica sem saber o botao' ($b -and ($b.X -ge 0 -or $b.Perigo)) 'devolveu coordenada chutada numa tela com CRIAR NOVA CONTA'
+    if($LoginServerWords){ Ok 'acha o servidor configurado' ($b -and $b.X -ge 0 -and $b.Y -gt 250 -and $b.Y -lt 500) "y=$(if($b){$b.Y}else{'-'})" }
+    $i.Dispose()
+  }
+
+  $i = Fx 'inventario_FECHADO.png'
+  # regressao real: com o inventario FECHADO a grade cai no chao do mapa e leu "8 livres" - o bot acharia que esta cheio e mixaria pra sempre
+  if($i){ Ok 'Inv-Open recusa inventario fechado' (-not (Inv-Open $i)) 'achou o Zen onde nao tem inventario'; $i.Dispose() }
+
+  $i = Fx 'captcha.png'
+  if($i){
+    $a = Find-Captcha $i
+    Ok 'Find-Captcha acha a ancora' ([bool]$a) 'nao achou o texto "Selecione"'
+    if($a){ Ok 'Solve-Captcha tem certeza' ((Solve-Captcha $i $a -NoClick) -eq $true) 'ficou ambiguo' }
+    $i.Dispose()
+  }
+  Log $(if($script:falhas){ "TestVisao: $($script:falhas) FALHA(S)" } else { 'TestVisao: tudo OK' })
+  exit $(if($script:falhas){ 1 } else { 0 })
+}
+if($TestGold){   # com um Golden Tantalos NA TELA: mostra onde o detector acha dourado e salva o print marcado
+  $img = Capture-Game; if(-not $img){ Log "jogo nao ficou na frente, nada lido"; exit }
+  New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null
+  $alvo = Find-Gold $img
+  if($alvo){
+    Log "dourado achado em ($($alvo.X),$($alvo.Y)) com $($alvo.N) pixels no bloco"
+    $g = [System.Drawing.Graphics]::FromImage($img)
+    $g.DrawRectangle((New-Object System.Drawing.Pen([System.Drawing.Color]::Lime,4)), $alvo.X-40, $alvo.Y-40, 80, 80); $g.Dispose()
+  } else { Log "nenhum bloco dourado passou de $GoldBlobMin pixels (maior bloco teve menos que isso). Se o mob esta na tela, baixe \$GoldBlobMin ou afrouxe \$GoldPix" }
+  $f = Join-Path $CaptchaShotDir 'gold.png'; $img.Save($f); Log "print salvo (com o quadrado verde no que ele achou): $f"
+  $img.Dispose(); exit
+}
+if($TestMix){   # abra o modal de mix NO JOGO antes de rodar
+  $img = Capture-Game; if(-not $img){ Log "jogo nao ficou na frente, nada lido"; exit }
+  New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null
+  $f = Join-Path $CaptchaShotDir 'mixer.png'; $img.Save($f); Log "print salvo: $f"
+  foreach($w in (Screen-Words $img)){
+    if($w.Text.Length -lt 3){ continue }
+    $col = Word-Color $img $w; $c = Word-Center $w
+    $hit = @(); if($w.Text -match $MixNpcWords){ $hit += 'NPC' }; if($w.Text -match $MixMenuWords){ $hit += 'MENU' }
+    foreach($j in $MixJewels){ if($w.Text -match $j.Pat){ $hit += $j.Name } }
+    if($hit.Count -or $col -ne 'other'){ Log ("  '{0}' ({1},{2}) cor={3} {4}" -f $w.Text,$c.X,$c.Y,$col,($hit -join '/')) }
+  }
+  $img.Dispose(); exit
+}
 
 Show-Ui
 Remove-Item $StopFile -ErrorAction SilentlyContinue; Log "iniciando"
-if(Test-Path $WarmupFile){ Remove-Item $WarmupFile -ErrorAction SilentlyContinue; $script:phase = 'warmup'; $script:warmupCount = 0; Log "iniciando em modo warmup (pos-MR manual): $WarmupCmd ate $WarmupResets resets" }
+try {   # TODA coordenada calibrada ($InvGrid, $MixNpcPos, $MapLabel, $LevelBox...) e pra $ClientEsperado. Mudou a resolucao, tudo quebra EM SILENCIO - ja custou uma noite
+  $h0 = Get-Game; $c0 = New-Object W+RECT; [W]::GetClientRect($h0,[ref]$c0) | Out-Null
+  if($c0.R -ne $ClientEsperado.W -or $c0.B -ne $ClientEsperado.H){
+    Log "AVISO: area cliente e $($c0.R)x$($c0.B), mas a calibracao e pra $($ClientEsperado.W)x$($ClientEsperado.H)."
+    Log "       Coordenadas ancoradas na BASE (level, chat) se ajustam; as fixas (inventario, Lahap, minimapa) NAO. Recalibre com -TestInv / -TestNpc."
+    Notify "MudinhoX" "Resolucao mudou ($($c0.R)x$($c0.B), esperado $($ClientEsperado.W)x$($ClientEsperado.H)). Inventario e mix podem falhar."
+  } else { Log "area cliente $($c0.R)x$($c0.B) confere com a calibracao" }
+} catch { Log "nao consegui medir a area cliente: $_" }
+Load-Estado   # retoma fase/warmup de onde parou (o warmup.flag abaixo ainda tem prioridade)
+if(Test-Path $WarmupFile){ Remove-Item $WarmupFile -ErrorAction SilentlyContinue; $script:phase = 'warmup'; $script:warmupCount = 0; Save-Estado; Log "iniciando em modo warmup (pos-MR manual): $WarmupCmd ate $WarmupResets resets" }
+while(-not $script:stop){   # envelope: se o cliente cair, o catch espera ele voltar e o ciclo recomeca aqui (antes o script terminava)
 try {
 while($true){
   Pause-Gate
+  if($script:mixNow){ Hold-Focus; try { Tick-Inventory } finally { Release-Focus } }   # botao MIXAR JOIAS: atende ANTES do warp (senao so era visto la dentro do loop de farm, e o bot parecia ignorar o botao)
+  if($script:goldNow){ $script:goldNow = $false; $script:restartCycle = $false; Hold-Focus; try { Hunt-Golden } finally { Release-Focus } }   # botao DRAGOES DOURADOS
   $script:restartCycle = $false   # comecando um ciclo novo (botoes de fase ja aplicaram phase/forceMR)
-  Hold-Focus; try { $warpOk = Warp-To-Spot; if($warpOk){ Walk-Forward; Start-Helper; $script:lvlChangedAt = Get-Date; if($script:forceMR){ $script:forceMR = $false; $script:statDue = Get-Date; Log "forcando distribuicao + MR" } } } finally { Release-Focus }
+  Hold-Focus; try { $warpOk = Warp-To-Spot; if($warpOk){ Start-Helper; $script:lvlChangedAt = Get-Date; if($script:forceMR){ $script:forceMR = $false; $script:statDue = Get-Date; Log "forcando distribuicao + MR" } } } finally { Release-Focus }
   if(-not $warpOk){ Wait 15; continue }
 
   # upando: le level, checa captcha, manda stats (traz o jogo 1x por iteracao, devolve o foco pra sua janela no fim)
@@ -584,19 +1174,35 @@ while($true){
       $img = Capture-Game
       if($img){
         if(-not (Handle-Captcha $img)){
+          # caiu pra tela de login no meio do farm: sem isso o bot mandava /s18 e /resetar no vazio pra sempre.
+          # So investiga apos 3 leituras seguidas sem o botao play - loading normal some em 1-2, e assim nao paga OCR da tela toda a toa.
+          if((Get-HelperState $img) -eq 'unknown'){ $script:semPlay++ } else { $script:semPlay = 0 }
+          if($script:semPlay -ge 3 -and (Login-Btn $img)){
+            $img.Dispose(); $script:semPlay = 0
+            if(Enter-Game 'caiu durante o farm'){ $script:restartCycle = $true }
+            continue
+          }
           $lvl = Read-Level $img
-          if($null -ne $lvl){ Note-Level $lvl; if(-not (Check-Progress $lvl $img)){ $img.Dispose(); continue }; Log "level: $lvl" }
-          Tick-Stats; Tick-Human
+          if($null -ne $lvl){ if(-not (Check-Progress $lvl $img)){ $img.Dispose(); continue }; Log "level: $lvl" }
+          Tick-Stats; Tick-Inventory; Tick-Msgs $img; Tick-Human
         }
         $img.Dispose()
       }
     } finally { Release-Focus }
   } until (($null -ne $lvl -and $lvl -ge $TargetLevel) -or $script:restartCycle)
-  if($script:restartCycle){ $script:restartCycle = $false; Close-Popup; Log "recomecando ciclo (pos-/darmr, fase $($script:phase))"; continue }   # /darmr acabou de re-logar na cidade: nao reseta, vai direto pro warp da fase
+  # gasta os pontos ANTES de resetar: assim nunca sobra mais que o ganho de um reset (~2000) alem do necessario, e o /darmr sai assim que fecha o cap
+  # se ainda sobrar mais de $StatMaxLeftover, tenta de novo (leitura ruim do OCR costuma resolver na releitura) antes de gerar mais 2000 pontos com o reset
+  for($d = 0; $d -lt 3 -and -not $script:restartCycle; $d++){
+    Hold-Focus; try { Distribute-Points } finally { Release-Focus }
+    if($script:ptsLeft -le $StatMaxLeftover){ break }
+    Log "stats: ainda sobram $($script:ptsLeft) pontos (limite $StatMaxLeftover), segurando o reset e tentando de novo ($($d+1)/3)"
+    Wait 3
+  }
+  if($script:restartCycle){ $script:restartCycle = $false; Close-Popup; Log "recomecando ciclo (pos-/darmr ou pos-mix, fase $($script:phase))"; continue }   # /darmr acabou de re-logar na cidade: nao reseta, vai direto pro warp da fase
 
   # reset: espera captcha (resolve) ou level cair
   Hold-Focus; try { while(-not (Send-Chat "/resetar")){ Release-Focus; Wait 10; Hold-Focus } } finally { Release-Focus }
-  $sent = Get-Date; $resends = 0; $warned = $null
+  $sent = Get-Date; $resends = 0; $warned = $null; $inicio = Get-Date
   $resetOk = $false
   do {
     Wait 4; $lvl = $null
@@ -607,24 +1213,56 @@ while($true){
         if(Handle-Captcha $img){ $sent = Get-Date }
         else {
           $lvl = Read-Level $img
-          if($null -ne $lvl){ Note-Level $lvl }
-          if((Read-Map $img) -match $CityWords){ $resetOk = $true }   # char foi pra uma cidade = reset aconteceu (confirma na hora, sem depender de ler o level, que demora em Lorencia)
+          $mapa = Read-Map $img
+          if($mapa -match $CityWords){ $resetOk = $true }   # char foi pra uma cidade = reset aconteceu (confirma na hora, sem depender de ler o level, que demora em Lorencia)
           if($null -ne $lvl -and $lvl -lt $TargetLevel){ $resetOk = $true }
-          if(-not $resetOk -and $null -ne $lvl -and $lvl -ge $TargetLevel -and ((Get-Date) - $sent).TotalSeconds -ge $ResetWaitSec){
-            if($resends -lt $ResetRetries){ $resends++; Log "reset nao aconteceu, reenviando"; if(Send-Chat "/resetar"){ $sent = Get-Date } }
-            elseif(-not $warned -or ((Get-Date) - $warned).TotalSeconds -ge $RenotifySec){ Notify "MudinhoX" "Reset nao aconteceu e nao vejo captcha. Da uma olhada."; $warned = Get-Date }
+          if(-not $resetOk -and ((Get-Date) - $sent).TotalSeconds -ge $ResetWaitSec){
+            $resends++
+            Log "reset nao aconteceu (level: $(if($null -ne $lvl){$lvl}else{'ilegivel'}), mapa: '$mapa'), reenviando ($resends)"   # loga O QUE ELE VE: sem isso nao da pra saber se e o /resetar ou a LEITURA que falhou
+            if($resends -eq 1){ $null = Log-GameMsg $img "apos /resetar"; $null = Save-Shot 'reset_travado.png' }   # le a resposta do servidor e fotografa no PRIMEIRO erro (o jogo pode cair antes da 3a tentativa)
+            if($resends -eq ($ResetRetries + 1)){ Notify "MudinhoX" "Reset nao aconteceu 3x (level: $(if($null -ne $lvl){$lvl}else{'ilegivel'}), mapa: '$mapa'). Print em captcha\reset_travado.png"; $warned = Get-Date }
+            elseif($resends -gt $ResetRetries -and (-not $warned -or ((Get-Date) - $warned).TotalSeconds -ge $RenotifySec)){ Notify "MudinhoX" "Reset ainda nao aconteceu (level: $(if($null -ne $lvl){$lvl}else{'ilegivel'}), mapa: '$mapa')."; $warned = Get-Date }
+            if(Send-Chat "/resetar"){ $sent = Get-Date }   # NUNCA para de tentar: antes desistia apos 2 reenvios e so re-avisava, ficando preso por horas
           }
         }
         $img.Dispose()
       }
     } finally { Release-Focus }
+    if(((Get-Date) - $inicio).TotalMinutes -ge $ResetStuckMin){   # travado ha muito tempo: reinicia o ciclo (re-warp desbuga morte/teleporte/mapa errado)
+      Log "reset travado ha $ResetStuckMin min: reiniciando o ciclo (re-warp) pra tentar desbugar"
+      $script:restartCycle = $true
+    }
   } until ($resetOk -or $script:restartCycle)
   if($script:restartCycle){ continue }   # botao mudou a fase no meio do reset: recomeca o ciclo (nao conta este reset)
-  Log "reset feito, recomecando"; Wait 8   # efeito do teleporte: jogo ignora teclas por uns segundos
+  $script:resets++
+  $agora = Get-Date
+  if($script:ultimoReset){ $script:ciclos += [int]($agora - $script:ultimoReset).TotalSeconds }   # duracao do ciclo, pra mediana e pro tail
+  $script:ultimoReset = $agora
+  Log "reset feito, recomecando"
+  if(($script:resets % $MetricsEvery) -eq 0){ Metrics }
+  $null = Wait-Map '' 8   # espera o mapa RENDERIZAR (o jogo ignora teclas durante o teleporte); segue assim que ler, em vez de dormir 8s
   if($script:phase -eq 'warmup'){
     $script:warmupCount++; Log "warmup: reset $($script:warmupCount)/$WarmupResets (Lost Tower)"
     if($script:warmupCount -ge $WarmupResets){ $script:phase = 'normal'; Log "warmup completo ($WarmupResets resets) -> voltando ao spot normal ($WarpCmd)" }
+    Save-Estado
   }
   $script:statDue = Get-Date   # distribui os pontos do reset ja no proximo tick (Distribute-Points valida os 4 atributos e cuida do /darmr)
 }
-} catch { Log "ERRO: $_"; Notify "MudinhoX RPA parou" "$_"; Wait 30 }
+} catch {
+  if("$_" -match 'nao esta rodando'){   # o cliente caiu: antes o bot MORRIA junto e a noite acabava ali. Agora espera ele voltar
+    Log "ERRO: $_"; Notify "MudinhoX" "O jogo fechou. Abra o MudinhoX que o bot continua sozinho."
+    $avisou = Get-Date
+    while(-not $script:stop){
+      Wait 10
+      $script:gameH = [IntPtr]::Zero   # forca re-resolver o handle (o processo antigo morreu)
+      if(Get-Process mudx -ErrorAction SilentlyContinue | ? { $_.MainWindowHandle -ne 0 }){
+        Log "jogo voltou: esperando a tela carregar e retomando"; Wait 15
+        Hold-Focus; try { $null = Enter-Game 'jogo reaberto' } finally { Release-Focus }   # pode ter voltado na tela de login
+        break
+      }
+      if(((Get-Date) - $avisou).TotalSeconds -ge $RenotifySec){ Notify "MudinhoX" "Ainda esperando o jogo abrir."; $avisou = Get-Date }
+    }
+  } else { Log "ERRO: $_"; Notify "MudinhoX RPA parou" "$_"; Wait 30; $script:stop = $true }   # erro que nao seja o jogo fechado: para de verdade (nao entra em loop de erro)
+}
+}
+Check-Stop

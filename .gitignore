@@ -12,3 +12,12 @@ rpa_*.log.bak
 
 # scratch/backup do editor
 *.bak
+
+# estado do bot (fase/warmup), gerado em runtime
+estado.txt
+
+# fixtures do -TestVisao sao prints grandes (~4MB cada); mantenha local ou use Git LFS
+fixtures/
+
+# lixo de monitor antigo
+.rpa_mon.tmp

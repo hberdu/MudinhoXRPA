@@ -1,4 +1,0 @@
-pyautogui>=0.9.54
-pytesseract>=0.3.13
-Pillow>=10.0.0
-windows-toasts>=1.3.1
