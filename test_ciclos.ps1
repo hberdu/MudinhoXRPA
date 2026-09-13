@@ -73,5 +73,14 @@ Chk 'level ilegivel rele mesmo assim' $script:chamadas 4
 # e o intervalo normal continua valendo: sem $statDue vencido, nao le nada
 $script:statDue = (Get-Date).AddSeconds(30); $script:lvlPrev = 999; Tick-Stats
 Chk 'respeita o intervalo' $script:chamadas 4
+# perto do maximo o portao do level NAO vale: sao os ultimos pontos que liberam o /darmr
+$StatEveryNearSec = 5
+$script:pertoDoMax = $true; $script:statDue = Get-Date; $script:lvlPrev = 999; $script:statLvlLast = 999
+Tick-Stats
+Chk 'perto do maximo le mesmo com o level parado' $script:chamadas 5
+$script:statDue = Get-Date; Tick-Stats
+Chk 'e continua lendo' $script:chamadas 6
+$script:pertoDoMax = $false; $script:statDue = Get-Date; Tick-Stats
+Chk 'longe do maximo volta a respeitar o level' $script:chamadas 6
 if($script:erros -eq 0){ "OK: mediana ignora etiquetas, culpa dividida certo, Tick-Stats so rele quando precisa" }
 else { "$($script:erros) FALHA(S)"; exit 1 }

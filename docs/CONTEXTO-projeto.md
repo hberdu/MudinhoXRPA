@@ -364,3 +364,36 @@ O erro mais comum do log (100 de 1064 leituras, 9,4%) tinha uma causa que nao er
   pro cenario — o painel abre na ESQUERDA. Nao tinha mais nenhum leitor no codigo.
 - **`-TestStatus [print.png]`** novo: mostra palavra por palavra o que o OCR leu no painel e o que virou
   For/Agi/Vit/Ene/Pontos. Sem ele esse diagnostico era olhar o print e adivinhar.
+
+## 2026-09-01 14:54 - o travamento na reta final do /darmr
+
+Do log, o estado exato:
+
+```
+stats: 32922 pontos | etapa 32767 | F=32767 A=32729 V=32767 E=32767 | faltam 38 pro cap
+stats: ALERTA - 32922 pontos sobrando (limite 10000) e nao consigo gastar nenhum
+```
+
+- **Faltavam 38 na agilidade.** O piso do `/a` era 1000, entao nenhum comando legal fechava o vao; os outros tres
+  ja estavam no cap, entao nao havia onde gastar. Resultado: 33 mil pontos parados, tres rodadas de alerta e o
+  `/darmr` so saindo depois que voce clicou no `+` na mao.
+- O piso do `/a` **nao e frescura**: abaixo de 100 ele teleporta o char pra AIDA (perigo medido, ja documentado).
+  Mas o piso estava em 1000 - dez vezes acima do perigo real.
+- Tres mudancas, nesta ordem de importancia:
+  1. **Nao criar o vao** (a causa). No plano, se mandar `$amt` deixaria uma sobra entre 1 e o piso, ou fecha o
+     cap de uma vez (quando os pontos dao), ou manda menos de proposito, deixando uma sobra que o proximo
+     comando ainda consegue mandar. Sem isso, qualquer piso - 1000, 500 ou 100 - so muda o TAMANHO do vao
+     impossivel, nao resolve.
+  2. **Piso menor na reta final** (o pedido): com os 4 atributos acima de `$StatPertoDoMax` (30000), o piso cai
+     de 1000 pra `$StatMinPerto` (500). No `/a` fica `max(500, $StatMinAgi=100)` = 500, bem acima da AIDA.
+  3. **Leitura rapida perto do cap**: `$StatEveryNearSec` (5s) e o portao "so rele se o level mudou" e ignorado.
+     No cap o level pode nem subir mais, e sao justamente os ultimos pontos que liberam o `/darmr`.
+- **Se mesmo assim encalhar** (char que ja chegou nesse estado, ou um `/a` manual), o aviso agora diz o que
+  fazer: "Agi falta 38 - vao menor que 100, nenhum comando de chat fecha isso. Abra o status (C) e clique no
+  '+' desse atributo." Antes era so "nao consigo distribuir".
+- Regressoes novas no `test_stats.ps1`: o `/a` recusa 500 longe do maximo e aceita na reta final; o plano
+  **nunca** deixa a agilidade a menos de 100 do cap sem fechar; com 767 disponiveis ele fecha em vez de deixar
+  vao. E no `test_ciclos.ps1`: perto do maximo o Tick-Stats le mesmo com o level parado.
+- **O lint pagou o proprio custo aqui**: `Jit (if($x){ $a } else { $b })` parseia mas explode em runtime (o
+  PowerShell trata `if` dentro de parenteses como nome de comando). O `test_lint.ps1` pegou antes de rodar:
+  `COMANDO INEXISTENTE linha 889: 'if'`.

@@ -49,6 +49,10 @@ $StatMaxLeftover = 10000 # nao pode sobrar mais que isso de pontos nao distribui
 $StatMinAvail  = 1       # menos que isso de pontos disponiveis: nao distribui (1 = sempre tenta; um atributo pode fechar o cap com poucos pontos)
 $StatMinCmd    = 1000    # piso do /a. Perigo REAL: /a com valor pequeno (<100) teleporta pra AIDA. Nao baixe.
 $StatMinOutros = 1000    # piso de /f /v /e. Era so precaucao (nunca testado). Baixe pra ~1 depois que -TestStatMin confirmar que o servidor aceita
+$StatPertoDoMax = 30000  # com os 4 atributos acima disso, o piso por comando cai pra $StatMinPerto e o status e lido a cada $StatEveryNearSec
+$StatMinPerto  = 500     # piso reduzido na reta final: o que importa la e FECHAR o cap pro /darmr, nao economizar comando
+$StatMinAgi    = 100     # o /a NUNCA vai abaixo disso, nem na reta final: abaixo de 100 ele teleporta o char pra AIDA (perigo documentado, medido)
+$StatEveryNearSec = 5    # perto do maximo le o status a cada N seg (em vez de $StatEverySec): os ultimos pontos e que destravam o /darmr
 $StatEverySec  = 15      # distribui os pontos a cada N seg enquanto upa (alem de logo apos cada reset e antes de cada /resetar)
 $StatMaxSec    = 90      # teto: mesmo com o level parado (ou ilegivel), rele o status a cada N seg
 $StatRoundSec  = 0.5     # espera entre uma rodada de distribuicao e a releitura do status
@@ -785,8 +789,10 @@ function Stat-Stage($st){   # etapa atual = primeira meta (10k/20k/30k/cap) que 
   foreach($s in $StatStages){ if($StatOrder | ? { [int]$st[$_] -lt $s }){ return $s } }
   $StatMaxValue
 }
+function Perto-Do-Max($st){ @('For','Agi','Vit','Ene' | ? { [int]$st[$_] -lt $StatPertoDoMax }).Count -eq 0 }   # os 4 na reta final
 function Plan-Stats($st,[int]$p){   # TODOS os comandos que os $p pontos dao conta, ja atravessando as etapas (simula o efeito de cada comando).
   $sim = @{}; foreach($k in $StatOrder){ $sim[$k] = [int]$st[$k] }   # assim uma leitura de status rende ate 16 comandos, em vez de 1 leitura por etapa
+  $perto = Perto-Do-Max $st   # na reta final o piso cai: o objetivo la e FECHAR o cap pro /darmr
   $out = @()
   for($etapa = 0; $etapa -le $StatStages.Count; $etapa++){
     $stage = Stat-Stage $sim; $mandou = $false
@@ -796,13 +802,24 @@ function Plan-Stats($st,[int]$p){   # TODOS os comandos que os $p pontos dao con
       if($faltaEtapa -le 0){ continue }
       $faltaCap = $StatMaxValue - $sim[$k]
       $sc = $StatCmds | ? { $_.Key -eq $k } | select -First 1
-      # /a tem perigo REAL documentado (valor pequeno teleporta pra AIDA). Pros outros o piso era so precaucao:
-      # baixe $StatMinOutros depois de confirmar com -TestStatMin que o servidor aceita valor pequeno em /f /v /e.
-      $minCmd = if($sc.Cmd -eq '/a'){ $StatMinCmd } else { $StatMinOutros }
+      # /a tem perigo REAL documentado (abaixo de 100 teleporta pra AIDA). Pros outros o piso era so precaucao.
+      # Na reta final ($StatPertoDoMax) o piso cai pra $StatMinPerto - inclusive no /a, que fica bem acima dos 100.
+      $minCmd = if($sc.Cmd -eq '/a'){ if($perto){ [Math]::Max($StatMinPerto, $StatMinAgi) } else { $StatMinCmd } }
+                else { if($perto){ $StatMinPerto } else { $StatMinOutros } }
       $amt = [Math]::Min($p, $faltaEtapa)
       # se o que falta pra fechar a etapa e menor que o minimo por comando, passa um pouco da meta (limitado pelo cap):
       # senao a etapa inteira TRAVA por causa de um atributo faltando <1000, e os pontos ficam empilhando pra sempre
       if($amt -lt $minCmd){ $amt = [Math]::Min($p, [Math]::Min($minCmd, $faltaCap)) }
+      # NUNCA deixar um vao pequeno demais pra ser fechado depois. Foi o travamento de 14:54: A=32729, faltando 38,
+      # e nenhum /a legal fecha 38 (piso 1000, e o proprio jogo recusa mandar mais do que cabe). Os outros 3 ja
+      # estavam no cap, entao nao havia onde gastar: 33 mil pontos parados e o /darmr nunca saia.
+      # /f /v /e podem fechar o vao com valor exato; o /a nao pode ir abaixo de 100, entao pra ele a saida e
+      # NAO criar o vao - manda menos agora e deixa uma sobra que o proximo comando consegue mandar.
+      $sobra = $faltaCap - $amt
+      if($sobra -gt 0 -and $sobra -lt $minCmd){
+        if($p -ge $faltaCap){ $amt = $faltaCap }             # da pra fechar agora: fecha
+        elseif($sc.Cmd -eq '/a'){ $amt = $faltaCap - $minCmd }   # nao da: deixa um vao que o /a ainda consegue mandar depois
+      }
       $piso = if($sc.Cmd -ne '/a' -and $amt -eq $faltaCap){ 1 } else { $minCmd }   # so manda abaixo do piso quando e pra FECHAR o cap (e nunca no /a)
       if($amt -lt $piso){ continue }
       $out += ("{0} {1}" -f $sc.Cmd, $amt); $p -= $amt; $sim[$k] += $amt; $mandou = $true
@@ -818,6 +835,7 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
     if(-not $st){ Tag-Ciclo 'status'; Log "stats: nao consegui ler o status"; return }
     $script:ptsNeeded = Points-Needed $st
     if($script:ptsNeeded -le 0){ if($script:modo -eq 'joias'){ Log "stats: atributos no maximo, mas o modo JOIAS nao da /darmr"; return }; if($script:phase -eq 'warmup'){ Log "stats: atributos no maximo durante o warmup, seguindo sem /darmr"; return }; Log "stats: F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) -> TODOS no maximo, /darmr"; Master-Reset; return }
+    $script:pertoDoMax = Perto-Do-Max $st   # liga a leitura rapida: perto do cap sao os ultimos pontos que destravam o /darmr
     $p = [int]$st['Pts']; $script:ptsLeft = $p
     # O jogo SO mostra a linha "Pontos" quando ha pontos a distribuir (o print do painel confirma: Forca/Agilidade/
     # Vitalidade/Energia aparecem, "Pontos" nao). Entao Pts=-1 quase sempre significa ZERO, nao erro de leitura.
@@ -829,7 +847,18 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
     Log "stats: $p pontos | etapa $stage | F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) | faltam $($script:ptsNeeded) pro cap"
     $plano = Plan-Stats $st $p
     if($plano.Count -eq 0){
-      if($p -gt $StatMaxLeftover){ Log "stats: ALERTA - $p pontos sobrando (limite $StatMaxLeftover) e nao consigo gastar nenhum. F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene)"; Notify "MudinhoX" "$p pontos parados e nao consigo distribuir. Da uma olhada." }
+      if($p -gt $StatMaxLeftover){
+        # Diga O QUE FAZER. Quando o vao e menor que o piso do /a (100, por causa da AIDA) nenhum comando fecha:
+        # so o botao "+" do painel resolve. O plano agora evita CRIAR esse vao, mas um char que ja chegou aqui
+        # (ou um /a manual) precisa da mao. Antes o aviso era so "nao consigo distribuir".
+        $encalhado = @('For','Agi','Vit','Ene' | ? { $StatMaxValue - [int]$st[$_] -gt 0 -and $StatMaxValue - [int]$st[$_] -lt $StatMinAgi })
+        Log "stats: ALERTA - $p pontos sobrando (limite $StatMaxLeftover) e nao consigo gastar nenhum. F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene)"
+        if($encalhado.Count){
+          $det = ($encalhado | % { "$_ falta $($StatMaxValue - [int]$st[$_])" }) -join ', '
+          Log "stats: $det - vao menor que $StatMinAgi, nenhum comando de chat fecha isso. Abra o status (C) e clique no '+' desse atributo."
+          Notify "MudinhoX" "Trava do /darmr: $det. Abra o status (C) e clique no '+' desse atributo - o chat nao consegue fechar vao tao pequeno."
+        } else { Notify "MudinhoX" "$p pontos parados e nao consigo distribuir. Da uma olhada." }
+      }
       else { Log "stats: nada a distribuir agora ($p pontos; minimo $StatMinCmd por comando)" }
       return
     }
@@ -844,15 +873,20 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
 # Le o status quando ha MOTIVO pra ler. Pontos so vem de subir de level - com o level parado, abrir a janela
 # de novo so custa: rouba o foco, gasta 2-3s e loga "0 a distribuir". No log foram 84 leituras assim.
 # O teto de tempo continua existindo porque o level as vezes nao e legivel (OCR) e nao da pra confiar so nele.
-$script:statLvlLast = -1; $script:statMax = Get-Date
+$script:statLvlLast = -1; $script:statMax = Get-Date; $script:pertoDoMax = $false
 function Tick-Stats {   # so roda enquanto upa (nunca durante captcha)
   if((Get-Date) -lt $script:statDue){ return }
-  $mesmoLevel = ($null -ne $script:lvlPrev -and $script:lvlPrev -eq $script:statLvlLast)
-  if($mesmoLevel -and (Get-Date) -lt $script:statMax){ $script:statDue = (Get-Date).AddSeconds((Jit $StatEverySec)); return }
+  # Na reta final o portao do level nao vale: com os 4 atributos perto do cap, o level pode nem subir mais e sao
+  # justamente os ultimos pontos que liberam o /darmr. Entao la ele le rapido e sempre.
+  $intervalo = if($script:pertoDoMax){ $StatEveryNearSec } else { $StatEverySec }
+  if(-not $script:pertoDoMax){
+    $mesmoLevel = ($null -ne $script:lvlPrev -and $script:lvlPrev -eq $script:statLvlLast)
+    if($mesmoLevel -and (Get-Date) -lt $script:statMax){ $script:statDue = (Get-Date).AddSeconds((Jit $intervalo)); return }
+  }
   $script:statLvlLast = $script:lvlPrev
   $script:statMax = (Get-Date).AddSeconds($StatMaxSec)
   Distribute-Points
-  $script:statDue = (Get-Date).AddSeconds((Jit $StatEverySec))
+  $script:statDue = (Get-Date).AddSeconds((Jit $intervalo))
 }
 $script:lvlPrev = $null; $script:lvlChangedAt = Get-Date; $script:lvlLogged = $null
 function Check-Progress([int]$lvl, $img){   # level parado: se saiu do spot, re-teleporta (retorna $false p/ reiniciar o ciclo); se esta no spot parado, religa helper (miss infinito). $true = segue normal

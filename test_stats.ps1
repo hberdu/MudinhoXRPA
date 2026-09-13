@@ -4,6 +4,9 @@ $StatOrder = 'Ene','Agi','For','Vit'
 $StatStep = 5000
 $StatMinCmd = 1000
 $StatMinOutros = 1000
+$StatPertoDoMax = 30000
+$StatMinPerto = 500
+$StatMinAgi = 100
 $StatMaxValue = 32767
 $StatStages = @(1..([Math]::Floor(($StatMaxValue - 1) / $StatStep)) | % { $_ * $StatStep }) + $StatMaxValue
 # pega as 3 funcoes puras direto do .ps1 (sem carregar o bot inteiro)
@@ -36,9 +39,24 @@ if(($umPlano -join '|') -ne ($r.Cmds -join '|')){ throw "plano unico difere do i
 # 3. poucos pontos: enche energia primeiro, nao espalha
 $r2 = Run (St 0 0 0 0) 4000
 if($r2.Cmds -join '|' -ne '/e 4000'){ throw "com 4000 pontos deveria mandar so /e 4000, veio: $($r2.Cmds -join '|')" }
-# 4. /a nunca recebe menos de 1000; /f /v /e podem, mas so pra FECHAR o cap
-$r3 = Run (St 32767 32000 32767 32767) 500
-if($r3.Cmds.Count -ne 0){ throw "/a com 500 (<1000) nao pode ser enviado: $($r3.Cmds -join '|')" }
+# 4. piso do /a: 1000 no geral, 500 na reta final (os 4 acima de $StatPertoDoMax), NUNCA abaixo de 100 (AIDA)
+$r3 = Run (St 20000 19600 20000 20000) 500      # longe do maximo: piso do /a segue 1000
+if($r3.Cmds.Count -ne 0){ throw "/a com 500 fora da reta final nao pode sair: $($r3.Cmds -join '|')" }
+$r3b = Plan-Stats (St 32767 31000 32767 32767) 600   # reta final: 600 fecharia deixando 767 - cabe num /a depois
+if(($r3b -join '|') -ne '/a 600'){ throw "na reta final o /a deveria aceitar 600: $($r3b -join '|')" }
+# 4b. REGRESSAO do travamento de 14:54: A=32729, faltando 38. Nenhum /a legal fecha 38 (piso 100 por causa da
+#     AIDA), e os outros 3 ja estao no cap. A saida e NAO CRIAR o vao: o plano nunca pode deixar a agilidade
+#     a menos de $StatMinPerto do cap sem fechar.
+$r3c = Plan-Stats (St 32767 32000 32767 32767) 500    # 500 deixaria 267 de vao: impossivel de fechar depois
+if($r3c.Count -ne 0){ throw "nao pode criar vao de 267 no /a: $($r3c -join '|')" }
+$r3d = Plan-Stats (St 32767 32000 32767 32767) 767    # com 767 da pra FECHAR: tem que fechar
+if(($r3d -join '|') -ne '/a 767'){ throw "com 767 o /a deveria fechar o cap: $($r3d -join '|')" }
+# 4c. simulacao longa a partir do estado real do log: nunca pode parar com a agilidade encalhada
+$r3e = Run (St 30000 30000 30000 30000) 11068
+foreach($k in $StatOrder){
+  $falta = 32767 - $r3e.St[$k]
+  if($falta -gt 0 -and $falta -lt $StatMinAgi){ throw "$k parou a $falta do cap - vao impossivel de fechar" }
+}
 $r4 = Run (St 32000 32767 32767 32767) 767
 if($r4.Cmds -join '|' -ne '/f 767'){ throw "/f fechando o cap com 767 deveria sair: $($r4.Cmds -join '|')" }
 # 5. REGRESSAO: faltando <1000 pra fechar a etapa nao pode TRAVAR a distribuicao inteira
@@ -60,6 +78,9 @@ if($r6.Cmds.Count -ne 0){ throw "/a recebeu valor pequeno mesmo com o piso propr
 $r7 = Run (St 32000 32767 32767 32767) 500      # so a For falta: com piso baixo, pode receber
 if($r7.Cmds -join '|' -ne '/f 500'){ throw "com StatMinOutros=1 o /f deveria aceitar 500: $($r7.Cmds -join '|')" }
 $StatMinOutros = 1000
+$StatPertoDoMax = 30000
+$StatMinPerto = 500
+$StatMinAgi = 100
 # 7. Points-Needed / Stat-Stage
 if((Points-Needed (St 0 0 0 0)) -ne 131068){ throw "Points-Needed do zero errado" }
 if((Stat-Stage (St 5000 5000 5000 4999)) -ne 5000){ throw "etapa deveria continuar em 5000 ate todos chegarem" }

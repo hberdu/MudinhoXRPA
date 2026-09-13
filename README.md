@@ -2,7 +2,9 @@
 
 Loop automático: `/s18` -> play (MU Helper) -> espera level 350 -> `/resetar` -> repete.
 
-- Nunca envia stat < 1000 (`/a` pequeno teleporta pra AIDA; atributo que precisa <1000 fica pro próximo tick com mais pontos). Exceção: `/f`, `/v`, `/e` podem mandar menos quando é pra **fechar exatamente** o 32767.
+- Piso por comando: **1000** no geral e **500 na reta final** (`$StatMinPerto`, quando os 4 atributos passam de `$StatPertoDoMax` = 30000). O `/a` nunca vai abaixo de **100** (`$StatMinAgi`) — abaixo disso ele teleporta o char pra AIDA. `/f`, `/v`, `/e` podem mandar qualquer valor quando é pra **fechar exatamente** o 32767.
+- **Nunca deixa um vão pequeno demais pra fechar depois.** Era o travamento: agilidade em 32729, faltando 38, e nenhum `/a` legal fecha 38 — com os outros 3 já no cap, 33 mil pontos ficavam parados e o `/darmr` não saía. Agora o plano ou fecha o cap de uma vez, ou manda menos e deixa uma sobra que o próximo comando consegue mandar.
+- **Perto do máximo lê o status a cada 5s** (`$StatEveryNearSec`) e ignora o "só relê se o level mudou" — no cap o level pode nem subir mais, e são os últimos pontos que liberam o `/darmr`.
 - Stats de **5k em 5k** (`$StatStep`): 5000, 10000, ... 30000 e por fim **32767** (o cap que o `/darmr` exige — abaixo disso o jogo recusa). Dentro de cada etapa enche **um atributo por vez, nesta ordem: energia, agilidade, força, vitalidade**. Se faltar menos de 1000 pra fechar a etapa num atributo, passa um pouco da meta em vez de travar (senão a etapa inteira empaca e os pontos empilham).
 - A cada 15s (e logo após cada reset) abre a janela de status (C), lê os 4 atributos + os **pontos disponíveis** e manda os valores exatos. Uma leitura de status rende o plano inteiro (até 28 comandos), não uma etapa por leitura.
 - Nunca deixa mais de **10k de pontos sobrando** (`$StatMaxLeftover`): distribui **antes de cada `/resetar`** e, se ainda sobrar mais que isso, segura o reset e tenta de novo (até 3x) em vez de gerar mais 2000 pontos. Se não conseguir gastar nada, avisa.
