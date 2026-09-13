@@ -100,7 +100,15 @@ $StatPertoDoMax = 30000  # com os 4 atributos acima disso, o piso por comando ca
 $StatMinPerto  = 500     # piso reduzido na reta final: o que importa la e FECHAR o cap pro /darmr, nao economizar comando
 $StatMinAgi    = 100     # o /a NUNCA vai abaixo disso, nem na reta final: abaixo de 100 ele teleporta o char pra AIDA (perigo documentado, medido)
 $StatEveryNearSec = 5    # perto do maximo le o status a cada N seg (em vez de $StatEverySec): os ultimos pontos e que destravam o /darmr
-$StatEverySec  = 15      # distribui os pontos a cada N seg enquanto upa (alem de logo apos cada reset e antes de cada /resetar)
+$StatEverySec  = 35      # distribui os pontos a cada N seg enquanto upa (alem de logo apos cada reset e antes de cada /resetar)
+                         # Era 15, e o numero de COMANDOS e o que custa caro: medido em 541 resets do log, a duracao
+                         # de um reset e ~46s + 5.1s POR COMANDO de distribuicao (o comando custa 2.5s de sleeps e
+                         # puxa uma releitura de status atras). Com 15s saiam 10.9 comandos por reset - ~56s dos
+                         # 100s. E comando = leitura: os pontos chegam a ~37/s e cada leitura gastava os ~554 que
+                         # tinham chegado. Esperando mais, o MESMO total sai em menos comandos maiores (o teto por
+                         # comando e a etapa, $StatStep = 5000, longe dos ~1300 que 35s acumulam).
+                         # Nao atrasa o /darmr: na reta final o $Perto-Do-Max troca este intervalo pelo
+                         # $StatEveryNearSec (5s), e sao os ultimos pontos que destravam o /darmr.
 $StatMaxSec    = 90      # teto: mesmo com o level parado (ou ilegivel), rele o status a cada N seg
 $StatCongeladoN = 2      # N leituras de status IDENTICAS (4 atributos + pontos) com o level andando entre elas = painel velho na tela -> destrava. Em 01/09 ficou 12 min com "752 pontos" congelados e so o $SemProgressoMin pegou
 $StatRoundSec  = 0.25    # espera entre uma rodada de distribuicao e a releitura do status (era 0.5; a releitura ja custa ~1s de captura+OCR, nao precisa de folga por cima)
@@ -597,6 +605,10 @@ function Ver-Janela {   # sobe a janela do jogo na pilha, SEM ativar. Barato (ms
   # ver com SetForegroundWindow custaria o foco do sistema inteiro e ~2s (e o seu teclado no meio da digitacao);
   # aqui e so Z-order. VER e DIGITAR sao coisas diferentes - so digitar exige primeiro plano de verdade (medido:
   # PostMessage e AttachThreadInput+SetFocus nao funcionam neste cliente, ver test_entrada_sem_foco.ps1).
+  # Ja visivel nos pixels? Entao nao ha o que subir, e nao ha frame novo pra esperar. Este e o caso COMUM (o jogo
+  # fica no outro monitor, destapado), e os 60ms saiam em TODA captura: duas por comando de chat, mais uma por
+  # volta do loop. Perguntar ao Windows quem esta nos pixels custa microssegundos - nao tira foto nem dorme.
+  if(Janela-Na-Frente){ return }
   # HWND_TOP=0, SWP_NOSIZE=1 | SWP_NOMOVE=2 | SWP_NOACTIVATE=0x10 = 0x13
   [W]::SetWindowPos((Get-Game), [IntPtr]::Zero, 0,0,0,0, 0x13) | Out-Null
   Start-Sleep -Milliseconds 60   # o compositor precisa de um frame pra desenhar por cima do que estava na frente
@@ -1480,7 +1492,22 @@ function Check-Progress([int]$lvl, $img){   # level parado: se saiu do spot, re-
   # (61s) - um deles com 10 disparos seguidos e o char ganhando ponto o tempo todo (16, 32, 64...). Cada disparo
   # custa ESC + pausa + anda + religa helper. Era a maior causa isolada da cauda lenta, acima ate do captcha.
   # A base e atualizada SEMPRE, senao distribuir os pontos (que zera o disponivel) desligaria a guarda pro resto do ciclo.
-  $subiu = ($script:ptsLeft -gt $script:stallPts); $script:stallPts = $script:ptsLeft
+  # GANHO ACUMULADO, nao saldo. Comparar $ptsLeft sozinho era auto-sabotagem: a distribuicao ZERA o saldo, entao
+  # ~20s depois de todo /f /a /v /e a guarda via "0 pontos, nao subiu" e deixava o falso positivo passar. Medido:
+  # 36 dos 105 disparos do log (34%) cairam ate 30s depois de um comando de distribuicao, com o char matando
+  # normalmente - pontos entrando a 300-600 por leitura. E os ciclos marcados 'stall' somavam 51% de TODO o tempo
+  # do bot (21 de 199 ciclos), contra 29% dos 122 ciclos limpos. Era a maior causa isolada da lentidao.
+  # $ptsSent + $ptsLeft so cresce enquanto o char mata, e a distribuicao move valor de um pro outro sem mudar a soma.
+  $ganho = $script:ptsSent + $script:ptsLeft
+  if($ganho -le $script:stallPts){
+    # A leitura de status pode estar velha (ate $StatEverySec), e decidir "travado" com numero velho e o erro
+    # que essa guarda existe pra evitar. Aqui - e SO aqui, no caminho raro - vale pagar uma leitura fresca:
+    # custa ~2.5s contra os ~17s de ESC + andar + religar helper que viriam a seguir, e so roda quando as outras
+    # duas condicoes ja apontaram travamento (21 dos 541 resets do log).
+    $fresco = Read-Status
+    if($fresco){ $script:ptsLeft = [Math]::Max(0, [int]$fresco.Pts); $ganho = $script:ptsSent + $script:ptsLeft }
+  }
+  $subiu = ($ganho -gt $script:stallPts); $script:stallPts = $ganho
   if($subiu){ $script:lvlChangedAt = Get-Date; $script:lvlSame = 0; return $true }
   $script:lvlChangedAt = Get-Date; $script:lvlSame = 0
   # $null = : Start-Helper DEVOLVE $true/$false, e sem descartar isso a funcao saia com DOIS valores. O chamador
@@ -1703,7 +1730,7 @@ function Master-Reset {   # atributos cheios: /darmr -> tela de selecao -> clica
     $dur = [Math]::Round(((Get-Date) - $script:mrStart).TotalHours, 2); $script:mrStart = Get-Date
     Log "== MASTER RESET #$($script:mrs) FEITO (levou ${dur}h, $($script:resets) resets) | $($script:mrsDia) de $(if($MrsPorDia -gt 0){ $MrsPorDia } else { 'infinito' }) hoje =="   # o marco que interessa
     Notify "MudinhoX" "Master reset #$($script:mrs) feito em ${dur}h."
-    $script:resets = 0; $script:ptsSent = 0; $script:runStart = Get-Date; $script:ativoSeg = 0   # zera pra medir o proximo MR limpo
+    $script:resets = 0; $script:ptsSent = 0; $script:runStart = Get-Date; $script:ativoSeg = 0; $script:stallPts = -1   # zera pra medir o proximo MR limpo (o stallPts acompanha: a base dele e $ptsSent, que acabou de zerar)
     # Bateu a cota do dia: para de resetar e vai mixar joias ate virar o dia. O modo joias ja e exatamente isso
     # (farma no spot da fase, mixa, repete, sem /resetar e sem /darmr), entao o descanso nao precisou de modo novo.
     # O Warp-To-Spot dele respeita a fase, entao o char recem-saido do /darmr vai pro $WarmupCmd, nao pro $WarpCmd.

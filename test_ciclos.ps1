@@ -106,6 +106,12 @@ function In-Farm($img){ $script:noSpot }
 function Warp-To-Spot { $script:reteleportou++; $true }
 function Start-Helper { $true }
 function Close-Popup { }
+function Focus-Game { $true }
+# A guarda dos pontos rele o status quando o valor em cache nao cresceu: com $StatEverySec em 35s, decidir
+# "travado" com numero velho seria o mesmo falso positivo que ela existe pra evitar. $script:frescoPts = $null
+# simula "a leitura falhou" (tem que cair de volta no cache, nao travar).
+$script:frescoPts = $null; $script:lidoFresco = 0
+function Read-Status { $script:lidoFresco++; if($null -eq $script:frescoPts){ $null } else { @{ For=0; Agi=0; Vit=0; Ene=0; Pts=$script:frescoPts } } }
 function Click-Client($x,$y){ $script:destravouStall++; $true }
 function Walk-Forward { }
 function Wait([double]$s){ }
@@ -115,7 +121,7 @@ function Play-XY { @{ X = 77; Y = 33 } }
 if($src -notmatch '(?s)(function Check-Progress.*?\r?\n\})'){ throw "nao achei a Check-Progress" }
 . ([scriptblock]::Create($Matches[1]))
 
-function ZeraStall($segAtras){ $script:lvlPrev = 100; $script:lvlSame = 0; $script:lvlChangedAt = (Get-Date).AddSeconds(-$segAtras); $script:noSpot = $true; $script:destravouStall = 0; $script:reteleportou = 0; $script:ptsLeft = 0; $script:stallPts = 0 }
+function ZeraStall($segAtras){ $script:lvlPrev = 100; $script:lvlSame = 0; $script:lvlChangedAt = (Get-Date).AddSeconds(-$segAtras); $script:noSpot = $true; $script:destravouStall = 0; $script:reteleportou = 0; $script:ptsLeft = 0; $script:ptsSent = 0; $script:stallPts = 0 }   # base = ganho atual (0+0); -1 aqui faria a 1a avaliacao parecer progresso
 
 # level parado ha bastante tempo, mas ainda nao houve $StallReads leituras: nao dispara
 ZeraStall 60
@@ -150,14 +156,47 @@ Chk '  (e o contador de leituras zera)'      $script:lvlSame            0
 ZeraStall 60
 $null = Check-Progress 100 $null; $null = Check-Progress 100 $null; $null = Check-Progress 100 $null
 Chk 'pontos parados ainda dispara'           $script:destravouStall     1
-# distribuir zera o disponivel: a base tem que acompanhar, senao a guarda ficaria desligada o resto do ciclo
+# DISTRIBUIR NAO PODE PARECER TRAVAMENTO. Era o bug que mais custava tempo no bot: a guarda comparava o SALDO
+# ($ptsLeft), e o /f /a /v /e zera o saldo - entao ~20s depois de toda distribuicao ela via "0 pontos, nao subiu"
+# e deixava passar um falso positivo. Medido no rpa.log: 36 dos 105 disparos (34%) cairam ate 30s depois de um
+# comando de distribuicao, com o char matando normal. Os ciclos marcados 'stall' somavam 51% de TODO o tempo do
+# bot. A conta certa e o GANHO ACUMULADO ($ptsSent + $ptsLeft), que a distribuicao nao muda - ela so move valor
+# de um lado pro outro. Este teste antes esperava o disparo, ou seja: ele guardava o bug.
 ZeraStall 60
 $script:ptsLeft = 900; $null = Check-Progress 100 $null; $null = Check-Progress 100 $null; $null = Check-Progress 100 $null
-$script:ptsLeft = 16    # gastou os 900 num /f
-# ver progresso reinicia o relogio dos $StallMinSec (igual a quando o level muda): o tempo precisa correr de novo
+$script:ptsSent = 900; $script:ptsLeft = 16    # gastou os 900 num /f e ja matou mais 16
 $script:lvlChangedAt = (Get-Date).AddSeconds(-60)
 1..3 | ForEach-Object { $null = Check-Progress 100 $null }
-Chk 'apos distribuir, volta a detectar'      $script:destravouStall     1
+Chk 'distribuir NAO dispara'                 $script:destravouStall     0
+# ...e o char parando DE VERDADE depois de distribuir continua sendo pego: o ganho para de crescer.
+$script:lvlChangedAt = (Get-Date).AddSeconds(-60)
+1..3 | ForEach-Object { $null = Check-Progress 100 $null }
+Chk 'parar apos distribuir ainda dispara'    $script:destravouStall     1
+
+# LEITURA FRESCA antes de gastar os ~17s de destravamento. O $ptsLeft em cache pode ter ate $StatEverySec (35s)
+# de idade, e com o cache velho a guarda cai no mesmo falso positivo que ela existe pra evitar. Uma leitura
+# custa ~2.5s e so acontece aqui, quando as outras duas condicoes ja apontaram travamento.
+ZeraStall 60
+$script:frescoPts = 900; $script:lidoFresco = 0      # cache diz 0, mas o char ganhou 900 desde a ultima leitura
+1..3 | ForEach-Object { $null = Check-Progress 100 $null }
+Chk 'rele o status antes de destravar'       $script:lidoFresco         1
+Chk 'ponto fresco cancela o falso positivo'  $script:destravouStall     0
+# ...e com o status confirmando zero, destrava mesmo
+ZeraStall 60
+$script:frescoPts = 0
+1..3 | ForEach-Object { $null = Check-Progress 100 $null }
+Chk 'status fresco confirma: destrava'       $script:destravouStall     1
+# leitura que FALHA nao pode travar nem virar "progresso": cai de volta no cache e decide com ele
+ZeraStall 60
+$script:frescoPts = $null
+1..3 | ForEach-Object { $null = Check-Progress 100 $null }
+Chk 'leitura falha cai no cache'             $script:destravouStall     1
+# e quando o cache JA mostra ganho, nao gasta leitura nenhuma
+ZeraStall 60
+$script:ptsLeft = 700; $script:frescoPts = 0; $script:lidoFresco = 0
+1..3 | ForEach-Object { $null = Check-Progress 100 $null }
+Chk 'cache com ganho nao rele'               $script:lidoFresco         0
+Chk '  (e nao destrava)'                     $script:destravouStall     0
 
 # fora do spot o remedio e outro: re-teleporta em vez de dancar no lugar
 ZeraStall 60; $script:noSpot = $false
