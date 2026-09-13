@@ -102,8 +102,12 @@ $script:modo = 'joias'; Save-Estado; $script:modo = 'reset'; Load-Estado
 Chk 'modo joias sobrevive' $script:modo 'joias'
 $script:modo = 'reset'; Save-Estado; $script:modo = 'joias'; Load-Estado
 Chk 'modo reset sobrevive' $script:modo 'reset'
-$script:modo = 'dragoes'; Save-Estado; $script:modo = 'reset'; Load-Estado
-Chk 'modo dragoes sobrevive' $script:modo 'dragoes'
+# O modo DRAGOES foi removido em 12/09 (botao, Ciclo-Dragoes, detector de cor e config). Um estado.txt antigo
+# com modo=dragoes tem que ser DESCARTADO: aceitar ele deixaria o bot num modo que nao tem mais quem atenda,
+# e o laco principal cairia direto no ciclo de reset sem nunca mais gravar o modo certo.
+'modo=dragoes' | Add-Content $EstadoFile -Encoding ASCII
+$script:modo = 'reset'; Load-Estado
+Chk 'modo dragoes antigo e descartado' $script:modo 'reset'
 'fase=normal' | Set-Content $EstadoFile -Encoding ASCII   # arquivo sem 'modo' nao pode virar lixo
 $script:modo = 'joias'; Load-Estado
 Chk 'sem modo no arquivo, mantem o da memoria' $script:modo 'joias'

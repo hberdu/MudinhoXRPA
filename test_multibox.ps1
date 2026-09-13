@@ -55,6 +55,24 @@ Chk "confere de quem sao os pixels" ($src -match 'WindowFromPoint') 'True'
 Chk "e usa isso no capOk"        ($src -match "capOk = if\(\`$Slot -gt 0\)\{ Janela-Na-Frente \}") 'True'
 Chk "aceita controle filho"      ($src -match 'GetAncestor\(\$w, 2\)') 'True'
 
+# --- 4b. QUAL JANELA E O JOGO: versao web, qualquer navegador ---------------------------------------
+# Com $GameTitle preenchido a busca e por TITULO em qualquer processo, entao Chrome, Edge e Brave saem de graca
+# - o nome do processo nao entra na conta. O que precisa ser exato e o regex: ancorado em "[GAME]" porque ha
+# outra aba chamada "MudinhoX - Servidor de ..." e casar com ela faria o bot mirar a janela errada.
+Chk "busca por titulo em QUALQUER processo" ($src -match "Get-Process -ErrorAction SilentlyContinue \| \? \{ \`$_\.MainWindowHandle -ne 0 -and \`$_\.MainWindowTitle -match \`$GameTitle \}") 'True'
+if($src -notmatch "(?m)^\`$GameTitle\s*=\s*'([^']+)'"){ throw "nao achei o `$GameTitle no CONFIG" }
+$reTitulo = $Matches[1]
+foreach($caso in @(
+    @{t='[GAME] MudinhoX - Google Chrome';                                  e=$true },
+    @{t='[GAME] MudinhoX e mais 2 paginas - Perfil 1 - Microsoft Edge';     e=$true },
+    @{t='[GAME] MudinhoX and 3 more pages - Work - Microsoft Edge';         e=$true },
+    @{t='[GAME]  MudinhoX - Brave';                                         e=$true },
+    @{t='(2) [GAME] MudinhoX - Google Chrome';                              e=$true },
+    @{t='MudinhoX - Servidor de MU Online - Google Chrome';                 e=$false},
+    @{t='(3) Instagram - Google Chrome';                                    e=$false})){
+  Chk "titulo: '$($caso.t)'" ([bool]($caso.t -match $reTitulo)) "$($caso.e)"
+}
+
 # --- 5. slot 0 nao pode regredir --------------------------------------------------------------------
 # Tudo que e novo esta atras de `if($Slot -gt 0)`. Um cliente so tem que rodar exatamente como antes.
 Chk "Slot tem default 0"    ($src -match '\[int\]\$Slot = 0') 'True'

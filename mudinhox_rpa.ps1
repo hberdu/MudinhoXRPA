@@ -10,13 +10,12 @@
          powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestImage x.png    (testa solver num print salvo)
          powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestInv          (com o inventario ABERTO: salva print e mostra as celulas ocupadas)
          powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestMix          (com o modal de mix ABERTO: mostra o que o OCR le e a cor de cada opcao)
-         powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestGold         (com um Golden Tantalos na tela: marca o que o detector achou)
          powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestVisao        (regressao das funcoes de leitura contra os prints de fixtures\)
          powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -Preflight        (NO SPOT, em PowerShell ADMIN: valida level/mapa/status/inventario de uma vez)
   Requisito: o jogo precisa estar visivel na hora da leitura. Se outra janela estiver na frente, o bot traz o jogo
   por ~1s, le, e devolve o foco pra janela que voce estava usando (nesse caso le a cada 60s em vez de 10s).
 #>
-param([switch]$Check, [string]$TestImage, [string]$TestStatus = "", [switch]$TestInv, [switch]$TestMix, [switch]$TestNpc, [switch]$TestGold, [switch]$TestVisao, [switch]$Preflight, [switch]$TestStatMin,
+param([switch]$Check, [string]$TestImage, [string]$TestStatus = "", [switch]$TestInv, [switch]$TestMix, [switch]$TestNpc, [switch]$TestVisao, [switch]$Preflight, [switch]$TestStatMin,
       # MULTIBOX: -Slot 1..N liga o modo N-clientes. 0 (padrao) = um cliente so, tudo exatamente como antes.
       # Um PROCESSO por cliente, nao um processo controlando N janelas: todo o estado do bot (fase, warmupCount,
       # resets, lvlPrev, stCarry, mixLast...) vive em variaveis $script:, e transformar isso em estado-por-janela
@@ -155,7 +154,7 @@ $HumanMinSec   = 120; $HumanMaxSec = 420   # a cada X seg (aleatorio) faz algo "
 # processos escreveriam o mesmo log e, pior, o mesmo estado.txt - um sobrescrevendo a fase/warmup do outro.
 # Slot 0 (padrao) fica com os nomes de sempre, entao um cliente so nao muda nada.
 $Sfx           = if($Slot -gt 0){ "$Slot" } else { '' }
-$LogFile       = Join-Path $PSScriptRoot $(if($Check -or $TestImage -or $TestStatus -or $TestInv -or $TestMix -or $TestNpc -or $TestGold -or $TestVisao -or $TestStatMin){ 'testes.log' } else { "rpa$Sfx.log" })
+$LogFile       = Join-Path $PSScriptRoot $(if($Check -or $TestImage -or $TestStatus -or $TestInv -or $TestMix -or $TestNpc -or $TestVisao -or $TestStatMin){ 'testes.log' } else { "rpa$Sfx.log" })
 $StopFile      = Join-Path $PSScriptRoot "stop$Sfx.flag"
 $StopAllFile   = Join-Path $PSScriptRoot 'stop.flag'   # stop.flag sem numero para TODOS os slots de uma vez
 $HeartbeatFile = Join-Path $PSScriptRoot "heartbeat$Sfx.txt"   # o bot bate aqui a cada volta; serve pra nao subir dois bots no mesmo cliente
@@ -210,7 +209,6 @@ if($Slot -gt 0){
 # "Voce adicionou N pontos", "Bem-vindo(a) a Lorencia", "Resta ainda N Golden Tantalo vivo(s)".
 $MsgBox        = @{ X = 760; W = 400; Y1FromBottom = 250; Y2FromBottom = 135 }
 $MsgCheckSec   = 20      # le as mensagens a cada N seg (recorte pequeno, usa a captura que ja existe)
-$MsgGoldWords  = '(?i)(golden tantalo|drago.?es dourados|invas.o de drag)'   # evento -> vai cacar sozinho
 $MsgInvWords   = '(?i)(invent.rio.{0,12}cheio|espa.o insuficiente|inventory full)'   # inventario cheio -> vai mixar
 $ClientEsperado = @{ W = 1920; H = 1009 }   # resolucao pra qual as coordenadas fixas foram calibradas; muda isso se recalibrar noutra
 $SemProgressoMin = 12    # sem ganhar UM ponto por N min = travou em algo que a gente ainda nao previu -> avisa e reinicia o ciclo
@@ -273,23 +271,6 @@ $InvMenuBtn    = @{ X = 1888; Y = 23 }   # botao de 3 barras (menu) no canto sup
 $InvMenuClickDy = -45    # no menu, o item e um ICONE com o rotulo EMBAIXO: o OCR acha o texto, mas o clicavel esta ACIMA dele
 $InvMenuWords  = '(?i)^invent'   # item do menu que abre o inventario
 $InvMaxFalhas  = 3       # apos N falhas seguidas de abrir o inventario, desiste (nao fica apertando tecla desconhecida no personagem)
-# Evento dos Dragoes Dourados: botao -> /lorencia -> procura os Golden Dragon (mobs DOURADOS) pela tela, anda ate eles e mata.
-# O chat anuncia dois bichos diferentes: "Golden Dragon vivo(s) em Lorencia" e "Golden Tantalo vivo(s) em Tarkan". O alvo aqui e o DRAGAO, em Lorencia.
-$GoldCmd       = '/lorencia'
-$GoldMap       = 'lore'   # nome esperado do mapa (4 letras). Lorencia e CIDADE: ver $GoldHelper abaixo
-$GoldArea      = @{ X1 = 70; Y1 = 100; X2FromRight = 70; Y2FromBottom = 150 }   # area util da tela (fora do HUD, minimapa e chat)
-# Calibrado pelo print do Golden Derkon em Lorencia (01/09). O bicho e laranja-ouro MUITO saturado: R alto, G medio, B quase zero.
-# O filtro antigo (GMin=140, RmG=75) rejeitava justo as partes mais saturadas do dragao e aceitava areia clara - dai casar com o chao de Tarkan.
-# BMax baixo e o que separa dourado de areia/pedra/grama: areia de Tarkan e pedra cinza tem azul alto, o dragao nao.
-$GoldPix       = @{ RMin = 200; GMin = 90; BMax = 90; RmB = 110; RmG = 145 }   # RMin 200: o dragao e ouro BRILHANTE. Com 180 passava ouro fosco - inclusive DarkGoldenrod(184,134,11), a cor de um botao da propria UI
-$GoldCell      = 26       # agrega os pixels dourados em blocos de N px (o mob e um borrao, nao um pixel)
-$GoldBlobMin   = 250     # de 676 px do bloco (26x26), quantos precisam ser dourados. 30 era 4% do bloco - permissivo demais. O dragao e enorme e enche o bloco; brilho solto do personagem nao
-$GoldSelfR     = 300     # raio ignorado em volta do centro. As ASAS FLAMEJANTES do personagem (255,131,15) e o icone VIP dourado sao tao laranja quanto o dragao - cor nao separa, so distancia. O dragao tem ~700px, entao sobra blob de sobra fora do raio
-$GoldHelper    = $false  # ligar o MU Helper na caca? Em CIDADE (Lorencia) nao da: clicar no play abre "precisa estar fora da cidade". Sem helper, o clique no mob e o ataque
-$GoldStepSec   = 2.0      # espera depois de mandar o personagem pro bloco dourado
-$GoldRepetMax  = 4       # mesma coordenada N vezes na caca = cenario, nao mob: para e avisa (no log de 31/08 foram 21 de 26 deteccoes no mesmo x)
-$GoldMaxSeguidas = 10    # alvo achado em N varreduras SEGUIDAS = cenario dourado, nao mob. Mob e raro e some entre varreduras
-$GoldRoamSec   = 4.0      # sem nada dourado na tela: anda pra um lado e procura de novo
 # ---------------------------------------------------------------------------------------
 
 Add-Type -AssemblyName System.Drawing
@@ -350,28 +331,6 @@ public class Img {
   }
   // varre a area util somando pixels "dourados" em blocos de 'cell' px; devolve {x,y,contagem} do bloco mais dourado
   // (x=y=0 quando nenhum bloco passou de minCount). Ignora um raio 'selfR' em volta de (cx,cy): e o proprio personagem.
-  public static int[] BestGold(Bitmap b, int x1, int y1, int x2, int y2, int cell,
-                               int rMin, int gMin, int bMax, int rmB, int rmG,
-                               int cx, int cy, int selfR, int minCount){
-    var bd = b.LockBits(new Rectangle(0,0,b.Width,b.Height), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
-    int stride = bd.Stride;
-    byte[] d = new byte[stride*b.Height]; Marshal.Copy(bd.Scan0, d, 0, d.Length); b.UnlockBits(bd);
-    int cols = (x2-x1)/cell + 1, rows = (y2-y1)/cell + 1;
-    int[] acc = new int[cols*rows];
-    int r2 = selfR*selfR;
-    for (int y = y1; y < y2; y++) for (int x = x1; x < x2; x++) {
-      int i = y*stride + x*3;
-      int bb = d[i], gg = d[i+1], rr = d[i+2];
-      if (rr < rMin || gg < gMin || bb > bMax) continue;   // dourado = R e G altos, B baixo
-      if (rr-bb < rmB || rr-gg > rmG) continue;            // R-B grande (chao marrom nao passa) e R-G pequeno (fogo/laranja nao passa)
-      int dx = x-cx, dy = y-cy; if (dx*dx + dy*dy < r2) continue;
-      acc[((y-y1)/cell)*cols + (x-x1)/cell]++;
-    }
-    int best = -1, bi = 0;
-    for (int i = 0; i < acc.Length; i++) if (acc[i] > best) { best = acc[i]; bi = i; }
-    if (best < minCount) return new int[]{0,0,best};
-    return new int[]{ x1 + (bi%cols)*cell + cell/2, y1 + (bi/cols)*cell + cell/2, best };
-  }
   public static void Invert(Bitmap a){
     var r = a.LockBits(new Rectangle(0,0,a.Width,a.Height), ImageLockMode.ReadWrite, PixelFormat.Format24bppRgb);
     byte[] d = new byte[r.Stride*a.Height]; Marshal.Copy(r.Scan0, d, 0, d.Length);
@@ -498,71 +457,37 @@ function Canto-Da-Tela-Do-Jogo([int]$alturaJanela){
 }
 function Show-Ui {
   $f = New-Object System.Windows.Forms.Form
-  # Janelinha COMPACTA (302x239, era 400x380 - 53% menos area). Nao e so estetica: o Capture-Raw pinta a area
-  # dela de PRETO em toda captura pra ela nao sujar o OCR, entao janela menor = menos tela do jogo cega, e o
+  # Janelinha COMPACTA (302x212; era 400x380 com oito botoes). Nao e so estetica: o Capture-Raw pinta a area dela
+  # de PRETO em toda captura pra ela nao sujar o OCR, entao janela menor = menos tela do jogo cega, e o
   # Fugir-Da-Area precisa move-la com menos frequencia.
-  # Grade de 3 colunas de 92px (6 + 92+4 + 92+4 + 92 + 6 = 296 de area cliente), botoes de 22-24px, fonte 7.5.
   # Com quatro janelinhas iguais na tela nao daria pra saber qual e qual: o titulo carrega slot e spot.
   $f.Text = $(if($Slot -gt 0){ "MudinhoX RPA - slot $Slot ($WarpCmd)" } else { 'MudinhoX RPA' })
-  $f.Width = 302; $f.Height = 239; $f.TopMost = $true; $f.FormBorderStyle = 'FixedToolWindow'
+  $f.Width = 302; $f.Height = 212; $f.TopMost = $true; $f.FormBorderStyle = 'FixedToolWindow'
   # AutoScaleMode 'None' ANTES da fonte: o padrao e 'Font', que reescala os controles filhos a partir da fonte do
-  # formulario. Como TODA a grade abaixo esta em pixel fixo (e o resto do bot tambem trabalha em pixel: $PlayBtn,
-  # $LevelBox, $MixNpcPos...), escala automatica so teria como estragar. 'None' deixa o layout deterministico.
+  # formulario. Como a grade abaixo esta em pixel fixo, escala automatica so teria como estragar.
+  # (Isto e a JANELA DO BOT, nao a leitura do jogo - as coordenadas de leitura estao saindo uma a uma.)
   $f.AutoScaleMode = 'None'
   $f.Font = New-Object System.Drawing.Font('Segoe UI', 7.5)
   $f.StartPosition = 'Manual'; $f.Location = Canto-Da-Tela-Do-Jogo $f.Height
   # O rotulo de status saiu: ele mostrava a ULTIMA linha de log, que a caixa de log logo abaixo ja mostra
   # inteira - duas coisas dizendo o mesmo, e a versao dele truncava no meio da frase.
-  $script:btnPause = New-Object System.Windows.Forms.Button; $script:btnPause.SetBounds(6,4,92,24);   $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'
-  $btn = New-Object System.Windows.Forms.Button;             $btn.SetBounds(102,4,92,24);             $btn.Text = 'PARAR'; $btn.BackColor = 'IndianRed'
-  $script:btnMR     = New-Object System.Windows.Forms.Button; $script:btnMR.SetBounds(198,4,92,24);    $script:btnMR.Text = 'TUDO + MR'; $script:btnMR.BackColor = 'MediumPurple'
-  $script:btnWarmup = New-Object System.Windows.Forms.Button; $script:btnWarmup.SetBounds(6,32,92,22);   $script:btnWarmup.Text = "Warmup ($WarmupResets)"; $script:btnWarmup.BackColor = 'SteelBlue'
-  $script:btnNormal = New-Object System.Windows.Forms.Button; $script:btnNormal.SetBounds(102,32,92,22); $script:btnNormal.Text = "Normal $WarpCmd"; $script:btnNormal.BackColor = 'MediumSeaGreen'
-  $script:btnMixJa  = New-Object System.Windows.Forms.Button; $script:btnMixJa.SetBounds(198,32,92,22);  $script:btnMixJa.Text = 'MIXAR JA'; $script:btnMixJa.BackColor = 'SteelBlue'
-  # Os dois de MODO ficam mais largos: sao os unicos que mudam de texto e de cor sozinhos (ver Sync-BotoesModo)
-  $script:btnMix  = New-Object System.Windows.Forms.Button; $script:btnMix.SetBounds(6,58,140,22);    $script:btnMix.BackColor = 'DarkCyan'
-  $script:btnGold = New-Object System.Windows.Forms.Button; $script:btnGold.SetBounds(150,58,140,22); $script:btnGold.BackColor = 'Teal'   # NAO usar tom dourado: o -TestGold roda em processo separado (nao mascara a UI) e detectava o proprio botao como dragao
+  # SO PAUSAR e PARAR. Os outros seis (TUDO+MR, Warmup, Normal, MIXAR JA, MODO JOIAS, MODO DRAGOES) sairam a
+  # pedido do usuario em 12/09. Nada do que eles faziam era necessario pro ciclo: o mix ja dispara sozinho pelo
+  # $MixEveryMin, a fase warmup/normal e decidida pelo proprio bot, e o modo dragoes foi removido inteiro.
+  # PARAR fica: sem ele so restaria fechar o console, que MATA o processo sem a parada limpa - e foi exatamente
+  # assim que o estado do char ficou inconsistente duas vezes (08/09 e 09/09).
+  $script:btnPause = New-Object System.Windows.Forms.Button; $script:btnPause.SetBounds(6,4,142,24);   $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'
+  $btn = New-Object System.Windows.Forms.Button;             $btn.SetBounds(152,4,142,24);            $btn.Text = 'PARAR';  $btn.BackColor = 'IndianRed'
   # Barra = caminho ate o proximo /darmr (os 4 atributos do zero ao cap), NAO "quantos resets faltam": reset e so
   # o meio de juntar pontos, e quantos cabem num MR muda com o alvo, com o spot e com a fase. Pontos e o que conta.
   $script:barra = New-Object System.Windows.Forms.ProgressBar
-  $script:barra.SetBounds(6,84,284,12); $script:barra.Minimum = 0; $script:barra.Maximum = 1000   # milesimos: com 100 passos pra 131068 pontos a barra parecia travada
-  $script:contador = New-Object System.Windows.Forms.Label; $script:contador.SetBounds(6,99,284,14); $script:contador.Text = 'sessao: 0 resets | 0 MR'
-  $script:logBox = New-Object System.Windows.Forms.TextBox; $script:logBox.SetBounds(6,116,284,86); $script:logBox.Multiline = $true; $script:logBox.ReadOnly = $true; $script:logBox.ScrollBars = 'Vertical'
-  $script:btnPause.Add_Click({ $script:paused = -not $script:paused; $script:btnPause.Text = $(if($script:paused){ 'RETOMAR' } else { 'PAUSAR' }); $script:btnPause.BackColor = $(if($script:paused){ 'ForestGreen' } else { 'Goldenrod' }); Log $(if($script:paused){ 'PAUSADO pelo usuario (mixe as joias; clique RETOMAR pra voltar)' } else { 'retomado pelo usuario' }) })
+  $script:barra.SetBounds(6,34,284,12); $script:barra.Minimum = 0; $script:barra.Maximum = 1000   # milesimos: com 100 passos pra 131068 pontos a barra parecia travada
+  $script:contador = New-Object System.Windows.Forms.Label; $script:contador.SetBounds(6,49,284,14); $script:contador.Text = 'sessao: 0 resets | 0 MR'
+  $script:logBox = New-Object System.Windows.Forms.TextBox; $script:logBox.SetBounds(6,66,284,110); $script:logBox.Multiline = $true; $script:logBox.ReadOnly = $true; $script:logBox.ScrollBars = 'Vertical'
+  $script:btnPause.Add_Click({ $script:paused = -not $script:paused; $script:btnPause.Text = $(if($script:paused){ 'RETOMAR' } else { 'PAUSAR' }); $script:btnPause.BackColor = $(if($script:paused){ 'ForestGreen' } else { 'Goldenrod' }); Log $(if($script:paused){ 'PAUSADO pelo usuario (clique RETOMAR pra voltar)' } else { 'retomado pelo usuario' }) })
   $btn.Add_Click({ $script:stopReason = 'usuario'; $script:stop = $true })
-  $script:btnWarmup.Add_Click({ $script:phase = 'warmup'; $script:warmupCount = 0; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Save-Estado; Log "[BOTAO] modo WARMUP: /losttower7 ate $WarmupResets resets" })
-  # "Normal" durante o descanso da cota fura a cota DE PROPOSITO, mas so por um MR: com o $mrsDia ja no limite,
-  # o proximo master reset re-arma o descanso sozinho. Override explicito seu, que se desfaz sozinho.
-  $script:btnNormal.Add_Click({ $script:modo = 'reset'; $script:cotaJoias = $false; Sync-BotoesModo; $script:phase = 'normal'; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Save-Estado; Log "[BOTAO] modo NORMAL: $WarpCmd ate os atributos encherem" })
-  $script:btnMR.Add_Click({ $script:forceMR = $true; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Log "[BOTAO] ATRIBUIR TUDO + MR" })
-  # Os botoes de MODO LIGAM o modo, nao alternam. Alternar custou caro em 04/09: dois cliques (o bot estava
-  # ocupado num /resetar e o primeiro clique nao pareceu fazer nada, porque a UI so anda no DoEvents do Log)
-  # ligaram e desligaram o modo joias em 6 segundos - 03:14:54 "MODO JOIAS", 03:15:00 "modo JOIAS desligado" -
-  # e o bot emendou um /darmr (MASTER RESET #13) em vez de ir mixar. Quem sai do modo e o botao "Normal $WarpCmd".
-  $script:btnMix.Add_Click({
-    $script:modo = 'joias'; $script:cotaJoias = $false   # ligado por VOCE, nao pela cota: virar o dia nao pode te tirar dele
-    $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'
-    Sync-BotoesModo
-    Save-Estado
-    Log "[BOTAO] MODO JOIAS: farma em $WarpCmd ate encher, mixa no $MixCmd, repete. Sem reset e sem /darmr. (pra sair: Normal $WarpCmd)"
-  })
-  $script:btnGold.Add_Click({
-    $script:modo = 'dragoes'; $script:cotaJoias = $false   # botao seu manda mais que a cota; ela re-arma no proximo master reset
-    $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'
-    Sync-BotoesModo
-    Save-Estado
-    Log "[BOTAO] MODO DRAGOES: so caca em $GoldCmd, sem reset/darmr/inventario. (pra sair: Normal $WarpCmd)"
-  })
-  # Quando o botao de mix virou alternador de MODO, ficou sem jeito de mandar mixar AGORA. Este devolve isso:
-  # com o inventario cheio na sua frente, nao faz sentido esperar o teto de tempo.
-  $script:btnMixJa.Add_Click({
-    $script:mixNow = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'
-    if($script:modo -ne 'joias'){ $script:restartCycle = $true }   # fora do modo joias, corta o ciclo atual pra ir mixar
-    Log "[BOTAO] MIXAR AGORA: indo pro $MixCmd no proximo tick"
-  })
   $f.Add_FormClosing({ $script:stopReason = 'janela fechada'; $script:stop = $true })
-  $f.Controls.AddRange(@($script:btnPause,$btn,$script:btnWarmup,$script:btnNormal,$script:btnMR,$script:btnMix,$script:btnGold,$script:btnMixJa,$script:barra,$script:contador,$script:logBox)); $f.Show(); $script:ui = $f
-  Sync-BotoesModo   # texto/cor iniciais dos dois botoes de modo saem daqui tambem - nao ha copia deles no SetBounds
+  $f.Controls.AddRange(@($script:btnPause,$btn,$script:barra,$script:contador,$script:logBox)); $f.Show(); $script:ui = $f
 }
 
 # ---------- janela do jogo / foco ----------
@@ -932,13 +857,11 @@ $script:farmMap = ''; $script:phase = 'normal'; $script:warmupCount = 0; $script
 # VOCE escolheu. Os tres vao pro estado.txt: reiniciar o bot nao pode ser jeito de furar a cota.
 $script:mrsDia = 0; $script:mrsDiaData = ''; $script:cotaJoias = $false
 function Hoje { (Get-Date).ToString('yyyy-MM-dd') }
-function Sync-BotoesModo {   # deixa os botoes coerentes com o $script:modo - tambem quando quem trocou de modo foi o BOT, nao voce
-  if(-not $script:ui -or $script:ui.IsDisposed){ return }
-  $script:btnMix.Text       = if($script:modo -eq 'joias'){ 'JOIAS: LIGADO' } else { 'modo JOIAS' }
-  $script:btnMix.BackColor  = if($script:modo -eq 'joias'){ 'ForestGreen' } else { 'DarkCyan' }
-  $script:btnGold.Text      = if($script:modo -eq 'dragoes'){ 'DRAGOES: LIGADO' } else { 'modo DRAGOES' }
-  $script:btnGold.BackColor = if($script:modo -eq 'dragoes'){ 'ForestGreen' } else { 'Teal' }
-}
+# Sync-BotoesModo REMOVIDO em 12/09 junto com os botoes de modo. Ela existia pra manter texto e cor dos botoes
+# coerentes com o $script:modo (de seis lugares que faziam isso na mao). Sem botoes, o modo nao tem o que
+# refletir - mas o MODO em si continua, porque o descanso da cota diaria usa 'joias'.
+# Virou um log: quando o BOT troca de modo sozinho, isso tem que aparecer em algum lugar.
+function Sync-BotoesModo { Log "modo agora: $($script:modo)" }
 function Cota-Rolar {   # virou o dia? zera a cota de master resets e, se foi ELA que ligou o modo joias, volta a resetar
   if($script:mrsDiaData -eq (Hoje)){ return }
   $ontem = $script:mrsDiaData; $script:mrsDiaData = Hoje
@@ -1007,7 +930,9 @@ function Load-Estado {
     } else {
       $kv = @{}; foreach($l in ($txt -split "`r?`n")){ if($l -match '^(\w+)=(.*)$'){ $kv[$Matches[1]] = $Matches[2] } }
       if($kv.fase -in 'normal','warmup'){ $script:phase = $kv.fase }
-      if($kv.modo -in 'reset','joias','dragoes'){ $script:modo = $kv.modo }
+      # 'dragoes' saiu da lista em 12/09 junto com o modo. Um estado.txt antigo com modo=dragoes cai fora daqui
+      # e o bot comeca em 'reset' - que e o certo, porque o Ciclo-Dragoes nao existe mais pra atender.
+      if($kv.modo -in 'reset','joias'){ $script:modo = $kv.modo }
       if($kv.warmup){ $script:warmupCount = [int]$kv.warmup }
       # O teste do spot normal atravessa restart: sem isto, uma queda no meio do teste voltaria o bot pro warmup
       # (ou o deixaria testando pra sempre, com o relogio zerado a cada start).
@@ -1237,7 +1162,7 @@ if($Check){
 
 # ---------- admin ----------
 # O jogo roda como administrador: o Windows descarta teclado/mouse sintetico vindo de processo comum (UIPI). Entao roda elevado.
-if(-not (Is-Admin) -and -not ($TestInv -or $TestMix -or $TestNpc -or $TestGold -or $TestVisao -or $Preflight -or $TestStatus -ne "")){   # -TestInv/-TestMix so LEEM a tela: nao precisam de admin (e elevar abriria janela oculta, sem saida no terminal)
+if(-not (Is-Admin) -and -not ($TestInv -or $TestMix -or $TestNpc -or $TestVisao -or $Preflight -or $TestStatus -ne "")){   # -TestInv/-TestMix so LEEM a tela: nao precisam de admin (e elevar abriria janela oculta, sem saida no terminal)
   try { Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`"" }
   catch {
     # NUNCA usar MessageBox aqui: o processo roda com -WindowStyle Hidden, o dialogo fica invisivel e o processo
@@ -1996,82 +1921,6 @@ function Mix-Jewels {   # /mixer -> NPC -> "Mixar Joias" -> mixa TODAS as opcoes
     $mixados -gt 0
   } finally { Restore-Focus $prev }
 }
-# ---------- evento dos dragoes dourados ----------
-function Find-Gold($img){   # centro do bloco mais dourado da tela (Golden Tantalos), ou $null
-  $x2 = $img.Width - $GoldArea.X2FromRight; $y2 = $img.Height - $GoldArea.Y2FromBottom
-  $r = [Img]::BestGold($img, $GoldArea.X1, $GoldArea.Y1, $x2, $y2, $GoldCell,
-        $GoldPix.RMin, $GoldPix.GMin, $GoldPix.BMax, $GoldPix.RmB, $GoldPix.RmG,
-        [int]($img.Width/2), [int]($img.Height/2), $GoldSelfR, $GoldBlobMin)
-  if($r[0] -eq 0 -and $r[1] -eq 0){ return $null }
-  @{ X = $r[0]; Y = $r[1]; N = $r[2] }
-}
-function Ciclo-Dragoes {   # MODO DRAGOES: so caca. Nao checa inventario, nao checa atributos, nao reseta, nao da /darmr.
-  $script:restartCycle = $false
-  Hold-Focus
-  try {
-    Log "dragoes: indo pro $GoldCmd"
-    if(-not (Send-Chat $GoldCmd)){ Wait 10; return }
-    Wait $WarpWaitSec
-    for($t = 1; $t -lt $WarpTries -and -not (Same-Map (Read-Map $null) $GoldMap); $t++){
-      Log "dragoes: nao cheguei em '$GoldMap', reenviando ($t/$WarpTries)"; $null = Send-Chat $GoldCmd; Wait $WarpWaitSec
-    }
-    if(-not (Same-Map (Read-Map $null) $GoldMap)){
-      Notify "MudinhoX" "Nao consegui chegar em '$GoldMap' com $GoldCmd. Saindo do modo dragoes."
-      $script:modo = 'reset'; Save-Estado; return
-    }
-    # Lorencia e CIDADE: clicar no play la abre o popup "precisa estar fora da cidade" (gotcha ja documentado).
-    # Sem helper, quem ataca e o proprio clique no mob - o loop abaixo reclica a cada varredura.
-    if($GoldHelper){ Start-Helper } else { Log "dragoes: mapa e cidade, nao ligo o helper (clico no mob direto)"; Close-Popup }
-  } finally { Release-Focus }
-
-  $achados = 0; $vazios = 0; $vistos = @{}; $seguidas = 0
-  while($script:modo -eq 'dragoes' -and -not $script:stop -and -not $script:restartCycle){
-    Bater-Heartbeat
-    $script:ptsLastGain = Get-Date   # cacar nao distribui pontos: sem isto o watchdog de progresso dispararia sozinho
-    Pause-Gate
-    Hold-Focus
-    try {
-    $img = Capture-Game
-    if(-not $img){ Wait 2; continue }
-    if(Handle-Captcha $img){ $img.Dispose(); continue }
-    $alvo = Find-Gold $img; $img.Dispose()
-    if($alvo){
-      $vazios = 0; $achados++
-      # Mob se move e morre. Mesma coordenada varias vezes = CENARIO, nao mob. No log de 31/08 foram 21 de 26
-      # deteccoes na coluna x=655, e a caca passou o tempo batendo em nada. Vale mesmo com o filtro de cor errado.
-      # Segunda guarda, pra falso positivo ESPALHADO: em Tarkan o CHAO e dourado e o detector achou "mob" em 20
-      # varreduras seguidas, cada uma num lugar diferente. Um Golden Tantalos e raro ("restam 9 no mapa inteiro"):
-      # achar um em toda varredura, sem intervalo, e impossivel. A guarda de coordenada repetida nao pega isso.
-      $seguidas++
-      if($seguidas -ge $GoldMaxSeguidas){
-        Log "dragoes: achei alvo em $seguidas varreduras SEGUIDAS, cada uma num lugar - isso e o cenario dourado, nao mob. Parando."
-        Notify "MudinhoX" "A caca esta casando com o cenario, nao com o mob. Calibre a cor com -TestGold. Parei."
-        $null = Save-Shot 'gold_falso_positivo.png'
-        $script:modo = 'reset'; Save-Estado; break   # detector provado errado: sair do modo, senao volta a cacar cenario no proximo ciclo
-      }
-      $chave = "$($alvo.X),$($alvo.Y)"
-      $vistos[$chave] = [int]$vistos[$chave] + 1
-      if($vistos[$chave] -ge $GoldRepetMax){
-        Log "dragoes: achei '$chave' $($vistos[$chave]) vezes - isso e cenario, nao mob. Parando (calibre `$GoldPix com -TestGold)."
-        Notify "MudinhoX" "A caca esta batendo sempre no mesmo ponto ($chave): o filtro de cor precisa de calibracao. Parei."
-        $null = Save-Shot 'gold_falso_positivo.png'
-        $script:modo = 'reset'; Save-Estado; break
-      }
-      Log "dragoes: dourado em $chave [$($alvo.N) px dourados], indo bater"
-      $null = Click-Client $alvo.X $alvo.Y   # 1o clique leva o personagem ate o mob
-      Wait $GoldStepSec
-      if($GoldHelper){ Start-Helper } else { $null = Click-Client $alvo.X $alvo.Y; Wait $GoldStepSec }   # sem helper, o 2o clique e o ataque
-    } else {
-      $vazios++; $seguidas = 0   # varredura limpa quebra a sequencia: mob de verdade some da tela entre um e outro
-      if($vazios % 10 -eq 0){ Log "dragoes: nada dourado na tela ha $vazios varreduras, continuo procurando" }
-      Walk-Forward   # mapa grande e spawn variavel: anda pra um lado e procura de novo
-      Wait $GoldRoamSec
-    }
-    } finally { Release-Focus }
-  }
-  Log "dragoes: saindo do modo ($achados alvos nesta rodada)"
-  $script:ptsLastGain = Get-Date
-}
 $script:mixNow = $false; $script:semPlay = 0; $script:invFalhas = 0; $script:invDesligado = $false
 $script:mixLast = Get-Date   # quando o bot foi mixar pela ultima vez (gatilho por tempo do ciclo normal)
 function Tick-Inventory {   # aviso do jogo, teto de tempo (ou botao MIXAR AGORA) -> vai mixar e reinicia o ciclo (volta pro spot)
@@ -2160,18 +2009,12 @@ function Log-GameMsg($img,[string]$quando){   # loga o que o servidor respondeu 
   $m
 }
 $script:msgDue = (Get-Date).AddSeconds(10)
-function Tick-Msgs($img){   # le as mensagens do jogo de vez em quando. A caca aos dragoes NAO dispara sozinha (so pelo botao) - pedido do usuario
+function Tick-Msgs($img){   # le as mensagens do jogo de vez em quando (aviso de inventario cheio)
   if((Get-Date) -lt $script:msgDue){ return }
   $script:msgDue = (Get-Date).AddSeconds((Jit $MsgCheckSec))
   $m = Read-Msgs $img
   if(-not $m){ return }
-  # O servidor repete o aviso do evento; no log foram 27 linhas iguais em ~1h. Loga uma vez por $RenotifySec.
-  if($m -match $MsgGoldWords){
-    if(-not $script:goldAviso -or ((Get-Date) - $script:goldAviso).TotalSeconds -ge $RenotifySec){
-      $script:goldAviso = Get-Date; Log "evento dos dragoes no chat (use o botao DRAGOES DOURADOS se quiser ir)"
-    }
-  }
-  elseif($m -match $MsgInvWords){ Log "jogo avisou inventario cheio -> vou mixar"; $script:mixNow = $true }
+  if($m -match $MsgInvWords){ Log "jogo avisou inventario cheio -> vou mixar"; $script:mixNow = $true }
 }
 $script:joiasMix = 0; $script:joiasCiclos = 0
 $script:tuneOn = $AutoTune; $script:tuneArm = 0; $script:tuneResets = 0; $script:tunePts = 0; $script:tuneAtivo0 = 0.0; $script:tuneRes = @()
@@ -2552,18 +2395,6 @@ if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guard
   Log $(if($script:falhas){ "TestVisao: $($script:falhas) FALHA(S)" } else { 'TestVisao: tudo OK' })
   exit $(if($script:falhas){ 1 } else { 0 })
 }
-if($TestGold){   # com um Golden Tantalos NA TELA: mostra onde o detector acha dourado e salva o print marcado
-  $img = Capture-Game; if(-not $img){ Log "jogo nao ficou na frente, nada lido"; exit }
-  New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null
-  $alvo = Find-Gold $img
-  if($alvo){
-    Log "dourado achado em ($($alvo.X),$($alvo.Y)) com $($alvo.N) pixels no bloco"
-    $g = [System.Drawing.Graphics]::FromImage($img)
-    $g.DrawRectangle((New-Object System.Drawing.Pen([System.Drawing.Color]::Lime,4)), $alvo.X-40, $alvo.Y-40, 80, 80); $g.Dispose()
-  } else { Log "nenhum bloco dourado passou de $GoldBlobMin pixels (maior bloco teve menos que isso). Se o mob esta na tela, baixe `$GoldBlobMin ou afrouxe `$GoldPix" }
-  $f = Join-Path $CaptchaShotDir 'gold.png'; $img.Save($f); Log "print salvo (com o quadrado verde no que ele achou): $f"
-  $img.Dispose(); exit
-}
 if($TestStatus -ne ''){   # -TestStatus [print.png]  (sem arquivo: captura a tela agora, com a janela C aberta no jogo)
   # Existe porque "status: nao li Vit" e "Pts=-1" sao os erros mais comuns do log e ate agora so davam pra
   # diagnosticar no olho, abrindo o print. Aqui da pra ver EXATAMENTE o que o OCR devolveu.
@@ -2633,14 +2464,7 @@ if($script:phase -eq 'warmup' -and $script:warmupCount -ge $WarmupResets){
   $script:phase = 'normal'; Save-Estado
   Log "warmup ja cumprido ($($script:warmupCount)/$WarmupResets pelo estado.txt) -> indo direto pro spot normal ($WarpCmd)"
 }
-if($script:ui){   # botoes tem que refletir o modo retomado do estado.txt
-  Sync-BotoesModo   # UM lugar decide texto e cor dos botoes de modo; antes eram seis, e cada layout novo tinha que caçar todos
-  if($script:modo -eq 'joias'){
-    Log "retomando em MODO JOIAS: farma em $WarpCmd ate encher, mixa no $MixCmd, repete"
-  } elseif($script:modo -eq 'dragoes'){
-    Log "retomando em MODO DRAGOES: so caca em $GoldCmd"
-  }
-}
+if($script:modo -eq 'joias'){ Log "retomando em MODO JOIAS: farma em $WarpCmd ate encher, mixa no $MixCmd, repete" }
 if(Test-Path $WarmupFile){ Remove-Item $WarmupFile -ErrorAction SilentlyContinue; $script:phase = 'warmup'; $script:warmupCount = 0; Save-Estado; Log "iniciando em modo warmup (pos-MR manual): $WarmupCmd ate $WarmupResets resets" }
 while(-not $script:stop){   # envelope: se o cliente cair, o catch espera ele voltar e o ciclo recomeca aqui (antes o script terminava)
 try {
@@ -2648,7 +2472,6 @@ while($true){
   Pause-Gate
   Cota-Rolar   # meia-noite: zera a cota do dia e tira o bot do descanso. Aqui em cima porque no descanso quem roda e o Ciclo-Joias, que da `continue`
   if($script:modo -eq 'joias'){ Ciclo-Joias; continue }       # farma ate encher, mixa, repete. Sem reset/darmr.
-  if($script:modo -eq 'dragoes'){ Ciclo-Dragoes; continue }   # so caca. Sem inventario, sem atributos, sem reset/darmr.
   if($script:mixNow){ Hold-Focus; try { Tick-Inventory } finally { Release-Focus } }   # botao MIXAR JOIAS: atende ANTES do warp (senao so era visto la dentro do loop de farm, e o bot parecia ignorar o botao)
 
   $script:restartCycle = $false   # comecando um ciclo novo (botoes de fase ja aplicaram phase/forceMR)
