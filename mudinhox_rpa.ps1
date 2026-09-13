@@ -46,6 +46,15 @@ $NoFocusRead   = $true   # JOGO NOUTRO MONITOR, sempre visivel. Liga o modo "nao
                          # Em troca voce garante que a janela do jogo fica visivel e destapada: sem foco pra conferir,
                          # uma janela por cima dela vira leitura de lixo. $false = comportamento antigo (jogo em 1 monitor so).
 $PollBgSec     = 60      # intervalo quando outra janela esta na frente (cada leitura rouba o foco por ~1s)
+# ---------- QUAL JANELA E O JOGO ----------
+$GameProc      = 'mudx'   # processo do cliente DESKTOP. Usado quando $GameTitle esta vazio.
+$GameTitle     = ''       # VERSAO WEB (game.mudinhox.com.br): regex do TITULO da janela, ex '(?i)mudinhox'.
+                          # Preenchido = procura por titulo em QUALQUER processo (o jogo vira uma aba do Chrome,
+                          # entao o processo e 'chrome' e o nome do processo nao identifica mais nada).
+                          # Vazio = comportamento de sempre, por nome de processo.
+                          # Rodando na VM, o bot tem que rodar DENTRO dela: do host a VM e uma janela opaca so -
+                          # daria pra capturar os pixels, mas nao pra mirar a janela do navegador la dentro,
+                          # nem pra fazer multibox, nem pra conferir foco.
 $WarpCmd       = '/k37'   # comando de teleporte pro spot de farm normal (troque aqui se mudar de spot). Era /s18 (Stadium)
                           # MULTIBOX: os quatro slots usam ESTE mesmo spot. Houve um $SlotSpots que dava um spot
                           # por slot (/k37, /k36, ...) pra eles nao dividirem mapa; saiu a pedido do usuario, que
@@ -565,14 +574,25 @@ function Limpar-Watchdog {
   if($LASTEXITCODE -eq 0){ Log "removi a Tarefa Agendada '$WatchdogTask' (watchdog antigo): nada mais relanca o bot sozinho" }
   else { Log "nao consegui remover a tarefa do watchdog antigo: $out" }
 }
-function Game-IsAdmin { -not (Get-Process mudx -ErrorAction SilentlyContinue | select -First 1).Path }   # processo elevado nao expoe o Path pra processo comum
+function Game-IsAdmin {   # processo elevado nao expoe o Path pra processo comum
+  # Na versao WEB o jogo e uma aba do navegador, que NAO roda elevado - some a exigencia de admin que ja custou
+  # duas noites aqui (teclas descartadas em silencio). Entao nesse modo a resposta e sempre "nao e elevado".
+  if($GameTitle){ return $false }
+  -not (Get-Process $GameProc -ErrorAction SilentlyContinue | select -First 1).Path
+}
 $script:gameH = [IntPtr]::Zero
 function Get-Game {   # handle da janela do jogo, EM CACHE: Get-Process enumera todos os processos do Windows e isto e chamado ~6x por comando
   if($script:gameH -ne [IntPtr]::Zero -and [W]::IsWindow($script:gameH)){ return $script:gameH }
   # MULTIBOX: cada slot manda numa janela. Ordena por Id porque a ordem do Get-Process nao e estavel entre
   # chamadas - sem ordenar, o slot 2 poderia trocar de cliente no meio da noite e misturar dois personagens.
-  $todas = @(Get-Process mudx -ErrorAction SilentlyContinue | ? { $_.MainWindowHandle -ne 0 } | sort Id)
-  if(-not $todas.Count){ throw "MudinhoX (mudx.exe) nao esta rodando" }
+  # VERSAO WEB: o jogo roda numa aba do navegador, entao o processo e 'chrome'/'msedge' e quem identifica e o
+  # TITULO da janela. Com $GameTitle preenchido a busca passa a ser por titulo, em qualquer processo.
+  $todas = if($GameTitle){
+      @(Get-Process -ErrorAction SilentlyContinue | ? { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -match $GameTitle } | sort Id)
+    } else {
+      @(Get-Process $GameProc -ErrorAction SilentlyContinue | ? { $_.MainWindowHandle -ne 0 } | sort Id)
+    }
+  if(-not $todas.Count){ throw $(if($GameTitle){ "nenhuma janela com titulo casando '$GameTitle' (o jogo web esta aberto?)" } else { "MudinhoX ($GameProc.exe) nao esta rodando" }) }
   $p = if($GamePid -gt 0){ $todas | ? { $_.Id -eq $GamePid } | select -First 1 }
        elseif($Slot -gt 0){ $todas | select -Skip ($Slot - 1) -First 1 }
        else{ $todas | select -First 1 }
@@ -1101,9 +1121,12 @@ function Handle-Captcha($img){   # $true se captcha esta na tela (tentou resolve
   if(-not $a){ $script:capTries = 0; $script:capNotified = $null; return $false }
   if($script:capTries -ge $CapMaxTries){   # errou N vezes: nao arrisca mais uma
     if($CapKillGame){   # regra antiga: fecha o jogo e para
-      Log "captcha: errei $CapMaxTries vezes -> fechando o jogo (mudx.exe) e parando"
-      Notify "MudinhoX: CAPTCHA" "Errei o captcha $CapMaxTries vezes. Fechei o jogo e parei o bot."
-      Get-Process mudx -ErrorAction SilentlyContinue | Stop-Process -Force; if($script:ui){ $script:ui.Dispose() }; exit
+      # $CapKillGame e $false por padrao; este caminho e a regra ANTIGA. Na versao web ele mataria o navegador
+      # inteiro (todas as suas abas), entao aqui ele so para o bot e deixa o jogo aberto.
+      Log "captcha: errei $CapMaxTries vezes -> $(if($GameTitle){ 'parando o bot (nao fecho o navegador)' } else { "fechando o jogo ($GameProc.exe) e parando" })"
+      Notify "MudinhoX: CAPTCHA" "Errei o captcha $CapMaxTries vezes. Parei o bot."
+      if(-not $GameTitle){ Get-Process $GameProc -ErrorAction SilentlyContinue | Stop-Process -Force }
+      if($script:ui){ $script:ui.Dispose() }; exit
     }
     # padrao agora: PAUSA e espera voce. Matar o cliente perdia a sessao inteira, e parte dos erros vinha dos cliques
     # indo pra outra janela (bug de foco corrigido em 2026-08-31), nao do solver.
@@ -2697,7 +2720,9 @@ while($true){
     while(-not $script:stop){
       Wait 10
       $script:gameH = [IntPtr]::Zero   # forca re-resolver o handle (o processo antigo morreu)
-      if(Get-Process mudx -ErrorAction SilentlyContinue | ? { $_.MainWindowHandle -ne 0 }){
+      # "o jogo voltou?" = existe de novo uma janela que o Get-Game aceitaria. Nao pode ser `Get-Process mudx`
+      # cravado: na versao web quem responde isso e o titulo da janela, nao o nome do processo.
+      if($(try { (Get-Game) -ne [IntPtr]::Zero } catch { $false })){
         Log "jogo voltou: esperando a tela carregar e retomando"; Wait 15
         Hold-Focus; try { $null = Enter-Game 'jogo reaberto' } finally { Release-Focus }   # pode ter voltado na tela de login
         break
