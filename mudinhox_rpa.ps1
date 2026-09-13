@@ -16,7 +16,7 @@
   Requisito: o jogo precisa estar visivel na hora da leitura. Se outra janela estiver na frente, o bot traz o jogo
   por ~1s, le, e devolve o foco pra janela que voce estava usando (nesse caso le a cada 60s em vez de 10s).
 #>
-param([switch]$Check, [string]$TestImage, [switch]$TestInv, [switch]$TestMix, [switch]$TestNpc, [switch]$TestGold, [switch]$TestVisao, [switch]$Preflight, [switch]$TestStatMin)
+param([switch]$Check, [string]$TestImage, [string]$TestStatus = "", [switch]$TestInv, [switch]$TestMix, [switch]$TestNpc, [switch]$TestGold, [switch]$TestVisao, [switch]$Preflight, [switch]$TestStatMin)
 
 # ---------- CONFIG (coordenadas relativas a area cliente do jogo, 1920x1009) ----------
 $TargetLevel   = 350     # level pra resetar. Nunca abaixo de $LevelMinReset (o servidor recusa)
@@ -58,7 +58,8 @@ $KeyGapMs      = 40      # pausa entre uma tecla e a proxima
 $KeyClearMs    = 12      # backspaces pra limpar o chat (sao 30 seguidos, e so apagar: aguenta ser rapido)
 $ChatOpenMs    = 130     # espera a caixa de chat abrir antes de digitar
 $ChatSendMs    = 70      # espera em volta do Enter que envia
-$StatCol       = @{ X = 1155; Y = 108; W = 195; H = 380 }   # coluna da janela de status (rotulos+valores); OCR isolado dessa faixa le os 4 atributos + pontos
+$StatPanel     = @{ X = 0; Y = 0; W = 500; H = 760 }   # regiao do painel de status (C), que abre encostado na esquerda. Recortada e AMPLIADA antes do OCR
+$StatPanelScale = 2      # 2x: na resolucao nativa o OCR nao le o painel; em 3x tambem falha (imagem grande demais). Medido, nao chutado
 $StatMaxValue  = 32767   # atributo cheio (cap real do servidor). /darmr SO funciona com Forca, Agilidade, Vitalidade E Energia TODOS = 32767; abaixo disso o jogo recusa ("precisa 32767 em todos status")
 $StatStages    = @(1..([Math]::Floor(($StatMaxValue - 1) / $StatStep)) | % { $_ * $StatStep }) + $StatMaxValue   # 5000,10000,...,30000,32767
 $StatusKey     = 0x43    # C = janela de status
@@ -764,7 +765,7 @@ if($Check){
 
 # ---------- admin ----------
 # O jogo roda como administrador: o Windows descarta teclado/mouse sintetico vindo de processo comum (UIPI). Entao roda elevado.
-if(-not (Is-Admin) -and -not ($TestInv -or $TestMix -or $TestNpc -or $TestGold -or $TestVisao -or $Preflight)){   # -TestInv/-TestMix so LEEM a tela: nao precisam de admin (e elevar abriria janela oculta, sem saida no terminal)
+if(-not (Is-Admin) -and -not ($TestInv -or $TestMix -or $TestNpc -or $TestGold -or $TestVisao -or $Preflight -or $TestStatus -ne "")){   # -TestInv/-TestMix so LEEM a tela: nao precisam de admin (e elevar abriria janela oculta, sem saida no terminal)
   try { Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`"" }
   catch {
     # NUNCA usar MessageBox aqui: o processo roda com -WindowStyle Hidden, o dialogo fica invisivel e o processo
@@ -902,7 +903,22 @@ function Parse-Attrs($words){   # das words do OCR global: acha cada rotulo (For
 # Aqui existia um "recorte aprendido" pra evitar o OCR da tela inteira. REMOVIDO por medicao:
 # OCR global 88ms contra ~30ms no recorte, UMA vez a cada 15s = 0.4% de um core. Nao pagava a complexidade,
 # aprendia caixa errada (chegou a 1378x775, 72% da tela) e, quando envelhecia, custava um OCR A MAIS.
-function Ocr-Status($img){ @((Ocr-Bitmap $img).Lines | % { $_.Words }) }
+function Ocr-Status($img){
+  # O OCR do Windows NAO le o painel de status na resolucao nativa: a fonte e pequena e o fundo cinza-escuro.
+  # Medido no print de 13:49 - na tela inteira ele devolveu UMA palavra ('Satan'); recortando o painel e
+  # ampliando 2x devolveu tudo (For=19880 Agi=20000 Vit=15000 Ene=27000 Pontos=1192). Era essa a causa dos
+  # 100 "nao consegui ler o status" e dos "nao li Vit"/"Pts=-1" do log, nao a tecla C.
+  # Ampliar 3x volta a falhar (imagem grande demais), entao 2x nao e chute: e o unico que funciona.
+  $r = @()
+  if($img.Width -ge $StatPanel.W -and $img.Height -ge $StatPanel.H){
+    $c = Crop-Bitmap $img $StatPanel.X $StatPanel.Y $StatPanel.W $StatPanel.H $StatPanelScale
+    $r = @((Ocr-Bitmap $c).Lines | % { $_.Words }); $c.Dispose()
+  }
+  # Fallback pra tela inteira: se o painel abrir noutro lugar (as janelas deste cliente nao tem posicao fixa -
+  # o inventario ja abriu em (1317,408) e em (607,333)), pelo menos nao ficamos cegos.
+  if(-not (Status-Open $r)){ $r = @((Ocr-Bitmap $img).Lines | % { $_.Words }) }
+  $r
+}
 function Read-Status {   # abre a janela de status (C), le os 4 atributos + pontos, fecha. @{For;Agi;Vit;Ene;Pts} ou $null
   $prev = Focus-Game; if(-not $script:gameFg){ Restore-Focus $prev; return $null }
   Close-Chat; $out = $null; $fechou = $false
@@ -1739,6 +1755,31 @@ if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guard
     }
     $i.Dispose()
   }
+
+  # Regressao mais cara do dia: o OCR NAO le o painel de status na resolucao nativa (na tela inteira deste
+  # print ele devolveu UMA palavra). So recortando o painel e ampliando 2x ele le os 4 atributos + os pontos.
+  # Era a causa dos 100 "nao consegui ler o status" e dos "nao li Vit"/"Pts=-1" do log.
+  $i = Fx 'status_ABERTO.png'
+  if($i){
+    $w = Ocr-Status $i
+    Ok 'reconhece a janela de status aberta' (Status-Open $w) 'Status-Open disse fechada'
+    $v = Parse-Attrs $w
+    foreach($k in 'For','Agi','Vit','Ene'){ Ok "le $k no painel" ($v.ContainsKey($k) -and $v[$k] -gt 0) 'atributo nao foi lido' }
+    Ok 'le os pontos disponiveis' ((Get-Points $w) -ge 0) 'rotulo "Pontos" nao casou com o numero'
+    $i.Dispose()
+  }
+  # O caso que PROVA a mudanca: print de 12:48, quando o log disse "status: nao abriu em 6 tentativas".
+  # Lendo a tela inteira o OCR devolve zero palavra do painel (Status-Open = False, e o bot conclui que a
+  # janela nem abriu). Recortando o painel, le os 4 atributos. Sem "Pontos" no OCR porque o personagem
+  # estava com 0 - o jogo esconde a linha - entao aqui a checagem e so dos atributos.
+  $i = Fx 'status_ABERTO_dificil.png'
+  if($i){
+    $w = Ocr-Status $i
+    Ok 'painel que a tela inteira nao lia agora e lido' (Status-Open $w) 'Status-Open disse fechada'
+    $v = Parse-Attrs $w
+    Ok 'le os 4 atributos no print que falhava' (@('For','Agi','Vit','Ene' | ? { -not $v.ContainsKey($_) }).Count -eq 0) "faltou: $(@('For','Agi','Vit','Ene' | ? { -not $v.ContainsKey($_) }) -join ',')"
+    $i.Dispose()
+  }
   $i = Fx 'inventario_FECHADO.png'
   # regressao real: com o inventario FECHADO a grade cai no chao do mapa e leu "8 livres" - o bot acharia que esta cheio e mixaria pra sempre
   if($i){ Ok 'Inv-Open recusa inventario fechado' (-not (Inv-Open $i)) 'achou o Zen onde nao tem inventario'; $i.Dispose() }
@@ -1774,6 +1815,22 @@ if($TestGold){   # com um Golden Tantalos NA TELA: mostra onde o detector acha d
     $g.DrawRectangle((New-Object System.Drawing.Pen([System.Drawing.Color]::Lime,4)), $alvo.X-40, $alvo.Y-40, 80, 80); $g.Dispose()
   } else { Log "nenhum bloco dourado passou de $GoldBlobMin pixels (maior bloco teve menos que isso). Se o mob esta na tela, baixe `$GoldBlobMin ou afrouxe `$GoldPix" }
   $f = Join-Path $CaptchaShotDir 'gold.png'; $img.Save($f); Log "print salvo (com o quadrado verde no que ele achou): $f"
+  $img.Dispose(); exit
+}
+if($TestStatus -ne ''){   # -TestStatus [print.png]  (sem arquivo: captura a tela agora, com a janela C aberta no jogo)
+  # Existe porque "status: nao li Vit" e "Pts=-1" sao os erros mais comuns do log e ate agora so davam pra
+  # diagnosticar no olho, abrindo o print. Aqui da pra ver EXATAMENTE o que o OCR devolveu.
+  if($TestStatus -eq 'live'){ $img = Capture-Game; if(-not $img){ Log "jogo nao ficou na frente, nada lido"; exit } }
+  else { Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Bitmap]::FromFile((Resolve-Path $TestStatus)) }
+  $words = Ocr-Status $img
+  Log "TestStatus: janela aberta? $(Status-Open $words)"
+  foreach($w in ($words | sort { $_.BoundingRect.Y })){
+    if($w.BoundingRect.X -gt 500){ continue }   # o painel fica na esquerda; o resto e dano/chat e so polui
+    Log ("  {0,4},{1,4}  '{2}'" -f [int]$w.BoundingRect.X, [int]$w.BoundingRect.Y, $w.Text)
+  }
+  $v = Parse-Attrs $words
+  Log ("TestStatus: Parse-Attrs -> " + ((@('For','Agi','Vit','Ene') | % { "$_=$(if($v.ContainsKey($_)){$v[$_]}else{'FALTOU'})" }) -join ' '))
+  Log "TestStatus: Get-Points -> $(Get-Points $words)"
   $img.Dispose(); exit
 }
 if($TestMix){   # abra o modal de mix NO JOGO antes de rodar

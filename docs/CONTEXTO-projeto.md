@@ -340,3 +340,27 @@ Contagens sobre a sessao inteira do `rpa.log`:
   de rodar como admin — nao foi rodado (`schtasks /query` confirma: tarefa inexistente), e o preco foi 6h de
   silencio no log e quatro quedas sem ninguem pra levantar. Desliga com `$AutoWatchdog = $false` ou
   `schtasks /delete /tn "MudinhoX RPA Watchdog" /f`.
+
+## 2026-09-01 - a leitura de status falhava porque o OCR nao le a tela INTEIRA
+
+O erro mais comum do log (100 de 1064 leituras, 9,4%) tinha uma causa que nao era a tecla C.
+
+- `Ocr-Status` mandava a captura de **1920x1009 inteira** pro OCR do Windows. Nesse tamanho ele simplesmente
+  **nao devolve as palavras do painel de status** — fonte pequena, fundo cinza-escuro e a tela cheia de numeros
+  de dano competindo. Recortando so o painel (`$StatPanel`, 500x760 encostado na esquerda) ele le tudo.
+- **Provado, nao deduzido**, no `captcha/status_falhou.png` de 12:48 — o print que o proprio bot salvou quando
+  logou `status: nao abriu em 6 tentativas`:
+  - tela inteira: `Status-Open = False`, `Parse-Attrs -> For=FALTOU Agi=FALTOU Vit=FALTOU Ene=FALTOU`
+  - com recorte: `Status-Open = True`, `For=19880 Agi=15000 Vit=10552 Ene=27000`
+  O print virou `fixtures/status_ABERTO_dificil.png` e e regressao no `-TestVisao`; desligando o recorte, as
+  duas checagens falham.
+- Ou seja: **a janela ESTAVA aberta nas 6 tentativas.** O bot apertava C seis vezes achando que ela nao abria,
+  e saia deixando o painel aberto (o bug de paridade corrigido antes). Explica tambem os "nao li Vit" e os
+  "Pts=-1" com a linha de Pontos visivel na tela.
+- Ha fallback pra tela inteira se o recorte nao achar nada: as janelas deste cliente nao tem posicao fixa
+  (o inventario ja abriu em dois lugares), entao nao da pra apostar tudo no recorte.
+- `$StatPanelScale = 2`. Medi 1x, 2x e 3x: 3x **piora** (imagem grande demais pro OCR). Nao e chute.
+- `$StatCol` (1155,108) foi apagado: era a "coluna do painel" da calibracao original e ha muito tempo apontava
+  pro cenario — o painel abre na ESQUERDA. Nao tinha mais nenhum leitor no codigo.
+- **`-TestStatus [print.png]`** novo: mostra palavra por palavra o que o OCR leu no painel e o que virou
+  For/Agi/Vit/Ene/Pontos. Sem ele esse diagnostico era olhar o print e adivinhar.

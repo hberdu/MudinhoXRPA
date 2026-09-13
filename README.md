@@ -32,6 +32,7 @@ powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -Check              
 powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestImage .\captcha\exemplo.png  # testa o solver num print
 powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestInv                     # inventário ABERTO no jogo: salva print e mostra as células ocupadas
 powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestMix                     # modal de mix ABERTO: mostra o que o OCR lê e a cor de cada opção
+powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestStatus .\captcha\status_ultimo.png  # mostra o que o OCR leu no painel de status e o que virou For/Agi/Vit/Ene/Pontos
 powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestNpc                      # no /mixer, mouse em cima do Lahap: mostra a coordenada dele
 powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestGold                     # com um Golden Tantalos na tela: marca em verde o que o detector achou
 powershell -ExecutionPolicy Bypass -File .\mudinhox_rpa.ps1 -TestVisao                    # regressão das funções de leitura de tela (usa os prints de fixtures\)
