@@ -961,6 +961,7 @@ function Inv-Open($img){   # a janela do inventario esta MESMO aberta? Sem isso 
   $y = [int]($InvGrid.Y + $InvGrid.Rows * [double]$InvGrid.Cell) + 2   # faixa do "Zen" logo abaixo da grade
   $c = Crop-Bitmap $img ([int]$InvGrid.X - 20) $y 320 45 3
   $t = (Ocr-Bitmap $c).Text; $c.Dispose()
+  $script:invZenTxt = ($t -replace '\s+',' ').Trim()   # guarda o que leu: diferencia "janela nao abriu" de "abriu mas o Zen nao esta onde eu procuro"
   [bool]($t -match '(?i)zen')
 }
 function Inv-Free {   # abre o inventario (V), conta celulas livres, fecha. -1 se nao calibrado, nao abriu ou nao deu pra ler
@@ -980,7 +981,13 @@ function Inv-Free {   # abre o inventario (V), conta celulas livres, fecha. -1 s
   }
   if($map){ Press-Vk $InvKey $HotkeyHoldMs; Start-Sleep -Milliseconds 200 }   # fecha
   Restore-Focus $prev
-  if(-not $map){ Log "inventario: nao consegui abrir/confirmar a janela (tecla V)"; return -1 }
+  if(-not $map){
+    # Falha recorrente em todo start. O print + o que o OCR leu na faixa do Zen dizem QUAL dos dois casos e:
+    # janela nao abriu (faixa com cenario/vazio) ou abriu noutro lugar (faixa com outro texto do jogo).
+    Log "inventario: nao consegui abrir/confirmar a janela (tecla V). Na faixa do 'Zen' o OCR leu: '$($script:invZenTxt)'"
+    $null = Save-Shot 'inventario_falhou.png'
+    return -1
+  }
   @($map | % { $_ } | ? { -not $_ }).Count
 }
 function Hover-Npc {   # passa o mouse por $MixNpcPos (e uns vizinhos) ate o nome do NPC aparecer. Devolve o ponto confirmado ou $null. Chamar com o jogo na frente
