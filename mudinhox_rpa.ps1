@@ -755,7 +755,9 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
     $script:ptsNeeded = Points-Needed $st
     if($script:ptsNeeded -le 0){ if($script:modo -eq 'joias'){ Log "stats: atributos no maximo, mas o modo JOIAS nao da /darmr"; return }; if($script:phase -eq 'warmup'){ Log "stats: atributos no maximo durante o warmup, seguindo sem /darmr"; return }; Log "stats: F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) -> TODOS no maximo, /darmr"; Master-Reset; return }
     $p = [int]$st['Pts']; $script:ptsLeft = $p
-    if($p -lt 0){ Log "stats: F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) (pontos ilegiveis)"; return }
+    # O jogo SO mostra a linha "Pontos" quando ha pontos a distribuir (o print do painel confirma: Forca/Agilidade/
+    # Vitalidade/Energia aparecem, "Pontos" nao). Entao Pts=-1 quase sempre significa ZERO, nao erro de leitura.
+    if($p -lt 0){ Log "stats: F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) - sem linha de Pontos (0 a distribuir)"; return }
     if($p -lt $StatMinAvail){ return }   # nada relevante a distribuir agora
     if($p -eq $prevP){ $stuck++ } else { $stuck = 0 }; $prevP = $p
     if($stuck -ge 2){ Log "stats: $p pontos nao baixam (faltam $($script:ptsNeeded) pontos pro cap). Parei pra nao repetir a toa."; return }
@@ -1493,7 +1495,8 @@ function Run-Preflight([bool]$comSpot){   # valida os subsistemas de leitura no 
     $st = Read-Status
     Ok 'le os 4 atributos' ($null -ne $st) 'Read-Status falhou (janela C nao abriu ou OCR nao leu)'
     # Pts era conferido junto e passava com -1: sem os pontos o bot nao distribui nada, entao e falha propria
-    Ok 'le os pontos disponiveis' ($st -and [int]$st.Pts -ge 0) 'rotulo "Pontos" nao foi lido (Pts=-1)'
+    # NAO e falha: sem pontos a distribuir o jogo omite a linha. So reporta o valor.
+    if($st){ Log "       pontos disponiveis: $(if([int]$st.Pts -ge 0){$st.Pts}else{"0 (linha ausente)"})" }
     if($st){ Log "       F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) Pts=$($st.Pts) | faltam $(Points-Needed $st) pro cap" }
     $free = Inv-Free
     Ok 'le o inventario' ($free -ge 0) 'Inv-Free devolveu -1 (tecla V ou $InvGrid)'
