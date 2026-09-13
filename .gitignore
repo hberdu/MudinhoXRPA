@@ -1,13 +1,9 @@
 # prints de captcha/debug (gerados em runtime — chegam a varios GB); mantem so o exemplo
 captcha/*
 !captcha/exemplo.png
-# multibox: um diretorio de prints por slot
-captcha[0-9]*/
 
 # logs e backups
 rpa.log
-# multibox: rpa1.log, rpa2.log, ...
-rpa[0-9]*.log
 rpa_*.log.bak
 
 # flags e temporarios
@@ -20,8 +16,6 @@ rpa_*.log.bak
 # estado do bot (fase/warmup/metricas do MR), gerado em runtime. E POR PERSONAGEM: subir isso no repo faria
 # outra maquina comecar com o mrs/resets de um char que nao e o dela.
 estado.txt
-# multibox: estado1.txt, estado2.txt, ...
-estado[0-9]*.txt
 # backups pontuais do estado (estado.txt.bak-fenrir, .bak-1156, ...)
 *.bak-*
 
@@ -33,8 +27,6 @@ fixtures/
 
 # heartbeat e log do watchdog (runtime)
 heartbeat.txt
-# multibox: um heartbeat por slot
-heartbeat[0-9]*.txt
 watchdog.log
 
 # scripts temporarios de investigacao

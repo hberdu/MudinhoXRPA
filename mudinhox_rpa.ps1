@@ -15,15 +15,11 @@
   Requisito: o jogo precisa estar visivel na hora da leitura. Se outra janela estiver na frente, o bot traz o jogo
   por ~1s, le, e devolve o foco pra janela que voce estava usando (nesse caso le a cada 60s em vez de 10s).
 #>
-param([switch]$Check, [string]$TestImage, [string]$TestStatus = "", [switch]$TestInv, [switch]$TestMix, [switch]$TestNpc, [switch]$TestVisao, [switch]$Preflight, [switch]$TestStatMin,
-      # MULTIBOX: -Slot 1..N liga o modo N-clientes. 0 (padrao) = um cliente so, tudo exatamente como antes.
-      # Um PROCESSO por cliente, nao um processo controlando N janelas: todo o estado do bot (fase, warmupCount,
-      # resets, lvlPrev, stCarry, mixLast...) vive em variaveis $script:, e transformar isso em estado-por-janela
-      # seria reescrever o arquivo inteiro. Com um processo por slot a logica de um cliente fica intocada.
-      [int]$Slot = 0,
-      # Qual janela do mudx este slot controla. Vazio = pega a N-esima ordenada por PID (estavel enquanto ninguem
-      # fecha cliente). Passe o PID explicito se quiser amarrar slot a personagem.
-      [int]$GamePid = 0)
+param([switch]$Check, [string]$TestImage, [string]$TestStatus = "", [switch]$TestInv, [switch]$TestMix, [switch]$TestNpc, [switch]$TestVisao, [switch]$Preflight, [switch]$TestStatMin)
+# UM CLIENTE SO. Houve um modo multibox (-Slot 1..N, um processo por cliente, mutex global de entrada, arquivos
+# por slot, mascara das janelinhas dos outros). Saiu em 12/09 a pedido: sempre um cliente. O que ele deixou de
+# heranca e o caminho de leitura sem foco (Ver-Janela + Janela-Na-Frente), que virou o caminho unico - nasceu
+# pra caber quatro bots no mesmo primeiro plano, mas o que ele resolve de verdade e nao roubar a sua tela.
 
 # ---------- CONFIG (coordenadas relativas a area cliente do jogo, 1920x1009) ----------
 $TargetLevel   = 305     # level pra resetar. Nunca abaixo de $LevelMinReset (o servidor recusa).
@@ -45,19 +41,14 @@ $NoFocusRead   = $true   # JOGO NOUTRO MONITOR, sempre visivel. Liga o modo "nao
 $PollBgSec     = 60      # intervalo quando outra janela esta na frente (cada leitura rouba o foco por ~1s)
 # ---------- QUAL JANELA E O JOGO ----------
 $GameProc      = 'mudx'   # processo do cliente DESKTOP. Usado quando $GameTitle esta vazio.
-$GameTitle     = '(?i)\[GAME\]\s*MudinhoX'   # VERSAO WEB: a aba se chama "[GAME] MudinhoX". Ancorar no "[GAME]" importa:
-                          # ha OUTRAS abas com "MudinhoX" no titulo (o site do servidor, por exemplo), e casar com
-                          # elas faria o bot mirar a janela errada. Vazio = cliente desktop, por $GameProc.
-                          # Preenchido = procura por titulo em QUALQUER processo (o jogo vira uma aba do Chrome,
-                          # entao o processo e 'chrome' e o nome do processo nao identifica mais nada).
-                          # Vazio = comportamento de sempre, por nome de processo.
+$GameTitle     = ''       # DEFAULT: considerar o jogo em aberto como cliente desktop (mudx), como fazia antes.
+                          # Se quiser forcar a deteccao pela aba do navegador, use um regex do titulo da aba (ex.: '(?i)\[GAME\]\s*MudinhoX').
+                          # Vazio = cliente desktop, por $GameProc.
+                          # Preenchido = procura por titulo em QUALQUER processo (Chrome/Edge), e a aba precisa estar ativa.
                           # Rodando na VM, o bot tem que rodar DENTRO dela: do host a VM e uma janela opaca so -
                           # daria pra capturar os pixels, mas nao pra mirar a janela do navegador la dentro,
-                          # nem pra fazer multibox, nem pra conferir foco.
+                          # nem pra conferir foco.
 $WarpCmd       = '/k37'   # comando de teleporte pro spot de farm normal (troque aqui se mudar de spot). Era /s18 (Stadium)
-                          # MULTIBOX: os quatro slots usam ESTE mesmo spot. Houve um $SlotSpots que dava um spot
-                          # por slot (/k37, /k36, ...) pra eles nao dividirem mapa; saiu a pedido do usuario, que
-                          # sobe os quatro em PARTY - e party quer os chars JUNTOS, no mesmo lugar.
 $WarmupCmd     = '/losttower7'   # apos /darmr o personagem volta fraco em Lorencia: farma AQUI (Lost Tower 7) ate juntar os primeiros resets
 $WarmupResets  = 3           # quantos resets fazer no modo warmup (pos-darmr) antes de voltar ao spot normal ($WarpCmd).
                              # Era 10, depois 3. Chegou a ir pra 2 em 08/09 e voltou pra 3 no rollback daquele lote.
@@ -159,23 +150,18 @@ $PlayTries     = 3       # clica no play ate N vezes; se nao ligar, para de clic
 $HumanMinSec   = 120; $HumanMaxSec = 420   # a cada X seg (aleatorio) faz algo "humano": anda um pouco, abre/fecha janela, mexe o mouse
 # Modos de teste escrevem em OUTRO arquivo. Analisar o rpa.log e como todo bug serio deste projeto foi achado,
 # e cada -TestVisao despejava ~30 linhas de "OK ..." no meio do log do bot, quebrando as contagens.
-# MULTIBOX: com -Slot N cada instancia tem os SEUS arquivos (rpa2.log, estado2.txt, ...). Sem sufixo os quatro
-# processos escreveriam o mesmo log e, pior, o mesmo estado.txt - um sobrescrevendo a fase/warmup do outro.
-# Slot 0 (padrao) fica com os nomes de sempre, entao um cliente so nao muda nada.
-$Sfx           = if($Slot -gt 0){ "$Slot" } else { '' }
-$LogFile       = Join-Path $PSScriptRoot $(if($Check -or $TestImage -or $TestStatus -or $TestInv -or $TestMix -or $TestNpc -or $TestVisao -or $TestStatMin){ 'testes.log' } else { "rpa$Sfx.log" })
-$StopFile      = Join-Path $PSScriptRoot "stop$Sfx.flag"
-$StopAllFile   = Join-Path $PSScriptRoot 'stop.flag'   # stop.flag sem numero para TODOS os slots de uma vez
-$HeartbeatFile = Join-Path $PSScriptRoot "heartbeat$Sfx.txt"   # o bot bate aqui a cada volta; serve pra nao subir dois bots no mesmo cliente
+$LogFile       = Join-Path $PSScriptRoot $(if($Check -or $TestImage -or $TestStatus -or $TestInv -or $TestMix -or $TestNpc -or $TestVisao -or $TestStatMin){ 'testes.log' } else { 'rpa.log' })
+$StopFile      = Join-Path $PSScriptRoot 'stop.flag'
+$HeartbeatFile = Join-Path $PSScriptRoot 'heartbeat.txt'   # o bot bate aqui a cada volta; serve pra nao subir dois bots no mesmo cliente
 $AtivoGapMax   = 120     # buraco maior que N seg entre voltas = o bot esteve PARADO; nao conta como tempo ativo nas metricas
 $HeartbeatVivoSec = 180  # heartbeat mais novo que isso = tem bot vivo (impede duas instancias no mesmo jogo)
 $SemProgressoMax = 3     # apos N ciclos seguidos sem progresso, o bot REINICIA A SI MESMO (ja elevado: nao pede UAC de novo)
 $AutoRestart   = $true   # $false = nunca relanca a si mesmo; sem progresso $SemProgressoMax vezes ele so PARA. Unico caminho que ainda cria processo sozinho - e so com o bot rodando (fechar a janela ja o desliga antes)
 $WatchdogTask  = 'MudinhoX RPA Watchdog'   # Tarefa Agendada do watchdog ANTIGO. Ele foi removido (nao queremos nada rodando depois que voce fecha); isto so serve pra APAGAR a tarefa que ficou instalada em quem ja rodou a versao velha
-$EstadoFile    = Join-Path $PSScriptRoot "estado$Sfx.txt"   # fase + contagem de warmup, pra sobreviver a reinicio do bot
+$EstadoFile    = Join-Path $PSScriptRoot 'estado.txt'   # fase + contagem de warmup, pra sobreviver a reinicio do bot
 $LogMaxMB      = 5       # rpa.log maior que isso no start vira .bak (a pasta sincroniza no OneDrive)
 $LogKeepBaks   = 5       # quantos .bak manter
-$WarmupFile    = Join-Path $PSScriptRoot "warmup$Sfx.flag"   # se existir no start, o bot comeca em modo warmup (/losttower7) — use apos dar MR manualmente
+$WarmupFile    = Join-Path $PSScriptRoot 'warmup.flag'   # se existir no start, o bot comeca em modo warmup (/losttower7) — use apos dar MR manualmente
 # Captcha: offsets a partir do centro do texto "Selecione a mesma imagem abaixo:" (achado por OCR)
 $CapRefDy      = -80                          # imagem de referencia (acima do texto)
 $CapRowDy      = 80, 210                      # 2 linhas de opcoes
@@ -196,24 +182,8 @@ $CapConfidence = 0.65                         # melhor precisa ser < N% do segun
                                               # Lixo de verdade (cursor tapando a opcao certa, 04/09) deu 0.98, bem longe daqui.
                                               # Errar nao e barato mas e limitado: o bot confere a borda vermelha depois de clicar e PAUSA
                                               # apos $CapMaxTries erros. Nao clicar custou ~1h por captcha travado.
-$CaptchaShotDir = Join-Path $PSScriptRoot "captcha$Sfx"   # print salvo aqui a cada captcha
+$CaptchaShotDir = Join-Path $PSScriptRoot 'captcha'   # print salvo aqui a cada captcha
 $FixtureDir    = Join-Path $PSScriptRoot 'fixtures'   # prints guardados pro -TestVisao (regressao das funcoes de leitura de tela)
-# ---------- MULTIBOX: o que o -Slot muda no CONFIG ----------
-if($Slot -gt 0){
-  # O spot e o $WarpCmd, igual pros quatro: eles sobem em PARTY, entao tem que ficar no mesmo lugar.
-  # $NoFocusRead = $true: LER nao pede foco. Chegou a ficar $false aqui (assumindo janelas empilhadas), e MEDIDO
-  # em 08/09 isso nao cabia: com toda leitura passando pelo primeiro plano, um bot sozinho precisava de 40-60%
-  # do foco do sistema - dois ja saturavam, e os quatro se atropelaram (slot 1 passou 81s sem uma leitura e
-  # disparou miss infinito achando que estava travado).
-  # O que faltava era separar "preciso VER" de "preciso DIGITAR". Ver e Z-order: o Ver-Janela sobe a janela do
-  # slot com SWP_NOACTIVATE, custa ms e nao tira o teclado de onde voce esta. Digitar e que exige primeiro plano
-  # de verdade (medido: PostMessage e AttachThreadInput+SetFocus nao funcionam neste cliente, ver
-  # test_entrada_sem_foco.ps1). Com isso a fatia de foco por bot cai pra 10-15% e os quatro cabem.
-  $NoFocusRead = $true
-  # O $PollBgSec (60s) e pro caso "sua janela na frente, leio devagar pra nao te atrapalhar". Aqui a leitura nao
-  # depende mais de foco, entao esse freio nao faz sentido - e 60s deixariam o level passar de 350 pra 400.
-  $PollBgSec = $PollSec
-}
 # Mensagens do jogo (faixa acima da caixa de chat). O servidor responde tudo por texto e o bot ignorava:
 # "Voce adicionou N pontos", "Bem-vindo(a) a Lorencia", "Resta ainda N Golden Tantalo vivo(s)".
                           # Faixa das mensagens em FRACAO da area cliente (era $MsgBox em pixel: X=760 W=400,
@@ -222,6 +192,17 @@ if($Slot -gt 0){
 $MsgFaixa      = @{ X1 = 0.25; X2 = 0.75; Y1FromBottom = 0.35; Y2FromBottom = 0.08 }
 $MsgCheckSec   = 20      # le as mensagens a cada N seg (recorte pequeno, usa a captura que ja existe)
 $MsgInvWords   = '(?i)(invent.rio.{0,12}cheio|espa.o insuficiente|inventory full)'   # inventario cheio -> vai mixar
+# "Voce nao pode se mover neste momento": o servidor recusa QUALQUER /warp enquanto ha janela de NPC aberta. Em
+# 12/09 o mix desistiu com o dialogo de confirmar na tela e o bot mandou /k37 por 54 MINUTOS levando essa
+# resposta, sem nunca tentar fechar nada. Duas palavras, porque o OCR massacra o resto: as tres leituras reais
+# foram 'Vocó não podo se mover nosto momento', 'voco nao poao so mover nosto momento' e a forma correta.
+$MsgTravadoWords = '(?i)s[eo]\s+mover'   # + 'moment' (conferido junto, pra nao casar com outra frase que tenha "se mover")
+# "Voce precisa de estar no level 350 para resetar!" - o servidor DIZ o piso, e o bot aprende dai (ver o
+# reenvio do /resetar). O regex antigo pedia a palavra "level" e a palavra "resetar" literais e por isso NUNCA
+# casou: o OCR le "Iovol"/"lovol"/"levei"/"leve!" e "rosetar"/"resetad". Ficaram 6 avisos do servidor no log
+# sem nenhum aprendizado, com o alvo parado em 305 e um reenvio de /resetar sobrando a cada reset.
+# Ancora no que o OCR acerta: o NUMERO colado em "para r?seta?". As letras de dentro e que ele erra.
+$MsgMinResetWords = '(?i)(\d{2,4})\s*para\s*r[eo0]s[eo0]ta'
 $ClientEsperado = @{ W = 1920; H = 1009 }   # resolucao pra qual as coordenadas fixas foram calibradas; muda isso se recalibrar noutra
 $SemProgressoMin = 12    # sem ganhar UM ponto por N min = travou em algo que a gente ainda nao previu -> avisa e reinicia o ciclo
 $LogLevelDelta = 40      # so loga o level quando ele salta N (ou cai = reset). Com poll de 2s, logar todo tick so enche o arquivo
@@ -304,8 +285,27 @@ Add-Type -AssemblyName System.Runtime.WindowsRuntime
 [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime]
 [void][Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType=WindowsRuntime]
 Add-Type @"
-using System; using System.Runtime.InteropServices;
+using System; using System.Runtime.InteropServices; using System.Text; using System.Collections.Generic;
 public class W {
+  // VERSAO WEB: achar a janela do jogo pelo Get-Process/MainWindowTitle NAO funciona. O Chrome e multi-processo
+  // e o MainWindowTitle expoe UMA janela por processo - com o jogo aberto, a unica janela do Chrome que aparecia
+  // era a barra "... is sharing a window.". Entao enumera as JANELAS de verdade, com EnumWindows.
+  [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc cb, IntPtr p);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr h, uint cmd);
+  private delegate bool EnumProc(IntPtr h, IntPtr p);
+  public static List<IntPtr> JanelasVisiveis(out List<string> titulos){
+    var hs = new List<IntPtr>(); var ts = new List<string>();
+    EnumWindows(delegate(IntPtr h, IntPtr p){
+      if(!IsWindowVisible(h)) return true;
+      if(GetWindow(h, 4) != IntPtr.Zero) return true;   // GW_OWNER: pula popups/dialogos, fica so janela de topo
+      var sb = new StringBuilder(512); GetWindowTextW(h, sb, sb.Capacity);
+      var t = sb.ToString(); if(t.Length == 0) return true;
+      hs.Add(h); ts.Add(t); return true;
+    }, IntPtr.Zero);
+    titulos = ts; return hs;
+  }
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
@@ -313,8 +313,7 @@ public class W {
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
   [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
-  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);   // multibox: apagar a janelinha DOS OUTROS slots da captura
-  // multibox: SUBIR a janela na pilha SEM roubar o teclado (SWP_NOACTIVATE). E o que separa "preciso ver" de
+  // SUBIR a janela na pilha SEM roubar o teclado (SWP_NOACTIVATE). E o que separa "preciso ver" de
   // "preciso digitar": ver custa ms e nao tira o foco de onde voce esta; digitar exige primeiro plano de verdade.
   [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int hh, uint flags);
   [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);   // quem esta REALMENTE nesses pixels?
@@ -414,12 +413,8 @@ function Heartbeat-Fresco {   # $true se OUTRA instancia bateu o heartbeat ha po
 $script:stopReason = 'usuario'   # POR QUE parou. O log dizia "parado pelo usuario" ate quando era erro ou reinicio proprio, e ai nao dava pra saber o que tinha acontecido de madrugada
 function Check-Stop {
   if(-not $script:stop -and (Test-Path $StopFile)){ $script:stop = $true; $script:stopReason = 'stop.flag' }
-  # MULTIBOX: um stop.flag SEM numero derruba os quatro de uma vez. Com quatro janelinhas espalhadas, fechar uma
-  # por uma no meio de um /darmr e como o estado do char ficou inconsistente em 08/09.
-  if(-not $script:stop -and $Slot -gt 0 -and (Test-Path $StopAllFile)){ $script:stop = $true; $script:stopReason = 'stop.flag geral' }
   if(-not $script:stop){ return }
   Log "parado ($script:stopReason)"
-  Input-Unlock   # morrer com a trava na mao faria os outros slots esperarem os 120s do teto
   # Consome o flag e o heartbeat: parou, acabou. Nao existe mais watchdog lendo isto - nada relanca o bot depois
   # que ele sai, e um flag esquecido no disco so atrapalharia a proxima abertura.
   Remove-Item $StopFile,$HeartbeatFile -ErrorAction SilentlyContinue
@@ -466,22 +461,17 @@ function Canto-Da-Tela-Do-Jogo([int]$alturaJanela){
   try { $t = [System.Windows.Forms.Screen]::FromHandle((Get-Game)) } catch { }
   if(-not $t){ $t = [System.Windows.Forms.Screen]::PrimaryScreen }
   $wa = $t.WorkingArea
-  # MULTIBOX: as janelinhas em CASCATA, todas dentro do canto inferior esquerdo. Nao lado a lado: a 3a e a 4a
-  # cairiam em cima da faixa de mensagens e do $ChatBox (e, na epoca, do level). Mascarar a janela dos
-  # outros slots (ver Outras-Janelinhas) impede LER LIXO, mas ler PRETO tambem nao serve - o Read-Level ia
-  # falhar do mesmo jeito. Entao elas ficam onde nao ha nada pra ler.
-  # Passo de 28px: da pra ver as 4 barras de titulo (e saber qual e qual) sem sair da area segura. A 4a termina
-  # em x=396 e sobe ate 572px da base - longe do captcha (que comeca em x~600) e do play (topo esquerdo).
-  $off = ($Slot - 1) * 28
-  New-Object System.Drawing.Point(($wa.X + 10 + $off), ($wa.Y + $wa.Height - $alturaJanela - 10 - $off))
+  # Canto INFERIOR ESQUERDO: e a unica area que o bot nao le. O Capture-Raw pinta a janelinha de preto em toda
+  # captura, mas ler PRETO nao serve de nada - por cima da faixa de mensagens ou do chat o Read-Level falharia do
+  # mesmo jeito. Entao ela fica onde nao ha nada pra ler.
+  New-Object System.Drawing.Point(($wa.X + 10), ($wa.Y + $wa.Height - $alturaJanela - 10))
 }
 function Show-Ui {
   $f = New-Object System.Windows.Forms.Form
   # Janelinha COMPACTA (302x212; era 400x380 com oito botoes). Nao e so estetica: o Capture-Raw pinta a area dela
   # de PRETO em toda captura pra ela nao sujar o OCR, entao janela menor = menos tela do jogo cega, e o
   # Fugir-Da-Area precisa move-la com menos frequencia.
-  # Com quatro janelinhas iguais na tela nao daria pra saber qual e qual: o titulo carrega slot e spot.
-  $f.Text = $(if($Slot -gt 0){ "MudinhoX RPA - slot $Slot ($WarpCmd)" } else { 'MudinhoX RPA' })
+  $f.Text = 'MudinhoX RPA'
   $f.Width = 302; $f.Height = 212; $f.TopMost = $true; $f.FormBorderStyle = 'FixedToolWindow'
   # AutoScaleMode 'None' ANTES da fonte: o padrao e 'Font', que reescala os controles filhos a partir da fonte do
   # formulario. Como a grade abaixo esta em pixel fixo, escala automatica so teria como estragar.
@@ -532,23 +522,36 @@ function Game-IsAdmin {   # processo elevado nao expoe o Path pra processo comum
   -not (Get-Process $GameProc -ErrorAction SilentlyContinue | select -First 1).Path
 }
 $script:gameH = [IntPtr]::Zero
-function Get-Game {   # handle da janela do jogo, EM CACHE: Get-Process enumera todos os processos do Windows e isto e chamado ~6x por comando
+function Get-Game {   # handle da janela do jogo, EM CACHE: enumerar janela/processo e caro e isto e chamado ~6x por comando
   if($script:gameH -ne [IntPtr]::Zero -and [W]::IsWindow($script:gameH)){ return $script:gameH }
-  # MULTIBOX: cada slot manda numa janela. Ordena por Id porque a ordem do Get-Process nao e estavel entre
-  # chamadas - sem ordenar, o slot 2 poderia trocar de cliente no meio da noite e misturar dois personagens.
   # VERSAO WEB: o jogo roda numa aba do navegador, entao o processo e 'chrome'/'msedge' e quem identifica e o
   # TITULO da janela. Com $GameTitle preenchido a busca passa a ser por titulo, em qualquer processo.
-  $todas = if($GameTitle){
-      @(Get-Process -ErrorAction SilentlyContinue | ? { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -match $GameTitle } | sort Id)
+  # O @( ) EXTERNO nao e decorativo. Sem ele o valor sai do bloco `if` pela pipeline, que DESENROLA o array: com
+  # exatamente uma janela casando, $todas virava um PSCustomObject solto - e $obj.Count num PSCustomObject
+  # devolve $null, nao 1. Resultado: "nao achei janela" com o jogo aberto na tela, e SO com 1 cliente (com 2+ o
+  # array sobrevivia) e SO na web (Get-Process devolve Process, que tem Count=1 de verdade).
+  $todas = @(if($GameTitle){
+      # EnumWindows, nao Get-Process: o Chrome e multi-processo e o MainWindowTitle expoe UMA janela por
+      # processo. Com o jogo aberto numa aba, a unica janela de chrome que aparecia por ali era a barra
+      # "... is sharing a window." - a do jogo nao. Aqui varre as janelas de verdade.
+      $ts = $null; $hs = [W]::JanelasVisiveis([ref]$ts)
+      for($k = 0; $k -lt $hs.Count; $k++){ if($ts[$k] -match $GameTitle){ [pscustomobject]@{ H = $hs[$k]; T = $ts[$k] } } }
     } else {
-      @(Get-Process $GameProc -ErrorAction SilentlyContinue | ? { $_.MainWindowHandle -ne 0 } | sort Id)
-    }
-  if(-not $todas.Count){ throw $(if($GameTitle){ "nenhuma janela com titulo casando '$GameTitle' (o jogo web esta aberto?)" } else { "MudinhoX ($GameProc.exe) nao esta rodando" }) }
-  $p = if($GamePid -gt 0){ $todas | ? { $_.Id -eq $GamePid } | select -First 1 }
-       elseif($Slot -gt 0){ $todas | select -Skip ($Slot - 1) -First 1 }
-       else{ $todas | select -First 1 }
-  if(-not $p){ throw $(if($GamePid -gt 0){ "MudinhoX com PID $GamePid nao esta rodando" } else { "slot $Slot pediu a ${Slot}a janela do mudx, mas so ha $($todas.Count)" }) }
-  $script:gameH = $p.MainWindowHandle; $script:gameH
+      Get-Process $GameProc -ErrorAction SilentlyContinue | ? { $_.MainWindowHandle -ne 0 } |
+        % { [pscustomobject]@{ H = $_.MainWindowHandle; T = $_.MainWindowTitle } }
+    })
+  if(-not $todas.Count){
+    if(-not $GameTitle){ throw "MudinhoX ($GameProc.exe) nao esta rodando" }
+    # O titulo da janela de um navegador e o da ABA ATIVA. Com o jogo numa aba de fundo nao existe janela com esse
+    # titulo - e nem adiantaria achar: aba de fundo nao renderiza, a captura sairia velha/preta. Entao, quando ha
+    # navegador aberto mas nenhum casa, o problema e a aba, nao a janela; vale dizer isso em vez de "nao achei".
+    $ts2 = $null; $null = [W]::JanelasVisiveis([ref]$ts2)
+    $nav = @($ts2 | ? { $_ -match '(?i)(google chrome|microsoft.\s*edge)$' })
+    if($nav.Count){ throw "o jogo nao esta na aba ATIVA de nenhum navegador (aba de fundo nao renderiza). Abertos: $($nav -join ' | ')" }
+    throw "nenhuma janela com titulo casando '$GameTitle' (o jogo web esta aberto?)"
+  }
+  if($todas.Count -gt 1){ Log "atencao: $($todas.Count) janelas casam '$GameTitle', usando a primeira ($($todas[0].T))" }
+  $script:gameH = $todas[0].H; $script:gameH
 }
 function Set-Foreground($h){   # traz janela pra frente sem teclas sinteticas (AttachThreadInput); fallback: toque no Alt
   if(-not $h -or -not [W]::IsWindow($h) -or [W]::GetForegroundWindow() -eq $h){ return }
@@ -562,30 +565,7 @@ $script:gameWasFg = $true   # jogo ja estava na frente antes do Focus-Game (defi
 $script:gameFg = $false     # jogo ficou na frente apos o Focus-Game (Windows nega se voce esta digitando em outra janela)
 function Is-OwnUi($h){ $script:ui -and -not $script:ui.IsDisposed -and $h -eq $script:ui.Handle }   # janela do proprio bot nao conta como "outra janela"
 $script:focusHeld = $false; $script:focusPrev = $null   # bloco de foco: traz o jogo 1x, faz tudo, devolve 1x (menos "pisca" com voce numa janela por cima)
-# ---------- MULTIBOX: trava global de ENTRADA ----------
-# keybd_event e mouse_event sao GLOBAIS: vao pra janela que estiver em primeiro plano, seja qual for. Com quatro
-# bots rodando, dois trazendo janelas pra frente ao mesmo tempo significa o /resetar de um caindo no cliente do
-# outro. Esta trava faz o revezamento: quem vai mexer no jogo pega o mutex, faz o que tem que fazer, solta.
-# E um mutex do SISTEMA (Global\), nao um lock em processo - os slots sao processos separados.
-$script:mtx = $null
-if($Slot -gt 0){ $script:mtx = New-Object System.Threading.Mutex($false, 'Global\MudinhoX-Input') }
-$script:lockHeld = $false
-function Input-Lock {
-  # IDEMPOTENTE de proposito. O Focus-Game e chamado solto em varios lugares (Read-Status reafirma o foco a cada
-  # tecla, por exemplo) sem um Restore-Focus casado. Um mutex conta reentradas, entao "pegar" duas vezes e soltar
-  # uma vazaria a trava e travaria os outros tres bots pra sempre. Com a flag, N chamadas = uma aquisicao so.
-  if(-not $script:mtx -or $script:lockHeld){ return }
-  try { $null = $script:mtx.WaitOne(120000) }   # teto: bot morto com a trava na mao nao pode parar a fila pra sempre
-  catch [System.Threading.AbandonedMutexException] { }   # dono anterior morreu sem soltar; o mutex e nosso agora
-  $script:lockHeld = $true
-}
-function Input-Unlock {
-  if(-not $script:lockHeld){ return }
-  $script:lockHeld = $false
-  try { $script:mtx.ReleaseMutex() } catch {}
-}
 function Focus-Game {
-  Input-Lock   # so mexe no primeiro plano com a vez na mao
   $h = Get-Game
   if($script:focusHeld){   # dentro de um bloco: nao mexe no prev nem devolve; so garante o jogo na frente
     $script:gameFg = ([W]::GetForegroundWindow() -eq $h); if(-not $script:gameFg){ Set-Foreground $h; $script:gameFg = ([W]::GetForegroundWindow() -eq $h) }; return $script:focusPrev
@@ -595,7 +575,6 @@ function Focus-Game {
 function Restore-Focus($prev){   # dentro de bloco nao devolve; senao devolve pra janela anterior (nao a do bot)
   if($script:focusHeld){ return }
   if($prev -and $prev -ne (Get-Game) -and -not (Is-OwnUi $prev)){ Set-Foreground $prev }
-  Input-Unlock   # fora de bloco, quem chamou Focus-Game solto devolve a vez aqui
 }
 function Hold-Focus {   # inicia bloco: guarda a janela do usuario, traz o jogo 1x
   if($script:focusHeld){ return }
@@ -612,20 +591,19 @@ function Release-Focus {   # fim do bloco: devolve o foco pra janela do usuario 
   $script:focusHeld = $false; Restore-Focus $script:focusPrev
 }
 function Client-Origin { $h = Get-Game; $pt = New-Object W+POINT; [W]::ClientToScreen($h,[ref]$pt) | Out-Null; $pt }
-# ---------- MULTIBOX: ver a janela sem roubar o teclado ----------
-function Ver-Janela {   # sobe a janela do slot na pilha, SEM ativar. Barato (ms) e nao tira o foco de onde voce esta.
-  # Com 2 clientes empilhados por monitor, so o de cima aparece - e a leitura sai de CopyFromScreen, que pega o
-  # que esta NA TELA. Trazer pra ver com SetForegroundWindow custaria o foco do sistema inteiro e ~2s; aqui e so
-  # Z-order. E a diferenca entre "cada bot precisa de 40-60% do primeiro plano" (nao cabe) e "10-15%" (cabe).
-  if($Slot -le 0){ return }
+# ---------- ver a janela sem roubar o teclado ----------
+function Ver-Janela {   # sobe a janela do jogo na pilha, SEM ativar. Barato (ms) e nao tira o foco de onde voce esta.
+  # A leitura sai de CopyFromScreen, que pega o que esta NA TELA: com outra janela por cima, le lixo. Trazer pra
+  # ver com SetForegroundWindow custaria o foco do sistema inteiro e ~2s (e o seu teclado no meio da digitacao);
+  # aqui e so Z-order. VER e DIGITAR sao coisas diferentes - so digitar exige primeiro plano de verdade (medido:
+  # PostMessage e AttachThreadInput+SetFocus nao funcionam neste cliente, ver test_entrada_sem_foco.ps1).
   # HWND_TOP=0, SWP_NOSIZE=1 | SWP_NOMOVE=2 | SWP_NOACTIVATE=0x10 = 0x13
   [W]::SetWindowPos((Get-Game), [IntPtr]::Zero, 0,0,0,0, 0x13) | Out-Null
-  Start-Sleep -Milliseconds 60   # o compositor precisa de um frame pra desenhar por cima do irmao do par
+  Start-Sleep -Milliseconds 60   # o compositor precisa de um frame pra desenhar por cima do que estava na frente
 }
 function Janela-Na-Frente {   # os pixels da area cliente sao MESMO desta janela?
-  # Sem isto, dois slots empilhados no MESMO ponto da tela leriam um o jogo do outro - e nada no log denunciaria:
-  # o mapa e o mesmo, o level e parecido, e o bot distribuiria os pontos do char errado.
-  if($Slot -le 0){ return $true }
+  # Perguntar ao Windows quem esta nos pixels e mais honesto que confiar no Z-order que acabamos de pedir: uma
+  # janela TopMost de outro programa continua por cima, e o bot leria a tela dela sem nada no log denunciar.
   try {
     $h = Get-Game; $c = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c) | Out-Null
     $o = Client-Origin; $p = New-Object W+POINT
@@ -635,26 +613,6 @@ function Janela-Na-Frente {   # os pixels da area cliente sao MESMO desta janela
     ($w -eq $h) -or ([W]::GetAncestor($w, 2) -eq $h)   # GA_ROOT=2: o ponto pode cair num controle filho do jogo
   } catch { $false }
 }
-$script:outrasUi = @(); $script:outrasUiAt = [datetime]::MinValue
-function Outras-Janelinhas {   # retangulos das janelinhas DOS OUTROS slots (vazio fora do modo multibox)
-  # EM CACHE: o Capture-Raw roda a cada leitura e o Get-Process enumera todos os processos do Windows - o mesmo
-  # motivo pelo qual o Get-Game ja e cacheado. As janelinhas so mudam de lugar quando um bot sobe, cai, ou o
-  # Fugir-Da-Area move alguma, entao 30s de validade sobra.
-  if($Slot -le 0){ return @() }
-  if(((Get-Date) - $script:outrasUiAt).TotalSeconds -lt 30){ return $script:outrasUi }
-  $script:outrasUiAt = Get-Date
-  $meu = if($script:ui -and -not $script:ui.IsDisposed){ $script:ui.Handle } else { [IntPtr]::Zero }
-  $out = @()
-  try {
-    foreach($p in (Get-Process powershell -ErrorAction SilentlyContinue)){
-      $h = $p.MainWindowHandle
-      if($h -eq 0 -or $h -eq $meu -or $p.MainWindowTitle -notlike 'MudinhoX RPA*'){ continue }
-      $r = New-Object W+RECT
-      if([W]::GetWindowRect($h,[ref]$r)){ $out += New-Object System.Drawing.Rectangle($r.L, $r.T, ($r.R-$r.L), ($r.B-$r.T)) }
-    }
-  } catch {}
-  $script:outrasUi = $out; $out
-}
 $script:capOk = $true   # a ultima captura foi mesmo do jogo? (Read-Status/Inv-Free usam pra nao ler nem salvar print de outra janela)
 function Capture-Raw {   # bitmap da area cliente, sem mexer no foco (so chamar com o jogo na frente). Janelinha do bot fica preta (nao suja OCR/pixels)
   $h = Get-Game; $b = $null
@@ -663,29 +621,21 @@ function Capture-Raw {   # bitmap da area cliente, sem mexer no foco (so chamar 
   # mudx. Com a mensagem 'nao esta rodando' ele cai no caminho que ja existe: espera o cliente voltar e retoma.
   $c0 = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c0) | Out-Null
   if($c0.R -le 0 -or $c0.B -le 0){ $script:gameH = [IntPtr]::Zero; throw "MudinhoX (mudx.exe) nao esta rodando: janela sem area cliente (minimizada ou fechando)" }
-  Ver-Janela   # multibox: sobe a janela deste slot (sem roubar teclado) antes de fotografar
+  Ver-Janela   # sobe a janela do jogo (sem roubar teclado) antes de fotografar
   for($i = 0; $i -lt 2; $i++){
     $c = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c) | Out-Null; $o = Client-Origin
     $b = New-Object System.Drawing.Bitmap($c.R,$c.B); $g = [System.Drawing.Graphics]::FromImage($b)
     $g.CopyFromScreen($o.X,$o.Y,0,0,$b.Size)
     if($script:ui -and -not $script:ui.IsDisposed){ $r = $script:ui.Bounds; $g.FillRectangle([System.Drawing.Brushes]::Black, $r.X-$o.X, $r.Y-$o.Y, $r.Width, $r.Height) }
-    # MULTIBOX: apaga tambem a janelinha DOS OUTROS slots. Cada bot so conhecia a propria ($script:ui), e com
-    # quatro na tela a do slot 2 em cima da HUD do cliente 1 viraria leitura de lixo - o tipo de bug que
-    # este projeto ja caçou por horas. Mascarar sai mais barato e mais seguro que tentar posicionar as quatro
-    # fora de tudo que o bot le (o inventario e o modal do mix nem tem posicao fixa).
-    foreach($r in (Outras-Janelinhas)){ $g.FillRectangle([System.Drawing.Brushes]::Black, $r.X-$o.X, $r.Y-$o.Y, $r.Width, $r.Height) }
     $g.Dispose()
     # confere DEPOIS da foto: so checar antes nao basta, outra janela sobe no meio e o bot acaba lendo (e salvando print d)a tela do usuario
-    # No MULTIBOX o teste nao pode ser "estou em primeiro plano" (a leitura nem pede foco) nem um "confio e sigo":
-    # dois slots empilhados no MESMO ponto da tela leriam um o jogo do outro, e NADA no log denunciaria - mesmo
-    # mapa, level parecido, e o bot distribuindo os pontos do char errado. Pergunta-se ao Windows quem esta nos
-    # pixels: WindowFromPoint no centro da area cliente.
-    $script:capOk = if($Slot -gt 0){ Janela-Na-Frente } else { $NoFocusRead -or ([W]::GetForegroundWindow() -eq $h) }
+    # O teste nao pode ser "estou em primeiro plano": com $NoFocusRead a leitura nem pede foco, entao isso daria
+    # sempre True e o bot leria alegremente a tela de quem estivesse por cima. Pergunta-se ao Windows quem esta
+    # nos pixels: WindowFromPoint no centro da area cliente.
+    $script:capOk = Janela-Na-Frente
     if($script:capOk){ return $b }
     $b.Dispose(); $b = $null
-    if($i -eq 0){   # uma re-tentativa; se ainda nao for a nossa janela nos pixels, devolve a foto marcada como suspeita
-      if($Slot -gt 0){ Ver-Janela; Start-Sleep -Milliseconds 150 } else { Set-Foreground $h; Start-Sleep -Milliseconds 250 }
-    }
+    if($i -eq 0){ Ver-Janela; Start-Sleep -Milliseconds 150 }   # uma re-tentativa; se ainda nao for a nossa janela nos pixels, devolve a foto marcada como suspeita
   }
   $c = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c) | Out-Null; $o = Client-Origin
   $b = New-Object System.Drawing.Bitmap($c.R,$c.B); $g = [System.Drawing.Graphics]::FromImage($b)
@@ -752,9 +702,22 @@ function Chat-Open($img){   # caixa de chat aberta = bordas vermelhas em cima e 
   $linhas -ge 2   # borda de cima + borda de baixo
 }
 function Close-Chat { if(Chat-Open){ Clear-ChatLine; Press-Vk 0x0D; Start-Sleep -Milliseconds 200 } }   # apaga residuo e fecha (Enter vazio fecha); chamar com o jogo na frente
+$script:semFgDesde = $null; $script:semFgN = 0
 function Send-Chat([string]$text){   # $false se o jogo nao ficou na frente (nao digita em outra janela)
   $prev = Focus-Game
-  if(-not $script:gameFg){ Log "jogo nao esta na frente, nao enviei '$text'"; return $false }
+  if(-not $script:gameFg){
+    # NAO insiste mais forte de proposito: o Windows recusa o primeiro plano pra processo de fundo justamente
+    # quando VOCE esta usando o PC, e roubar a tela nessa hora e o que o bot nao pode fazer. Ele espera.
+    # Mas 53 linhas identicas (9min20 em 12/09) enterravam o resto do log, e o log e como todo bug serio deste
+    # projeto foi achado. Entao loga a PRIMEIRA e o fim, com o custo medido.
+    $script:semFgN++
+    if($script:semFgN -eq 1){ $script:semFgDesde = Get-Date; Log "jogo nao esta na frente, nao enviei '$text' (esperando a janela liberar; so aviso de novo quando voltar)" }
+    return $false
+  }
+  if($script:semFgN){
+    Log "jogo voltou pra frente apos $([Math]::Round(((Get-Date) - $script:semFgDesde).TotalMinutes,1)) min e $($script:semFgN) comando(s) nao enviado(s)"
+    $script:semFgN = 0
+  }
   $img = Capture-Raw   # uma captura so decide o estado da caixa (antes eram duas, uma por Chat-Open)
   $aberta = Chat-Open $img; $img.Dispose()
   if($aberta){ Clear-ChatLine } else { Press-Vk 0x0D; Start-Sleep -Milliseconds $ChatOpenMs }   # ja aberta (residuo seu?) -> so apaga; fechada -> Enter abre
@@ -1782,7 +1745,7 @@ function Warp-To-Spot {   # teleporta pro spot da fase atual (warmup=/losttower7
   $want = Spot-Map
   $before = Read-Map $null
   if(Same-Map $before $want){ $script:farmMap = $before; Log "ja no spot (mapa: $before, fase: $($script:phase))"; return $true }   # ja no spot CORRETO da fase
-  $cego = 0
+  $cego = 0; $travado = $false
   for($t = 1; $t -le $WarpTries; $t++){
     if(-not (Send-Chat $cmd)){ Wait 10; continue }
     $now = Wait-Map $want $WarpWaitSec $(if($want){ '' } else { $before })   # chega e segue; nao dorme os 9s inteiros
@@ -1799,13 +1762,31 @@ function Warp-To-Spot {   # teleporta pro spot da fase atual (warmup=/losttower7
     if(Same-Map $now $want){ $script:farmMap = $now; Log "no spot (mapa: $now, fase: $($script:phase))"; return $true }   # chegou no spot certo
     if($now){
       Tag-Ciclo 'warp'; Log "nao teleportou pro spot certo (mapa: '$now', esperado '$want', antes '$before'), tentativa $t/$WarpTries ($cmd)"
-      if($t -eq 1){ $null = Log-GameMsg $null "apos $cmd"; $null = Save-Shot 'warp_falhou.png' }   # le a resposta do servidor e fotografa na PRIMEIRA falha (a mensagem some rapido)
+      if($t -eq 1){   # le a resposta do servidor e fotografa na PRIMEIRA falha (a mensagem some rapido)
+        $msg = Log-GameMsg $null "apos $cmd"; $null = Save-Shot 'warp_falhou.png'
+        # O servidor esta DIZENDO qual e o problema e o bot ignorava: "nao pode se mover" = ha janela de NPC (ou
+        # modal) aberta, e nenhuma quantidade de /k37 resolve isso. Foram 54 min mandando o mesmo comando em
+        # 12/09, depois de o mix desistir com o dialogo de confirmar na tela. Fechar e o que destrava.
+        if($msg -match $MsgTravadoWords -and $msg -match '(?i)moment'){
+          Log "warp: o jogo diz que o char NAO PODE SE MOVER - tem janela aberta na tela. Fechando antes de tentar de novo."
+          $travado = $true
+          Unstick-Tudo
+        }
+      }
     }
     else { $cego++; Tag-Ciclo 'warp'; Log "NAO CONSEGUI LER o nome do mapa (minimapa recolhido ou tapado?), tentativa $t/$WarpTries ($cmd)" }
   }
   if($cego -ge $WarpTries){   # nunca deu pra ler: o problema e a LEITURA, nao o teleporte. Reenviar /s18 nao resolve nada.
     $f = Save-Shot 'mapa_ilegivel.png'
     Notify "MudinhoX" "Nao consigo LER o nome do mapa no minimapa. Abra o painel do minimapa (setinha no canto). Print: $f"
+    return $false
+  }
+  # O aviso tem que dizer O QUE FAZER. Em 12/09 sairam 55 notificacoes iguais de "da uma olhada" enquanto a causa
+  # (janela de NPC aberta, deixada pelo mix que desistiu) estava escrita na tela o tempo todo. Se o ESC nao
+  # resolveu, quem resolve e voce - mas so se o aviso disser isso.
+  if($travado){
+    $f = Save-Shot 'warp_travado.png'
+    Notify "MudinhoX" "O jogo diz que o char NAO PODE SE MOVER e o ESC nao resolveu: deve ter janela de NPC aberta. Fecha na mao. Print: $f"
     return $false
   }
   Notify "MudinhoX" "Nao consegui teleportar com $cmd ($WarpTries tentativas). Da uma olhada."; $false
@@ -2372,7 +2353,6 @@ function Run-Preflight([bool]$comSpot){   # valida os subsistemas de leitura no 
     $img = Capture-Game
     Ok 'consegue capturar a tela do jogo' ($img -and $script:capOk) 'capturou outra janela ou o jogo nao veio pra frente'
     if($img){
-      Ok 'le o level' ($null -ne (Read-Level $img)) 'Read-Level devolveu nada'
       Ok 'reconhece o botao play' ((Get-HelperState $img) -ne 'unknown') 'botao play irreconhecivel (fora do jogo? tela de login?)'
       $mapa = Read-Map $img
       Ok 'le o nome do mapa' ([bool]$mapa) 'minimapa recolhido ou tapado pela janela do bot?'
@@ -2384,6 +2364,11 @@ function Run-Preflight([bool]$comSpot){   # valida os subsistemas de leitura no 
     }
     $st = Read-Status
     Ok 'le os 4 atributos' ($null -ne $st) 'Read-Status falhou (janela C nao abriu ou OCR nao leu)'
+    # O level vem DEPOIS do Read-Status de proposito: a caixa do level na HUD se auto-calibra pelo painel de
+    # status (o painel diz "Level: 400" com rotulo, e so sabendo o numero certo da pra achar o outro na tela).
+    # Conferido antes, com a caixa ainda vazia, ele falhava sempre no primeiro start e disparava um NOTIFY de
+    # "1 verificacao falhou" - alarme falso, o proprio log mostrava a calibracao dando certo 2s depois.
+    Ok 'le o level' ($null -ne (Read-Level $null)) 'Read-Level devolveu nada mesmo apos a calibracao pelo painel'
     # Pts era conferido junto e passava com -1: sem os pontos o bot nao distribui nada, entao e falha propria
     # NAO e falha: sem pontos a distribuir o jogo omite a linha. So reporta o valor.
     if($st){ Log "       pontos disponiveis: $(if([int]$st.Pts -ge 0){$st.Pts}else{"0 (linha ausente)"})" }
@@ -2675,13 +2660,12 @@ if($TestMix){   # abra o modal de mix NO JOGO antes de rodar
 
 Show-Ui
 if(Heartbeat-Fresco){   # ja tem bot vivo: dois no mesmo jogo brigam pelo teclado e estragam tudo
-  Log $(if($Slot -gt 0){ "ja existe um bot no slot $Slot (heartbeat$Sfx.txt fresco). Saindo pra nao duplicar." } else { 'ja existe um bot rodando (heartbeat fresco). Saindo pra nao duplicar.' })
+  Log 'ja existe um bot rodando (heartbeat fresco). Saindo pra nao duplicar.'
   if($script:ui){ $script:ui.Dispose() }; exit
 }
 Remove-Item $StopFile -ErrorAction SilentlyContinue
-if($Slot -gt 0){ Remove-Item $StopAllFile -ErrorAction SilentlyContinue }   # flag geral esquecida no disco derrubaria o start
 Bater-Heartbeat
-Log $(if($Slot -gt 0){ "iniciando (slot $Slot, spot $WarpCmd, arquivos rpa$Sfx.log / estado$Sfx.txt)" } else { 'iniciando' })
+Log 'iniciando'
 try {   # preflight no start: 10s conferindo tudo evita a noite inteira perdida por algo obvio. Nao BLOQUEIA (o spot nem e checado, o bot ainda vai warpar)
   # JANELA MENOR QUE A CALIBRACAO = para na hora, com instrucao. Nao e frescura de preflight: TODA coordenada do
   # bot ainda depende do $ClientEsperado (a grade do inventario, a do captcha). Numa janela menor o
@@ -2695,7 +2679,6 @@ try {   # preflight no start: 10s conferindo tudo evita a noite inteira perdida 
     Log "PARANDO: a area cliente do jogo esta $($cli.R)x$($cli.B), menor que a calibracao $($ClientEsperado.W)x$($ClientEsperado.H)."
     Log "  Todas as coordenadas do bot sao fixas nesse tamanho - numa janela menor ele le fora da tela e quebra."
     Log "  Ponha a janela do jogo em $($ClientEsperado.W)x$($ClientEsperado.H) e suba de novo."
-    if($Slot -gt 0){ Log "  No multibox as janelas FICAM EMPILHADAS mesmo, uma por cima da outra - o bot traz pra frente a que ele precisa, uma de cada vez." }
     Notify "MudinhoX" "Janela do jogo em $($cli.R)x$($cli.B); precisa ser $($ClientEsperado.W)x$($ClientEsperado.H). Bot parado."
     if($script:logW){ $script:logW.Dispose() }; if($script:ui){ $script:ui.Dispose() }
     exit
@@ -2724,7 +2707,11 @@ while($true){
 
   $script:restartCycle = $false   # comecando um ciclo novo (botoes de fase ja aplicaram phase/forceMR)
   Hold-Focus; try { $warpOk = Warp-To-Spot; if($warpOk){ Start-Helper; $script:lvlChangedAt = Get-Date; $script:lvlSame = 0; if($script:forceMR){ $script:forceMR = $false; $script:statDue = Get-Date; Log "forcando distribuicao + MR" } } } finally { Release-Focus }
-  if(-not $warpOk){ Wait 15; continue }
+  # Tick-Progresso TAMBEM aqui, e nao so dentro do laco de farm. Era o buraco da rede de seguranca: com o warp
+  # falhando o bot nunca ENTRA no laco de farm, entao nada vigiava o resultado - em 12/09 ele reenviou /k37 por
+  # 54 min sem que o vigia de "sem progresso" tickasse uma vez. O destravamento especifico ja esta no
+  # Warp-To-Spot; isto cobre a classe inteira, inclusive o que ainda nao aconteceu.
+  if(-not $warpOk){ Hold-Focus; try { Tick-Progresso } finally { Release-Focus }; Wait 15; continue }
 
   # upando: le level, checa captcha, manda stats (traz o jogo 1x por iteracao, devolve o foco pra sua janela no fim)
   do {
@@ -2809,9 +2796,11 @@ while($true){
               # O servidor diz o motivo em texto: "Voce precisa de estar no level 350 para resetar!".
               # Em vez de deixar o alvo num valor impossivel (e reenviar /resetar ate o char passar de 350 sozinho),
               # aprende o piso da propria mensagem e corrige o alvo - inclusive cancelando um braco invalido do auto-tune.
-              if($msg -match '(?i)level\s*(\d{2,4})\s*para\s*resetar'){
+              if($msg -match $MsgMinResetWords){
                 $min = [int]$Matches[1]
-                if($TargetLevel -lt $min){
+                # Teto de sanidade: um OCR ruim que devolvesse 3500 deixaria o alvo num valor que o char nunca
+                # alcanca, e ai o bot farmaria pra sempre sem nunca resetar - pior que o problema original.
+                if($TargetLevel -lt $min -and $min -le $LevelMaximo){
                   Log "servidor exige level $min pra resetar (alvo estava $TargetLevel): subindo o alvo"
                   $script:TargetLevel = $min; $script:LevelMinReset = $min; Save-Estado
                   if($script:tuneOn){ Log "autotune: alvo abaixo do minimo do servidor, descartando este braco"; $script:tuneResets = $AutoTuneResets - 1 }

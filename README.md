@@ -68,28 +68,6 @@ Em troca, **a janela do jogo precisa ficar visível e destapada**: sem foco pra 
 
 Verificado ao vivo com `-Check`: leu `level 400 | helper running`, e o foco (`HX Chat`) e o mouse `(173,907)` ficaram exatamente onde estavam.
 
-## Multibox: 4 clientes de uma vez
-
-Duplo clique em **`MudinhoX RPA - 4 clientes.cmd`**. Ele confere que há 4 janelas do `mudx` abertas e sobe **um bot por cliente**:
-
-| slot | arquivos |
-|---|---|
-| 1 | `rpa1.log`, `estado1.txt`, `captcha1\` |
-| 2 | `rpa2.log`, `estado2.txt`, `captcha2\` |
-| 3 | `rpa3.log`, `estado3.txt`, `captcha3\` |
-| 4 | `rpa4.log`, `estado4.txt`, `captcha4\` |
-
-**Todos vão pro mesmo spot** (o `$WarpCmd`, hoje `/k37`): os chars sobem em **party**, e party quer eles juntos. Houve um `$SlotSpots` que dava um spot por slot (`/k37`, `/k36`, …) pra não dividirem mapa — saiu quando a decisão virou party.
-
-O título de cada janelinha diz o slot. **Pra parar todos de uma vez**, crie um `stop.flag` (sem número) na pasta — fechar uma por uma no meio de um `/darmr` foi o que deixou o estado do char inconsistente em 08/09.
-
-- **Um processo por cliente, não um processo com N janelas.** Todo o estado do bot (`fase`, `warmupCount`, `resets`, `lvlPrev`, `stCarry`, `mixLast`…) vive em variáveis `$script:`; virar estado-por-janela seria reescrever o arquivo inteiro. Com um processo por slot, a lógica de um cliente fica intocada — e `-Slot 0` (o padrão) roda exatamente como sempre.
-- **Revezamento, não paralelo.** `keybd_event` e `mouse_event` são globais: vão pra janela que estiver em primeiro plano. Um mutex de sistema (`Global\MudinhoX-Input`) garante que só um bot mexe no jogo por vez — sem ele, o `/resetar` de um cai no cliente do outro. Quem pega a vez é o `Focus-Game`; quem devolve é o `Restore-Focus`/`Release-Focus`, que já eram o par "vou mexer no jogo".
-  A trava é **idempotente de propósito**: o `Focus-Game` é chamado solto em vários lugares sem um `Restore-Focus` casado, e mutex conta reentradas — pegar 2x e soltar 1x travaria os outros três pra sempre. Tem teto de 120s e trata `AbandonedMutexException`, pra um bot morto com a trava na mão não parar a fila.
-- **Não cabe paralelo mesmo.** O cliente é 1920x1009 e o monitor 1920x1080: cabe **um** por monitor. Quatro se tapam por completo, e a leitura sai de `CopyFromScreen` na área da janela — janela tapada é leitura de lixo. Por isso o `-Slot` força `$NoFocusRead = $false` (cada um traz a sua janela pra frente antes de ler) e iguala o `$PollBgSec` ao `$PollSec` (no revezamento "não estava na frente" é o caso normal, e 60s deixariam o level passar de 350 pra 400). Reduzir as janelas não é alternativa: todas as coordenadas são calibradas em 1920x1009.
-- **Cada bot apaga da captura a janelinha dos outros**, não só a sua (`Outras-Janelinhas`, achadas pelo título e em cache de 30s). Com quatro na tela, a do slot 2 em cima do `$LevelBox` do cliente 1 viraria leitura de lixo. Mascarar é mais barato e mais seguro que posicionar as quatro fora de tudo que o bot lê — o inventário e o modal do mix nem têm posição fixa.
-- **Custo:** a tela alterna entre os clientes o tempo todo, e `SetForegroundWindow` rouba o foco do sistema inteiro. A máquina fica ruim de usar enquanto roda. O modo "jogo num monitor, você no outro" (`$NoFocusRead = $true`) só existe pro caso de **um** cliente.
-
 ## Nenhuma coordenada cravada
 
 O bot está migrando de coordenadas fixas para **auto-localização**: cada coisa se acha sozinha, por texto onde há texto. Foi o que tornou possível rodar o mesmo código no cliente desktop em `1920x1009` e na aba do navegador em `1024x720`.
