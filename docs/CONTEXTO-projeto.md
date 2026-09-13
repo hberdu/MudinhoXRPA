@@ -282,3 +282,9 @@ Rodada 13, 2026-09-01 10:25 — 1o MIX REAL funcionou, e revelou 2 bugs:
   `COMANDO INEXISTENTE ... linha 986: 'X'`, restaurei e voltou a passar. Rodar sempre antes de deixar a noite.
 - Licao ja conhecida, agora com ferramenta: **`sed` com regex frouxa em cima deste arquivo e perigoso.** Se o
   padrao nao casar exatamente, ele apaga o que nao devia e o estrago fica num ramo que so roda de madrugada.
+- **Bot PAUSADO parecia morto pro watchdog** (achado no mesmo log): `Pause-Gate` nao batia o heartbeat, entao
+  depois de 180s pausado o watchdog mataria o processo e relancaria — **desfazendo a pausa que voce pediu** pra
+  mixar no NPC. Agora o laco de pausa escreve o `heartbeat.txt` a cada ~5s. Escreve DIRETO no arquivo em vez de
+  chamar `Bater-Heartbeat`, porque aquela funcao tambem acumula TEMPO ATIVO e tempo parado no NPC nao pode
+  entrar no `pontos/h`; ao retomar, `$tickLast` e zerado pelo mesmo motivo. (Como o watchdog ainda nao esta
+  instalado, isso nunca chegou a acontecer de verdade — mas aconteceria na primeira pausa depois de instalar.)

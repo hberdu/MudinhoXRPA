@@ -296,7 +296,17 @@ function Check-Stop { if(-not $script:stop -and (Test-Path $StopFile)){ $script:
 function Pause-Gate {   # congela o bot enquanto PAUSADO e LIBERA o foco pra voce mixar joias no NPC; re-adquire ao retomar
   if(-not $script:paused){ return }
   $wasHeld = $script:focusHeld; if($wasHeld){ Release-Focus }   # solta o jogo pra voce interagir
-  while($script:paused -and -not $script:stop){ if($script:ui){ [System.Windows.Forms.Application]::DoEvents() }; Check-Stop; Start-Sleep -Milliseconds 200 }
+  # Pausado NAO e morto: sem bater o heartbeat, o watchdog ve 180s de silencio, mata o processo e relanca -
+  # desfazendo a pausa que voce pediu. Bate direto no arquivo (nao via Bater-Heartbeat) porque aquele acumula
+  # TEMPO ATIVO, e tempo parado no NPC nao pode entrar em pontos/h.
+  $i = 0
+  while($script:paused -and -not $script:stop){
+    if($script:ui){ [System.Windows.Forms.Application]::DoEvents() }
+    Check-Stop
+    if($i++ % 25 -eq 0){ try { (Get-Date).Ticks | Set-Content -Path $HeartbeatFile -Encoding ASCII } catch {} }   # ~5s, nao a cada 200ms
+    Start-Sleep -Milliseconds 200
+  }
+  $script:tickLast = Get-Date   # zera a base do tempo ativo: os minutos parados no NPC nao entram em pontos/h
   $script:ptsLastGain = Get-Date   # tempo pausado nao conta como "sem progresso" (senao o watchdog dispara na hora que voce retoma)
   if($wasHeld -and -not $script:stop){ Hold-Focus }   # retomou: re-traz o jogo pro bloco continuar
 }
