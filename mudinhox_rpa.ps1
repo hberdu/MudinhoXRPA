@@ -513,12 +513,16 @@ $HudOuroClaro = [System.Drawing.Color]::FromArgb(224,192,116) # brilho no topo d
 $HudTitulo    = [System.Drawing.Color]::FromArgb(150,120,58)  # titulo: bronze, nao ouro - e rotulo, nao informacao
 $HudCreme     = [System.Drawing.Color]::FromArgb(198,182,146) # numeros
 $HudLog       = [System.Drawing.Color]::FromArgb(122,110,84)  # log: apagado, pra nao competir com os numeros
-$HudSangue    = [System.Drawing.Color]::FromArgb(46,15,11)    # PARAR
-$HudSangueCl  = [System.Drawing.Color]::FromArgb(84,28,19)
-$HudOliva     = [System.Drawing.Color]::FromArgb(24,38,15)    # RETOMAR (pausado)
-$HudOlivaCl   = [System.Drawing.Color]::FromArgb(46,70,28)
-$HudPlaca     = [System.Drawing.Color]::FromArgb(20,16,10)    # placa de botao normal
-$HudPlacaCl   = [System.Drawing.Color]::FromArgb(42,34,20)
+# Os botoes sao os DOIS maiores blocos de cor da janela: um tom a mais neles pesa mais que em qualquer outro
+# lugar, e eram eles que ainda puxavam o olho depois da janela inteira escurecer. Ficam quase na cor da pedra -
+# o que os separa dela e o RELEVO (luz em cima, sombra embaixo), nao o brilho. O vermelho do PARAR fica so
+# insinuado; ele precisa ser reconhecivel, nao chamativo.
+$HudSangue    = [System.Drawing.Color]::FromArgb(28,10,7)     # PARAR
+$HudSangueCl  = [System.Drawing.Color]::FromArgb(52,18,12)
+$HudOliva     = [System.Drawing.Color]::FromArgb(14,22,9)     # RETOMAR (pausado)
+$HudOlivaCl   = [System.Drawing.Color]::FromArgb(28,44,17)
+$HudPlaca     = [System.Drawing.Color]::FromArgb(12,10,6)     # placa de botao normal
+$HudPlacaCl   = [System.Drawing.Color]::FromArgb(27,22,13)
 # Serifada: e o que mais separa "HUD de jogo" de "formulario do Windows". Palatino Linotype vem com o Windows;
 # se faltar, o WinForms cai numa serifada sozinho - que e exatamente o fallback que se quer.
 function Hud-Fonte([single]$tam,[string]$estilo='Bold'){ New-Object System.Drawing.Font('Palatino Linotype',$tam,[System.Drawing.FontStyle]$estilo) }
