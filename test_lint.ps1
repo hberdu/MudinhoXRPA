@@ -5,10 +5,12 @@
 # Este teste percorre a AST e cobra que todo comando chamado exista: funcao do proprio arquivo, cmdlet,
 # alias ou executavel. Roda em ~1s e pega o erro antes do bot rodar a noite toda.
 $erros = 0
-foreach($arq in @('mudinhox_rpa.ps1','watchdog.ps1')){
-  $caminho = Join-Path $PSScriptRoot $arq
+# Lista fixa nao serve: quando o watchdog.ps1 foi removido este teste passou a falhar por arquivo faltando.
+# Pega todo .ps1 da pasta menos os proprios testes (esses dot-sourceiam funcao extraida em runtime, que a AST nao ve).
+foreach($f in (Get-ChildItem $PSScriptRoot -Filter *.ps1 | Where-Object { $_.Name -notlike 'test_*' } | Sort-Object Name)){
+  $arq = $f.Name
   $err = $null
-  $ast = [System.Management.Automation.Language.Parser]::ParseFile($caminho, [ref]$null, [ref]$err)
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$err)
   if($err){ $err | % { "SINTAXE $arq linha $($_.Extent.StartLineNumber): $($_.Message)"; $erros++ }; continue }
 
   $definidas = @{}

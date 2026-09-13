@@ -1,5 +1,5 @@
 <#
-  MudinhoX RPA - loop: /s18 -> play (MU Helper) -> espera level 350 -> /resetar -> repete.
+  MudinhoX RPA - loop: /k37 -> play (MU Helper) -> espera level 350 -> /resetar -> repete.
   Stats: distribui de 5k em 5k ate 32767, na ordem energia, agilidade, forca, vitalidade. Atributos cheios -> /darmr e entra de novo.
   Level parado (miss infinito) -> religa o helper. De vez em quando faz algo "humano". Captcha: resolve sozinho (compara imagens);
   se nao tiver certeza, toast + beep e espera voce.
@@ -27,12 +27,14 @@ $PollNearSec   = 2       # perto do level alvo le a cada N seg: o level sobe ~15
 $PollNearFrom  = 0.82    # "perto" = a partir de N% do $TargetLevel
 $NoFocusRead   = $false  # $true: LE sem trazer o jogo pra frente (so pra jogo sempre visivel, ex 2o monitor). Comandos continuam exigindo foco
 $PollBgSec     = 60      # intervalo quando outra janela esta na frente (cada leitura rouba o foco por ~1s)
-$WarpCmd       = '/s18'   # comando de teleporte pro spot de farm normal (troque aqui se mudar de spot)
+$WarpCmd       = '/k37'   # comando de teleporte pro spot de farm normal (troque aqui se mudar de spot). Era /s18 (Stadium)
 $WarmupCmd     = '/losttower7'   # apos /darmr o personagem volta fraco em Lorencia: farma AQUI (Lost Tower 7) ate juntar os primeiros resets
 $WarmupResets  = 3           # quantos resets fazer no modo warmup (pos-darmr) antes de voltar ao spot normal ($WarpCmd). Era 10: medido, cada reset em Lost Tower custa ~220s contra 70-110s no Stadium, pelos mesmos ~6200 pontos - 10 resets la eram 73-78% do tempo do MR inteiro
 $WarmupTeste   = $false  # $true faz o bot TESTAR o spot normal logo apos o /darmr e pular o warmup se o char aguentar. Desligado a pedido do usuario, que prefere os $WarmupResets resets garantidos no Lost Tower antes de voltar pro /s18
 $WarmupTesteSec = 300    # o teste falha se o primeiro ciclo no spot normal passar disso (ciclo saudavel la e 70-110s; ate o Lost Tower fecha em ~220s). Estourou = char fraco demais, cai pro warmup
-$WarpMap       = 'stad'      # nome esperado do mapa do /s18 (Stadium), 4 primeiras letras. So conta "no spot" se o mapa bater com este
+$WarpMap       = 'kant'      # 4 primeiras letras do nome que o minimapa mostra no spot do $WarpCmd - o /k37 cai em KANTURU (confirmado no log de 12:01). VAZIO = o bot APRENDE no primeiro teleporte e grava no estado.txt.
+                             # Era 'stad' (Stadium, do /s18). Chutar o nome errado e pior que nao saber: o bot acha que nunca chegou e re-teleporta a noite toda.
+                             # Pra reaprender depois de trocar de spot: deixe vazio aqui, ou apague a linha warpMap= do estado.txt
 $WarmupMap     = 'lost'      # nome esperado do mapa do /losttower7 (Lost Tower). Evita aceitar mapa errado (ex AIDA) como spot
 $WarpWaitSec   = 9       # espera apos o teleporte (dar tempo do mapa trocar)
 $ResetWaitSec  = 8       # sem captcha e level ainda alto apos N seg -> reenvia /resetar. Era 15: no log 83 dos 179 /resetar se perderam (o REENVIO funciona quase sempre na hora), entao esperar 15s so jogava ~20 min fora
@@ -50,13 +52,19 @@ $StatStep      = 5000    # sobe de 5k em 5k: 5000, 10000, ... 30000 e por fim o 
 $StatMaxLeftover = 10000 # nao pode sobrar mais que isso de pontos nao distribuidos; acima disso o bot avisa em vez de continuar resetando
 $StatMinAvail  = 1       # menos que isso de pontos disponiveis: nao distribui (1 = sempre tenta; um atributo pode fechar o cap com poucos pontos)
 $StatMinCmd    = 1000    # piso do /a. Perigo REAL: /a com valor pequeno (<100) teleporta pra AIDA. Nao baixe.
-$StatMinOutros = 1000    # piso de /f /v /e. Era so precaucao (nunca testado). Baixe pra ~1 depois que -TestStatMin confirmar que o servidor aceita
+$StatMinOutros = 1000    # piso INICIAL de /f /v /e. Sempre foi PRECAUCAO NUNCA TESTADA - so o /a tem perigo real (abaixo de 100 teleporta pra AIDA). Ver $StatMinAprende logo abaixo
+$StatMinAprende = $true  # o bot testa UMA vez, com /f, se o servidor aceita valor abaixo do piso; aceitou -> $StatMinOutros cai pra $StatMinTeste e o veredito vai pro estado.txt (nunca retesta).
+                         # Motivo medido: 2109 das 3551 leituras de status do log nao renderam UM comando - os pontos chegam em blocos de ~600-900 e o piso de 1000 recusava tudo. Maior desperdicio do projeto.
+                         # $false = nao testa e ignora o que ja foi aprendido (volta a valer o valor fixo acima). O -TestStatMin continua servindo pra conferir na mao.
+$StatMinTeste  = 100     # valor minimo que o teste exige ter em maos (mandar /f 16 e concluir "servidor recusa" seria mentira: talvez ele so recuse ABAIXO de 100) e piso adotado se ele aceitar.
+                         # Nao precisa ser menor: fechar o cap exato ja ignora o piso (ver $piso em Plan-Stats), entao 100 destrava a distribuicao normal sem extrapolar o que foi provado
 $StatPertoDoMax = 30000  # com os 4 atributos acima disso, o piso por comando cai pra $StatMinPerto e o status e lido a cada $StatEveryNearSec
 $StatMinPerto  = 500     # piso reduzido na reta final: o que importa la e FECHAR o cap pro /darmr, nao economizar comando
 $StatMinAgi    = 100     # o /a NUNCA vai abaixo disso, nem na reta final: abaixo de 100 ele teleporta o char pra AIDA (perigo documentado, medido)
 $StatEveryNearSec = 5    # perto do maximo le o status a cada N seg (em vez de $StatEverySec): os ultimos pontos e que destravam o /darmr
 $StatEverySec  = 15      # distribui os pontos a cada N seg enquanto upa (alem de logo apos cada reset e antes de cada /resetar)
 $StatMaxSec    = 90      # teto: mesmo com o level parado (ou ilegivel), rele o status a cada N seg
+$StatCongeladoN = 2      # N leituras de status IDENTICAS (4 atributos + pontos) com o level andando entre elas = painel velho na tela -> destrava. Em 01/09 ficou 12 min com "752 pontos" congelados e so o $SemProgressoMin pegou
 $StatRoundSec  = 0.25    # espera entre uma rodada de distribuicao e a releitura do status (era 0.5; a releitura ja custa ~1s de captura+OCR, nao precisa de folga por cima)
 # Velocidade do teclado/chat. 40/40 e o valor testado que NAO embaralha - nao baixe (ja fez /s18 sair invalido e queimar 4 warps).
 $KeyHoldMs     = 40      # tempo segurando cada tecla ao digitar
@@ -70,12 +78,17 @@ $StatMaxValue  = 32767   # atributo cheio (cap real do servidor). /darmr SO func
 $StatStages    = @(1..([Math]::Floor(($StatMaxValue - 1) / $StatStep)) | % { $_ * $StatStep }) + $StatMaxValue   # 5000,10000,...,30000,32767
 $StatusKey     = 0x43    # C = janela de status
 $HotkeyHoldMs  = 150     # hotkey (C) segurada mais tempo que tecla de texto
-$LoginBtn      = @{ X = 960; Y = 940 }    # botao pra entrar com o personagem apos /darmr (centro embaixo). Antes disso procura o texto abaixo por OCR
+$LoginBtn      = @{ X = 960; YFromBottom = 69 }    # botao pra entrar com o personagem apos /darmr (centro embaixo). Antes disso procura o texto abaixo por OCR.
+                                          # Y medido a partir da BASE da area cliente (era Y=940 cravado, calibrado numa altura de 1009). Numa janela de outra altura o
+                                          # clique cego escorregava - e logo ali embaixo mora o "CRIAR NOVA CONTA". Todo o resto do layout ja e ancorado no topo ou na base.
 $LoginWords    = 'Entrar|Conectar|Iniciar|Jogar|Selecionar|Enter|Start|Login'   # tela de selecao de PERSONAGEM
 $LoginServerWords = '(?i)server vip gold'   # tela de selecao de SERVIDOR: regex do botao a clicar (ex 'Server Principal'). Vazio = nao clica, avisa
 $LoginDangerWords = '(?i)(criar nova conta|create account|^sair$|delete)'   # se isso esta na tela, NUNCA clicar em coordenada chutada
 $ChatBox       = @{ X1 = 870; X2 = 1130; YFromBottomMin = 80; YFromBottomMax = 130 }   # bordas vermelhas da caixa de chat aberta. FAIXA, nao linha fixa: a caixa desloca alguns px conforme o layout
-$StallSec      = 40      # no spot com level parado N seg (miss infinito) -> pausa e religa o helper. 75 gastava tempo demais so PRA DETECTAR (disparou 5x numa noite)
+# Miss infinito. A METRICA DO PROPRIO BOT aponta 'stall' como 23-27% de TODO o tempo (113 disparos numa sessao),
+# e a maior parte disso e latencia de DETECCAO, nao a recuperacao. Por isso duas condicoes em vez de um relogio so:
+$StallReads    = 3       # N LEITURAS seguidas com o level identico. E o sinal forte, e imune a OCR: uma leitura que falhou nao entra na conta (antes ela empurrava o relogio como se o level estivesse parado)
+$StallMinSec   = 15      # ...e pelo menos N seg. Piso de seguranca pra logo apos o reset, quando o char esta fraco e demora mesmo pra subir um level. Era 40 fixo (antes 75): 40s x 113 disparos = ~75 min so esperando pra perceber
 $CityWords     = 'lorencia|noria|devias|elbeland|lorenmarket|karutan|elveland'   # mapas-cidade onde NAO se farma (personagem cai aqui apos reset). Qualquer outro mapa = spot de farm (ex Stadium do /s18)
 # teleporte confirmado quando o mapa e um spot de farm (nao-cidade). $farmMap guarda o ultimo spot.
 $MapLabel      = @{ X = 1690; Y = 68; W = 230; H = 30 }   # rotulo do minimapa
@@ -90,8 +103,8 @@ $HeartbeatFile = Join-Path $PSScriptRoot 'heartbeat.txt'   # o bot bate aqui a c
 $AtivoGapMax   = 120     # buraco maior que N seg entre voltas = o bot esteve PARADO; nao conta como tempo ativo nas metricas
 $HeartbeatVivoSec = 180  # heartbeat mais novo que isso = tem bot vivo (impede duas instancias no mesmo jogo)
 $SemProgressoMax = 3     # apos N ciclos seguidos sem progresso, o bot REINICIA A SI MESMO (ja elevado: nao pede UAC de novo)
-$AutoWatchdog  = $true   # instala a Tarefa Agendada de vigia no start (o bot ja roda elevado; sem ela, morrer = ficar parado ate voce ver)
-$WatchdogTask  = 'MudinhoX RPA Watchdog'
+$AutoRestart   = $true   # $false = nunca relanca a si mesmo; sem progresso $SemProgressoMax vezes ele so PARA. Unico caminho que ainda cria processo sozinho - e so com o bot rodando (fechar a janela ja o desliga antes)
+$WatchdogTask  = 'MudinhoX RPA Watchdog'   # Tarefa Agendada do watchdog ANTIGO. Ele foi removido (nao queremos nada rodando depois que voce fecha); isto so serve pra APAGAR a tarefa que ficou instalada em quem ja rodou a versao velha
 $EstadoFile    = Join-Path $PSScriptRoot 'estado.txt'   # fase + contagem de warmup, pra sobreviver a reinicio do bot
 $LogMaxMB      = 5       # rpa.log maior que isso no start vira .bak (a pasta sincroniza no OneDrive)
 $LogKeepBaks   = 5       # quantos .bak manter
@@ -278,17 +291,33 @@ try {
   Get-ChildItem $PSScriptRoot -Filter 'rpa_*.log.bak' -ErrorAction SilentlyContinue | sort LastWriteTime -Descending | select -Skip $LogKeepBaks | Remove-Item -Force -ErrorAction SilentlyContinue
 } catch {}
 try { $script:logW = New-Object System.IO.StreamWriter([System.IO.FileStream]::new($LogFile, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)); $script:logW.AutoFlush = $true } catch {}
+# Contadores DA SESSAO (deste processo). Os $script:resets/$script:mrs nao servem pra isso: o primeiro e zerado
+# a cada /darmr (mede o MR atual) e o segundo vem do estado.txt, acumulado da vida inteira do personagem.
+$script:resetsSessao = 0; $script:mrsSessao = 0
+$script:ptsTotal = 4 * $StatMaxValue   # 131068: os 4 atributos do zero ao cap. Denominador da barra
+$script:ptsNeeded = -1   # -1 = status ainda nao lido. Precisa existir ANTES do primeiro Log: sem isto $null -lt 0 e falso e a barra abriria em 100%
+function Progresso-MR {   # fracao 0..1 do caminho ate o proximo /darmr. 0 enquanto o status nao foi lido ($ptsNeeded = -1)
+  if($script:ptsNeeded -lt 0 -or $script:ptsTotal -le 0){ return 0.0 }
+  [Math]::Max(0.0, [Math]::Min(1.0, ($script:ptsTotal - $script:ptsNeeded) / $script:ptsTotal))
+}
 function Log($m){
   $line = "[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $m; Write-Host $line
   if($script:logW){ try { $script:logW.WriteLine($line) } catch {} } else { try { Add-Content -Path $LogFile -Value $line -Encoding UTF8 } catch {} }
   if($script:ui -and -not $script:ui.IsDisposed){
     $script:status.Text = $m
+    # Painel atualizado aqui e nao num tick proprio: o Log ja roda a cada evento do bot e ja faz o DoEvents,
+    # entao a barra nunca fica velha e nao precisa de mais nada agendado.
+    $pct = Progresso-MR
+    $script:barra.Value = [int]($pct * $script:barra.Maximum)
+    $script:contador.Text = ("sessao: {0} resets | {1} MR    -    /darmr: {2:0.0}%  ({3} pontos faltando)" -f `
+      $script:resetsSessao, $script:mrsSessao, ($pct * 100), $(if($script:ptsNeeded -ge 0){ $script:ptsNeeded } else { '?' }))
     # o TextBox crescia sem limite: rodando dias seguidos a janela fica pesada. Corta pela metade quando passa do teto.
     if($script:logBox.TextLength -gt $UiLogMaxChars){ $script:logBox.Text = $script:logBox.Text.Substring($script:logBox.TextLength - [int]($UiLogMaxChars/2)) }
     $script:logBox.AppendText("$line`r`n"); [System.Windows.Forms.Application]::DoEvents()
   }
 }
 $script:ativoSeg = 0.0; $script:tickLast = $null
+$script:pausaSeg = 0.0   # segundos que VOCE deixou o bot pausado dentro do ciclo atual; sai da duracao do ciclo (ver "reset feito")
 function Bater-Heartbeat {   # prova de vida pro watchdog E acumulador de TEMPO ATIVO
   # pontos/h precisa dividir pelo tempo em que o bot REALMENTE rodou. Usando relogio de parede, as 6h que ele
   # passou travado em 01/09 entraram como tempo produtivo e afundaram a taxa (19527 pts/h contra 147116 reais).
@@ -304,9 +333,20 @@ function Heartbeat-Fresco {   # $true se OUTRA instancia bateu o heartbeat ha po
   if(-not (Test-Path $HeartbeatFile)){ return $false }
   try { $t = [datetime]::new([long](Get-Content $HeartbeatFile -Raw).Trim()); return ((Get-Date) - $t).TotalSeconds -lt $HeartbeatVivoSec } catch { return $false }
 }
-function Check-Stop { if(-not $script:stop -and (Test-Path $StopFile)){ $script:stop = $true; Remove-Item $StopFile -ErrorAction SilentlyContinue }; if($script:stop){ Log "parado pelo usuario"; Remove-Item $HeartbeatFile -ErrorAction SilentlyContinue; if($script:logW){ $script:logW.Dispose() }; if($script:ui){ $script:ui.Dispose() }; exit } }
+$script:stopReason = 'usuario'   # POR QUE parou. O log dizia "parado pelo usuario" ate quando era erro ou reinicio proprio, e ai nao dava pra saber o que tinha acontecido de madrugada
+function Check-Stop {
+  if(-not $script:stop -and (Test-Path $StopFile)){ $script:stop = $true; $script:stopReason = 'stop.flag' }
+  if(-not $script:stop){ return }
+  Log "parado ($script:stopReason)"
+  # Consome o flag e o heartbeat: parou, acabou. Nao existe mais watchdog lendo isto - nada relanca o bot depois
+  # que ele sai, e um flag esquecido no disco so atrapalharia a proxima abertura.
+  Remove-Item $StopFile,$HeartbeatFile -ErrorAction SilentlyContinue
+  if($script:logW){ $script:logW.Dispose() }; if($script:ui){ $script:ui.Dispose() }
+  exit
+}
 function Pause-Gate {   # congela o bot enquanto PAUSADO e LIBERA o foco pra voce mixar joias no NPC; re-adquire ao retomar
   if(-not $script:paused){ return }
+  $pausouEm = Get-Date
   $wasHeld = $script:focusHeld; if($wasHeld){ Release-Focus }   # solta o jogo pra voce interagir
   # Pausado NAO e morto: sem bater o heartbeat, o watchdog ve 180s de silencio, mata o processo e relanca -
   # desfazendo a pausa que voce pediu. Bate direto no arquivo (nao via Bater-Heartbeat) porque aquele acumula
@@ -320,6 +360,9 @@ function Pause-Gate {   # congela o bot enquanto PAUSADO e LIBERA o foco pra voc
   }
   $script:tickLast = Get-Date   # zera a base do tempo ativo: os minutos parados no NPC nao entram em pontos/h
   $script:ptsLastGain = Get-Date   # tempo pausado nao conta como "sem progresso" (senao o watchdog dispara na hora que voce retoma)
+  # ...e nem na DURACAO DO CICLO. Sem isto os 3 piores ciclos da sessao passada (1058s, 996s, 977s = 8% do tempo)
+  # eram voce pausado no NPC, entravam sem etiqueta na mediana e a metrica culpava um "?" que nao existe.
+  $script:pausaSeg += ((Get-Date) - $pausouEm).TotalSeconds
   if($wasHeld -and -not $script:stop){ Hold-Focus }   # retomou: re-traz o jogo pro bloco continuar
 }
 function Wait([double]$sec){   # Start-Sleep que mantem a janelinha viva e obedece PARAR/PAUSAR
@@ -334,23 +377,28 @@ function Wait([double]$sec){   # Start-Sleep que mantem a janelinha viva e obede
 }
 function Show-Ui {
   $f = New-Object System.Windows.Forms.Form
-  $f.Text = 'MudinhoX RPA'; $f.Width = 400; $f.Height = 330; $f.TopMost = $true; $f.FormBorderStyle = 'FixedToolWindow'
-  $f.StartPosition = 'Manual'; $f.Location = New-Object System.Drawing.Point(10, ([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height - 310))   # canto INFERIOR ESQUERDO: nao cobre play(topo-esq), minimapa(topo-dir), inventario(dir) nem chat/level(centro-baixo)
+  $f.Text = 'MudinhoX RPA'; $f.Width = 400; $f.Height = 380; $f.TopMost = $true; $f.FormBorderStyle = 'FixedToolWindow'
+  $f.StartPosition = 'Manual'; $f.Location = New-Object System.Drawing.Point(10, ([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height - 355))   # canto INFERIOR ESQUERDO: nao cobre play(topo-esq), minimapa(topo-dir), inventario(dir) nem chat/level(centro-baixo)
   $script:status = New-Object System.Windows.Forms.Label; $script:status.SetBounds(10,12,160,22); $script:status.Text = 'iniciando...'
   $script:btnPause = New-Object System.Windows.Forms.Button; $script:btnPause.SetBounds(175,6,100,28); $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'
   $btn = New-Object System.Windows.Forms.Button; $btn.SetBounds(280,6,100,28); $btn.Text = 'PARAR'; $btn.BackColor = 'IndianRed'
   # linha 2: comando manual de fase
-  $script:btnWarmup = New-Object System.Windows.Forms.Button; $script:btnWarmup.SetBounds(10,40,122,32);  $script:btnWarmup.Text = "Warmup LT7`n(10 resets)"; $script:btnWarmup.BackColor = 'SteelBlue'
-  $script:btnNormal = New-Object System.Windows.Forms.Button; $script:btnNormal.SetBounds(137,40,122,32); $script:btnNormal.Text = "Normal /s18`n(ate MT)"; $script:btnNormal.BackColor = 'MediumSeaGreen'
+  $script:btnWarmup = New-Object System.Windows.Forms.Button; $script:btnWarmup.SetBounds(10,40,122,32);  $script:btnWarmup.Text = "Warmup LT7`n($WarmupResets resets)"; $script:btnWarmup.BackColor = 'SteelBlue'
+  $script:btnNormal = New-Object System.Windows.Forms.Button; $script:btnNormal.SetBounds(137,40,122,32); $script:btnNormal.Text = "Normal $WarpCmd`n(ate MT)"; $script:btnNormal.BackColor = 'MediumSeaGreen'
   $script:btnMR     = New-Object System.Windows.Forms.Button; $script:btnMR.SetBounds(264,40,120,32);     $script:btnMR.Text = "Atribuir tudo`n+ MR"; $script:btnMR.BackColor = 'MediumPurple'
   $script:btnMix    = New-Object System.Windows.Forms.Button; $script:btnMix.SetBounds(10,76,122,26);    $script:btnMix.Text = 'MODO JOIAS'; $script:btnMix.BackColor = 'DarkCyan'
   $script:btnGold   = New-Object System.Windows.Forms.Button; $script:btnGold.SetBounds(137,76,247,26); $script:btnGold.Text = "MODO DRAGOES ($GoldCmd)"; $script:btnGold.BackColor = 'Teal'   # NAO usar tom dourado: o -TestGold roda em processo separado (nao mascara a UI) e detectava o proprio botao como dragao
   $script:btnMixJa = New-Object System.Windows.Forms.Button; $script:btnMixJa.SetBounds(10,106,374,26); $script:btnMixJa.Text = "MIXAR AGORA (nao espera encher)"; $script:btnMixJa.BackColor = 'SteelBlue'
-  $script:logBox = New-Object System.Windows.Forms.TextBox; $script:logBox.SetBounds(10,138,375,150); $script:logBox.Multiline = $true; $script:logBox.ReadOnly = $true; $script:logBox.ScrollBars = 'Vertical'
+  # Barra = caminho ate o proximo /darmr (os 4 atributos do zero ao cap), NAO "quantos resets faltam": reset e so
+  # o meio de juntar pontos, e quantos cabem num MR muda com o alvo, com o spot e com a fase. Pontos e o que conta.
+  $script:barra = New-Object System.Windows.Forms.ProgressBar
+  $script:barra.SetBounds(10,138,374,18); $script:barra.Minimum = 0; $script:barra.Maximum = 1000   # milesimos: com 100 passos pra 131068 pontos a barra parecia travada
+  $script:contador = New-Object System.Windows.Forms.Label; $script:contador.SetBounds(10,159,374,18); $script:contador.Text = 'sessao: 0 resets | 0 MR'
+  $script:logBox = New-Object System.Windows.Forms.TextBox; $script:logBox.SetBounds(10,181,374,150); $script:logBox.Multiline = $true; $script:logBox.ReadOnly = $true; $script:logBox.ScrollBars = 'Vertical'
   $script:btnPause.Add_Click({ $script:paused = -not $script:paused; $script:btnPause.Text = $(if($script:paused){ 'RETOMAR' } else { 'PAUSAR' }); $script:btnPause.BackColor = $(if($script:paused){ 'ForestGreen' } else { 'Goldenrod' }); Log $(if($script:paused){ 'PAUSADO pelo usuario (mixe as joias; clique RETOMAR pra voltar)' } else { 'retomado pelo usuario' }) })
-  $btn.Add_Click({ $script:stop = $true })
+  $btn.Add_Click({ $script:stopReason = 'usuario'; $script:stop = $true })
   $script:btnWarmup.Add_Click({ $script:phase = 'warmup'; $script:warmupCount = 0; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Save-Estado; Log "[BOTAO] modo WARMUP: /losttower7 ate $WarmupResets resets" })
-  $script:btnNormal.Add_Click({ $script:modo = 'reset'; $script:btnMix.Text = 'MODO JOIAS'; $script:btnMix.BackColor = 'DarkCyan'; $script:btnGold.Text = "MODO DRAGOES ($GoldCmd)"; $script:btnGold.BackColor = 'Teal'; $script:phase = 'normal'; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Save-Estado; Log "[BOTAO] modo NORMAL: /s18 ate os atributos encherem" })
+  $script:btnNormal.Add_Click({ $script:modo = 'reset'; $script:btnMix.Text = 'MODO JOIAS'; $script:btnMix.BackColor = 'DarkCyan'; $script:btnGold.Text = "MODO DRAGOES ($GoldCmd)"; $script:btnGold.BackColor = 'Teal'; $script:phase = 'normal'; $script:forceMR = $false; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Save-Estado; Log "[BOTAO] modo NORMAL: $WarpCmd ate os atributos encherem" })
   $script:btnMR.Add_Click({ $script:forceMR = $true; $script:restartCycle = $true; $script:paused = $false; $script:btnPause.Text = 'PAUSAR'; $script:btnPause.BackColor = 'Goldenrod'; Log "[BOTAO] ATRIBUIR TUDO + MR" })
   $script:btnMix.Add_Click({
     $script:modo = if($script:modo -eq 'joias'){ 'reset' } else { 'joias' }
@@ -377,28 +425,24 @@ function Show-Ui {
     if($script:modo -ne 'joias'){ $script:restartCycle = $true }   # fora do modo joias, corta o ciclo atual pra ir mixar
     Log "[BOTAO] MIXAR AGORA: indo pro $MixCmd no proximo tick"
   })
-  $f.Add_FormClosing({ $script:stop = $true })
-  $f.Controls.AddRange(@($script:status,$script:btnPause,$btn,$script:btnWarmup,$script:btnNormal,$script:btnMR,$script:btnMix,$script:btnGold,$script:btnMixJa,$script:logBox)); $f.Show(); $script:ui = $f
+  $f.Add_FormClosing({ $script:stopReason = 'janela fechada'; $script:stop = $true })
+  $f.Controls.AddRange(@($script:status,$script:btnPause,$btn,$script:btnWarmup,$script:btnNormal,$script:btnMR,$script:btnMix,$script:btnGold,$script:btnMixJa,$script:barra,$script:contador,$script:logBox)); $f.Show(); $script:ui = $f
 }
 
 # ---------- janela do jogo / foco ----------
 function Is-Admin { ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) }
-function Garantir-Watchdog {
-  # O bot ja roda ELEVADO aqui (se elevou sozinho no start), entao pode criar a Tarefa Agendada - que e o unico
-  # jeito de ele voltar sozinho depois de morrer. Existia o instalar-watchdog.cmd, mas dependia de voce lembrar
-  # de rodar como admin: nao foi rodado, e o log tem 6h de silencio (03:27 -> 09:09) mais 4 quedas pelo `X`.
-  # Pra desligar: $AutoWatchdog = $false aqui em cima, ou   schtasks /delete /tn "MudinhoX RPA Watchdog" /f
-  if(-not $AutoWatchdog -or -not (Is-Admin)){ return }
-  $wd = Join-Path $PSScriptRoot 'watchdog.ps1'
-  if(-not (Test-Path $wd)){ return }
+function Limpar-Watchdog {
+  # O watchdog FOI REMOVIDO. Ele era uma Tarefa Agendada de 3 em 3 min que relancava o bot - e relancava tambem
+  # o que voce tinha mandado parar, abrindo PowerShell sozinho a madrugada inteira. Nada deste projeto pode
+  # continuar rodando depois que voce fecha a janela.
+  # Isto aqui so desinstala a tarefa que ficou pra tras de quem ja rodou a versao antiga. O bot ja esta elevado
+  # no start, entao apaga sem pedir UAC. Some do codigo quando nao houver mais maquina com a tarefa instalada.
+  if(-not (Is-Admin)){ return }
   $null = schtasks /query /tn "$WatchdogTask" 2>&1
-  if($LASTEXITCODE -eq 0){ return }   # ja instalada
-  $cmd = "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \`"$wd\`""
-  $out = schtasks /create /tn "$WatchdogTask" /tr "$cmd" /sc minute /mo 3 /rl HIGHEST /f 2>&1
-  if($LASTEXITCODE -eq 0){
-    Log "watchdog instalado (tarefa '$WatchdogTask', a cada 3 min). Ele relanca o bot se ele morrer ou travar."
-    Notify "MudinhoX" "Instalei o watchdog (Tarefa Agendada a cada 3 min). Pra tirar: schtasks /delete /tn `"$WatchdogTask`" /f"
-  } else { Log "nao consegui instalar o watchdog: $out" }
+  if($LASTEXITCODE -ne 0){ return }   # nao existe: nada a fazer
+  $out = schtasks /delete /tn "$WatchdogTask" /f 2>&1
+  if($LASTEXITCODE -eq 0){ Log "removi a Tarefa Agendada '$WatchdogTask' (watchdog antigo): nada mais relanca o bot sozinho" }
+  else { Log "nao consegui remover a tarefa do watchdog antigo: $out" }
 }
 function Game-IsAdmin { -not (Get-Process mudx -ErrorAction SilentlyContinue | select -First 1).Path }   # processo elevado nao expoe o Path pra processo comum
 $script:gameH = [IntPtr]::Zero
@@ -608,6 +652,13 @@ function Save-Estado {   # fase/warmup E as metricas do MR. Medir um MR leva hor
       # "Cannot index into a null array" - o try/catch do Save-Estado engolia e o estado.txt inteiro nao era escrito.
       "tuneRes=$(@(@($script:tuneRes) | ? { $_ } | % { "$($_[0]):$($_[1])" }) -join '|')"
       "minReset=$($script:LevelMinReset)"
+      # Nome do mapa do spot, aprendido no primeiro teleporte quando o $WarpMap do CONFIG esta vazio.
+      # Junto com o comando: se voce trocar o $WarpCmd, o nome antigo nao pode continuar valendo.
+      "warpCmd=$WarpCmd"
+      "warpMap=$WarpMap"
+      # Veredito do servidor sobre comando abaixo do piso (0 nao perguntei / 1 aceita / -1 recusa). E uma
+      # pergunta que se faz UMA vez na vida: sem gravar, cada restart gastaria um /f e uma leitura de status.
+      "statMinOk=$($script:statMinOk)"
     ) | Set-Content -Path $EstadoFile -Encoding ASCII
   } catch {}
 }
@@ -646,6 +697,15 @@ function Load-Estado {
       if($kv.tuneAtivo0){ $script:tuneAtivo0 = [double]$kv.tuneAtivo0 }
       if($kv.tuneRes){ $script:tuneRes = @($kv.tuneRes -split '\|' | ? { $_ -match '^(\d+):(-?\d+)$' } | % { ,@([int]$Matches[1], [int]$Matches[2]) }) }
       if($kv.minReset){ $script:LevelMinReset = [int]$kv.minReset }
+      # Mapa aprendido: so vale se o CONFIG deixou vazio (nome fixo no CONFIG sempre manda) E se foi aprendido
+      # pro comando de warp ATUAL - trocou o $WarpCmd, o nome antigo nao serve e ele aprende de novo.
+      if($kv.warpMap -and -not $WarpMap -and $kv.warpCmd -eq $WarpCmd){ $script:WarpMap = $kv.warpMap; Log "mapa do spot ($WarpCmd) retomado do estado.txt: '$WarpMap'" }
+      # Piso de /f /v /e: nao guarda o VALOR, guarda o veredito - assim mexer no $StatMinTeste do CONFIG vale na hora
+      # e desligar o $StatMinAprende volta pro piso fixo sem precisar editar o estado.txt.
+      if($StatMinAprende -and $kv.statMinOk){
+        $script:statMinOk = [int]$kv.statMinOk
+        if($script:statMinOk -eq 1){ $script:StatMinOutros = $StatMinTeste; Log "piso de /f /v /e: o servidor ja tinha aceitado abaixo de 1000, usando $StatMinTeste" }
+      }
     }
     Log "estado retomado: fase $($script:phase), warmup $($script:warmupCount)/$WarmupResets, $($script:resets) resets e $($script:ptsSent) pontos acumulados neste MR"
   } catch { Log "estado.txt ilegivel, comecando do zero: $_" }
@@ -855,6 +915,19 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
   for($guard = 0; $guard -lt 8 -and -not $script:stop; $guard++){   # cada volta = 1 leitura de status + o plano inteiro; 8 volta e sobra
     $st = Read-Status
     if(-not $st){ Tag-Ciclo 'status'; Log "stats: nao consegui ler o status"; return }
+    # Painel congelado: os 4 atributos E os pontos identicos a leitura anterior, mas o LEVEL andou no meio.
+    # Se o char esta upando, ponto TEM que entrar - leitura igual significa frame velho (o C nao reabriu, ou o OCR
+    # pegou o painel que ficou na tela). Em 01/09 foram 12 min com "752 pontos" parados e o unico que pegou foi o
+    # $SemProgressoMin, 12 min depois. So confere na 1a leitura da chamada: as de dentro do loop tem o mesmo level.
+    if($guard -eq 0){
+      $fp = "$($st.For)/$($st.Agi)/$($st.Vit)/$($st.Ene)/$($st.Pts)"
+      if($fp -eq $script:stFp -and $script:lvlPrev -ne $script:stFpLvl){ $script:stFpN++ } else { $script:stFpN = 0 }
+      $script:stFp = $fp; $script:stFpLvl = $script:lvlPrev
+      if($script:stFpN -ge $StatCongeladoN){
+        Log "stats: painel congelado ($fp) em $($script:stFpN + 1) leituras seguidas com o level andando - destravando"
+        Tag-Ciclo 'congelado'; $script:stFpN = 0; Unstick-Tudo; return
+      }
+    }
     $script:ptsNeeded = Points-Needed $st
     if($script:ptsNeeded -le 0){ if($script:modo -eq 'joias'){ Log "stats: atributos no maximo, mas o modo JOIAS nao da /darmr"; return }; if($script:phase -eq 'warmup'){ Log "stats: atributos no maximo durante o warmup, seguindo sem /darmr"; return }; Log "stats: F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) -> TODOS no maximo, /darmr"; Master-Reset; return }
     $script:pertoDoMax = Perto-Do-Max $st   # liga a leitura rapida: perto do cap sao os ultimos pontos que destravam o /darmr
@@ -882,7 +955,33 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
           Notify-Once 'stat-encalhado' "MudinhoX" "Trava do /darmr: $det. Abra o status (C) e clique no '+' desse atributo - o chat nao fecha vao tao pequeno."
         } else { Notify-Once 'stat-parado' "MudinhoX" "$p pontos parados e nao consigo distribuir. Da uma olhada." }
       }
-      else { Log "stats: nada a distribuir agora ($p pontos; minimo $StatMinCmd por comando)" }
+      else {
+        # 2109 das 3551 leituras do log morreram exatamente aqui: os pontos chegam em blocos de ~600-900 e o piso
+        # de 1000 recusava todos. Esse piso nunca foi testado contra o servidor - so o /a tem perigo documentado.
+        # Em vez de depender de um -TestStatMin manual (que nunca foi rodado), o bot pergunta ao servidor UMA vez,
+        # com /f, e grava o veredito. O teste so vale com $StatMinTeste pontos ou mais em maos: mandar /f 16 e
+        # concluir "recusa" seria mentira, o servidor pode recusar so abaixo de 100.
+        $testou = $false
+        if($StatMinAprende -and $script:statMinOk -eq 0 -and $p -ge $StatMinTeste -and ([int]$st.For + $p) -le $StatMaxValue){
+          $piso = $StatMinOutros
+          Log "stats: perguntando ao servidor UMA vez se aceita abaixo do piso (/f $p, piso $piso). Veredito vai pro estado.txt."
+          if(Send-Chat "/f $p"){
+            Wait 3
+            $d = Read-Status
+            if($d -and ([int]$d.For - [int]$st.For) -eq $p){
+              $script:StatMinOutros = $StatMinTeste; $script:statMinOk = 1; $testou = $true
+              $script:ptsSent += $p; $script:ptsLastGain = Get-Date; $script:semProgresso = 0
+              Log "stats: servidor ACEITOU /f $p -> piso de /f /v /e cai de $piso pra $StatMinTeste"
+            } elseif($d){
+              $script:statMinOk = -1; $testou = $true
+              Log "stats: servidor RECUSOU /f $p (Forca $($st.For) -> $($d.For)) -> piso $piso mantido, nao pergunto de novo"
+            }
+            if($testou){ Save-Estado }
+          }
+        }
+        if($testou){ continue }   # com o veredito na mao, refaz o plano ja com o piso novo
+        Log "stats: nada a distribuir agora ($p pontos; minimo $StatMinOutros por comando)"
+      }
       $script:statVazias++   # leitura que nao rendeu comando: da proxima vez espera mais (ver Tick-Stats)
       return
     }
@@ -899,6 +998,8 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
 # de novo so custa: rouba o foco, gasta 2-3s e loga "0 a distribuir". No log foram 84 leituras assim.
 # O teto de tempo continua existindo porque o level as vezes nao e legivel (OCR) e nao da pra confiar so nele.
 $script:statLvlLast = -1; $script:statMax = Get-Date; $script:pertoDoMax = $false; $script:statVazias = 0
+$script:stFp = ''; $script:stFpLvl = $null; $script:stFpN = 0   # assinatura da ultima leitura de status (detector de painel congelado)
+$script:statMinOk = 0   # veredito do servidor sobre comando abaixo do piso: 0 = ainda nao perguntei, 1 = aceita, -1 = recusa. Vai pro estado.txt: a pergunta e feita UMA vez na vida
 function Tick-Stats {   # so roda enquanto upa (nunca durante captcha)
   if((Get-Date) -lt $script:statDue){ return }
   # Na reta final o portao do level nao vale: com os 4 atributos perto do cap, o level pode nem subir mais e sao
@@ -918,18 +1019,26 @@ function Tick-Stats {   # so roda enquanto upa (nunca durante captcha)
   Distribute-Points
   $script:statDue = (Get-Date).AddSeconds((Jit $intervalo))
 }
-$script:lvlPrev = $null; $script:lvlChangedAt = Get-Date; $script:lvlLogged = $null
+$script:lvlPrev = $null; $script:lvlChangedAt = Get-Date; $script:lvlLogged = $null; $script:lvlSame = 0   # lvlSame = leituras BEM-SUCEDIDAS seguidas com o level identico
 function Check-Progress([int]$lvl, $img){   # level parado: se saiu do spot, re-teleporta (retorna $false p/ reiniciar o ciclo); se esta no spot parado, religa helper (miss infinito). $true = segue normal
-  if($lvl -ne $script:lvlPrev){ $script:lvlPrev = $lvl; $script:lvlChangedAt = Get-Date; return $true }
-  if(((Get-Date) - $script:lvlChangedAt).TotalSeconds -lt $StallSec){ return $true }
-  $script:lvlChangedAt = Get-Date
-  if(-not (In-Farm $img)){ Log "level parado e fora do spot: re-teleportando"; if(Warp-To-Spot){ Start-Helper }; return $false }
-  Log "level parado ha $StallSec s no spot (miss infinito): ESC + pausa + anda + despausa"
+  if($lvl -ne $script:lvlPrev){ $script:lvlPrev = $lvl; $script:lvlChangedAt = Get-Date; $script:lvlSame = 0; return $true }
+  $script:lvlSame++
+  # DUAS condicoes, nao um relogio so. As leituras iguais sao o sinal forte e nao mentem: leitura que o OCR nao
+  # conseguiu nem chega aqui, enquanto o relogio sozinho corria durante elas e acusava "parado" sem prova.
+  # Os segundos sao o piso pra nao disparar cedo logo apos o reset, com o char fraco.
+  $parado = [int]((Get-Date) - $script:lvlChangedAt).TotalSeconds
+  if($script:lvlSame -lt $StallReads -or $parado -lt $StallMinSec){ return $true }
+  $script:lvlChangedAt = Get-Date; $script:lvlSame = 0
+  # $null = : Start-Helper DEVOLVE $true/$false, e sem descartar isso a funcao saia com DOIS valores. O chamador
+  # faz `if(-not (Check-Progress ...))` e um array de 2 itens e sempre "verdadeiro" em PowerShell: o $false daqui
+  # era engolido e o ciclo NUNCA reiniciava depois de re-teleportar. Achado pelo self-check do test_ciclos.
+  if(-not (In-Farm $img)){ Log "level parado e fora do spot: re-teleportando"; if(Warp-To-Spot){ $null = Start-Helper }; return $false }
+  Log "level parado ha ${parado}s no spot ($StallReads leituras iguais, miss infinito): ESC + pausa + anda + despausa"
   Tag-Ciclo 'stall'
   Close-Popup   # se o que travou foi uma janela/modal aberta por acidente, andar nao resolve - ESC resolve
   $null = Click-Client $PlayBtn.X $PlayBtn.Y; Wait 2   # pausa o helper
   Walk-Forward                                          # anda um pouco (desbuga o miss infinito)
-  Start-Helper; $true                                   # religa o ataque
+  $null = Start-Helper; $true                           # religa o ataque (descarta o retorno dele: quem responde aqui e o $true)
 }
 $script:humanDue = (Get-Date).AddSeconds((Get-Random -Minimum $HumanMinSec -Maximum $HumanMaxSec))
 function Tick-Human {   # de vez em quando, em ordem aleatoria, faz algo que um humano faria (pra nao parecer bot 100% do tempo)
@@ -1013,9 +1122,12 @@ function Read-Status {   # abre a janela de status (C), le os 4 atributos + pont
         $img.Dispose(); Start-Sleep -Milliseconds 400; $img = Capture-Raw; $words = Ocr-Status $img
         $v2 = Parse-Attrs $words; foreach($kk in $v2.Keys){ if(-not $v.ContainsKey($kk)){ $v[$kk] = $v2[$kk] } }; if($v2.ContainsKey('Pts')){ $v['Pts'] = $v2['Pts'] } else { $v['Pts'] = Get-Points $words }
       }
-      New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null; $img.Save((Join-Path $CaptchaShotDir 'status_ultimo.png')) | Out-Null; $img.Dispose()
-      Press-Vk $StatusKey $HotkeyHoldMs; Start-Sleep -Milliseconds 300; $fechou = $true   # fecha
       $miss = @('For','Agi','Vit','Ene') | ? { -not $v.ContainsKey($_) }
+      # O print so serve quando a leitura FALHA. Antes ia pro disco em TODA leitura: ~3500 por sessao, 3.8MB
+      # cada, numa pasta dentro do OneDrive - uns 13GB de re-upload por noite pra reescrever sempre o mesmo nome.
+      if($miss){ New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null; $img.Save((Join-Path $CaptchaShotDir 'status_ultimo.png')) | Out-Null }
+      $img.Dispose()
+      Press-Vk $StatusKey $HotkeyHoldMs; Start-Sleep -Milliseconds 300; $fechou = $true   # fecha
       if($miss){ Log ("status: nao li " + ($miss -join ',') + " (li " + (($v.GetEnumerator() | % { "$($_.Key)=$($_.Value)" }) -join ',') + "). Print em captcha\status_ultimo.png") } else { $out = $v }
       break
     }
@@ -1060,6 +1172,7 @@ function Enter-Game([string]$motivo){   # clica pra entrar com o personagem ate 
     $img = Capture-Game
     if($img -and (Get-HelperState $img) -ne 'unknown'){ $img.Dispose(); Log "de volta no jogo"; return $true }
     $btn = if($img){ Login-Btn $img } else { $null }
+    $alturaCli = if($img){ $img.Height } else { $ClientEsperado.H }   # pro fallback cego seguir a altura REAL da janela
     if($img){ $img.Dispose() }
     if($btn){ $script:viuLogin = $true }   # confirmou que estava FORA do jogo (nao so que o play sumiu por um loading)
     if($btn -and $btn.X -lt 0){   # reconheci a tela (tem "CRIAR NOVA CONTA"/"Sair") mas nao sei em que botao clicar: JAMAIS chutar coordenada aqui
@@ -1068,7 +1181,7 @@ function Enter-Game([string]$motivo){   # clica pra entrar com o personagem ate 
     }
     if(-not $btn){   # nao reconheci nada: pode ser so tela de loading. So usa a coordenada de config apos insistir
       if($i -lt 3){ Log "tela de login: nao achei o botao ainda, esperando"; Wait 5; continue }
-      $btn = $LoginBtn
+      $btn = @{ X = $LoginBtn.X; Y = $alturaCli - $LoginBtn.YFromBottom }
     }
     Log "tela de login: clicando ($($btn.X),$($btn.Y))"; $null = Click-Client $btn.X $btn.Y; Wait 8
   }
@@ -1098,7 +1211,7 @@ function Master-Reset {   # atributos cheios: /darmr -> tela de selecao -> clica
       Log "/darmr: nao vi tela de login nem consegui ler o status - NAO vou contar como master reset"
       return
     }
-    $script:mrs++
+    $script:mrs++; $script:mrsSessao++   # mrs = da vida do char (vem do estado.txt); mrsSessao = so deste processo, e o que a janelinha mostra
     $dur = [Math]::Round(((Get-Date) - $script:mrStart).TotalHours, 2); $script:mrStart = Get-Date
     Log "== MASTER RESET #$($script:mrs) FEITO (levou ${dur}h, $($script:resets) resets) =="   # o marco que interessa
     Notify "MudinhoX" "Master reset #$($script:mrs) feito em ${dur}h."
@@ -1120,12 +1233,14 @@ function Walk-Forward {   # ~4 passos numa direcao aleatoria. SO usado pra desbu
   $ang = Get-Random -Minimum 0.0 -Maximum 6.2832; $dx = [int]($WalkDist * [Math]::Cos($ang)); $dy = [int]($WalkDist * 0.75 * [Math]::Sin($ang))   # isometrico: vertical mais curto
   Log "andando 4 passos ($dx,$dy)"; $null = Click-Client ([int]($c.R/2)+$dx) ([int]($c.B/2)+$dy); Wait 2.5
 }
-function Wait-Map([string]$want,[double]$maxSec){   # espera ATE o mapa mudar, em vez de dormir o tempo cravado.
+function Wait-Map([string]$want,[double]$maxSec,[string]$diff = ''){   # espera ATE o mapa mudar, em vez de dormir o tempo cravado.
   $fim = (Get-Date).AddSeconds($maxSec)               # 18s dos 88s do ciclo eram Start-Sleep fixo: ~12s por ciclo recuperaveis (13 min por MR)
   do {
     Wait 1
     $m = Read-Map $null
-    if($want){ if(Same-Map $m $want){ return $m } } elseif($m){ return $m }
+    if($want){ if(Same-Map $m $want){ return $m } }
+    elseif($diff){ if($m -and -not (Same-Map $m $diff)){ return $m } }   # sem nome esperado: espera SAIR de $diff (usado pra aprender o mapa de um spot novo)
+    elseif($m){ return $m }
   } while((Get-Date) -lt $fim -and -not $script:stop)
   Read-Map $null
 }
@@ -1137,7 +1252,17 @@ function Warp-To-Spot {   # teleporta pro spot da fase atual (warmup=/losttower7
   $cego = 0
   for($t = 1; $t -le $WarpTries; $t++){
     if(-not (Send-Chat $cmd)){ Wait 10; continue }
-    $now = Wait-Map $want $WarpWaitSec   # chega e segue; nao dorme os 9s inteiros
+    $now = Wait-Map $want $WarpWaitSec $(if($want){ '' } else { $before })   # chega e segue; nao dorme os 9s inteiros
+    # $WarpMap vazio = APRENDE aqui. Nao da pra saber de fora que nome o minimapa mostra num spot novo (/k37 e
+    # companhia), e chutar errado e pior que nao saber: o bot acharia que nunca chegou e re-teleportaria a noite toda.
+    # A regra e so "acabei de mandar o warp e estou num mapa que NAO e cidade". Exigir que o mapa tenha MUDADO era
+    # errado e travou de verdade em 12:01: o char ja estava em Kanturu, o mapa nao mudou, nada foi aprendido e o
+    # bot queimou os 4 warps ("antes 'kanturu'", "esperado ''"). Ja estar no destino e o caso de SUCESSO mais comum.
+    if(-not $want -and (Is-FarmMap $now)){
+      $script:WarpMap = $now.Substring(0, [Math]::Min(4, $now.Length)); $want = $script:WarpMap
+      Log "aprendi o mapa de ${cmd}: '$now' -> gravando '$want' no estado.txt (pra reaprender, apague a linha warpMap= de la)"
+      Save-Estado
+    }
     if(Same-Map $now $want){ $script:farmMap = $now; Log "no spot (mapa: $now, fase: $($script:phase))"; return $true }   # chegou no spot certo
     if($now){
       Tag-Ciclo 'warp'; Log "nao teleportou pro spot certo (mapa: '$now', esperado '$want', antes '$before'), tentativa $t/$WarpTries ($cmd)"
@@ -1603,14 +1728,22 @@ function Tick-Progresso {   # rede de seguranca GERAL: o travamento de 2h passou
   Log "SEM PROGRESSO ha $SemProgressoMin min ($($script:semProgresso)x): destravando e reiniciando o ciclo"
   Unstick-Tudo   # forca estado conhecido: fecha popup e caixa de chat (foi um chat aberto que travou o bot em 01/09)
   if($script:semProgresso -ge $SemProgressoMax){
+    Save-Estado
+    # Este e o UNICO lugar que ainda cria processo sozinho, e so com o bot rodando: fechar a janela ja marca
+    # parada antes de chegar aqui. Quem nao quiser nem isso, $AutoRestart = $false no CONFIG e ele so para.
+    if(-not $AutoRestart){
+      Log "sem progresso $($script:semProgresso)x seguidas e AutoRestart desligado: parando"
+      Notify "MudinhoX" "Sem progresso $($script:semProgresso)x seguidas. Parando (AutoRestart desligado)."
+      $script:stopReason = 'sem progresso'; $script:stop = $true; return
+    }
     # Reiniciar o PROPRIO processo resolve o que reiniciar o ciclo nao resolve (estado interno ruim) e ainda
     # recarrega o script - se houver correcao nova no disco, ela entra. O processo ja e elevado, entao o filho
     # nasce elevado SEM pedir UAC de novo.
     Log "sem progresso $($script:semProgresso)x seguidas: REINICIANDO O PROPRIO BOT"
     Notify "MudinhoX" "Sem progresso $($script:semProgresso)x seguidas. Reiniciando o bot sozinho."
-    Save-Estado
     try { Start-Process powershell -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-File","`"$PSCommandPath`"" | Out-Null } catch { Log "nao consegui relancar: $_" }
     Remove-Item $HeartbeatFile -ErrorAction SilentlyContinue   # libera pro novo processo assumir
+    $script:stopReason = 'reinicio proprio'
     $script:stop = $true; return
   }
   Notify "MudinhoX" "Sem ganhar pontos ha $SemProgressoMin min. Reiniciando o ciclo - da uma olhada se repetir."
@@ -1619,7 +1752,7 @@ function Tick-Progresso {   # rede de seguranca GERAL: o travamento de 2h passou
 function Ciclo-Joias {   # MODO JOIAS: farma no spot ate encher o inventario, vai mixar, volta a farmar. Nao reseta nem da MR.
   $script:restartCycle = $false
   Hold-Focus
-  try { $ok = Warp-To-Spot; if($ok){ Start-Helper; $script:lvlChangedAt = Get-Date } } finally { Release-Focus }
+  try { $ok = Warp-To-Spot; if($ok){ Start-Helper; $script:lvlChangedAt = Get-Date; $script:lvlSame = 0 } } finally { Release-Focus }
   if(-not $ok){ Wait 15; return }
   $fim = (Get-Date).AddMinutes($JoiasFarmMax)
   $cheio = $false
@@ -1633,9 +1766,13 @@ function Ciclo-Joias {   # MODO JOIAS: farma no spot ate encher o inventario, va
         if(-not (Handle-Captcha $img)){
           $lvl = Read-Level $img
           # No modo joias nao ha reset, entao no level MAXIMO o level nunca muda e o detector de miss infinito
-          # dispararia a cada $StallSec pausando o farm a toa (visto no log: 2 disparos em 40s, level 400 fixo).
-          if($null -ne $lvl -and $lvl -lt $LevelMaximo){ if(-not (Check-Progress $lvl $img)){ $img.Dispose(); continue } }
-          else { $script:lvlChangedAt = Get-Date }
+          # dispararia a cada $StallReads leituras pausando o farm a toa (visto no log: 2 disparos em 40s, level 400 fixo).
+          # Leitura que FALHOU (lvl nulo) nao mexe em nada: zerar o contador ali deixaria um travamento invisivel
+          # sempre que o OCR falhasse no meio dele. So o teto de level zera.
+          if($null -ne $lvl){
+            if($lvl -lt $LevelMaximo){ if(-not (Check-Progress $lvl $img)){ $img.Dispose(); continue } }
+            else { $script:lvlPrev = $lvl; $script:lvlChangedAt = Get-Date; $script:lvlSame = 0 }
+          }
           # Nada de Tick-Stats aqui: voce pediu um ciclo que "nao envolve checkar inventario, checar atributos,
           # resetar nem darmr". O log mostrava o custo - 84 leituras de status logando "0 a distribuir",
           # cada uma roubando o foco por 2-3s pra nada (no modo joias os pontos nao servem pra nada, o /darmr
@@ -1723,7 +1860,9 @@ function Run-Preflight([bool]$comSpot){   # valida os subsistemas de leitura no 
       Ok 'reconhece o botao play' ((Get-HelperState $img) -ne 'unknown') 'botao play irreconhecivel (fora do jogo? tela de login?)'
       $mapa = Read-Map $img
       Ok 'le o nome do mapa' ([bool]$mapa) 'minimapa recolhido ou tapado pela janela do bot?'
-      if($comSpot){ Ok 'esta no spot da fase atual' (Same-Map $mapa (Spot-Map)) "mapa '$mapa', esperado '$(Spot-Map)'" }
+      # Com o $WarpMap ainda vazio nao ha nome pra comparar: cobrar isso seria uma falha inventada (o bot
+      # aprende o nome no primeiro teleporte). Reporta e segue.
+      if($comSpot){ $sp = Spot-Map; if($sp){ Ok 'esta no spot da fase atual' (Same-Map $mapa $sp) "mapa '$mapa', esperado '$sp'" } else { Log "       mapa do spot ainda nao aprendido: vou adotar o do primeiro $WarpCmd (li '$mapa' agora)" } }
       Ok 'nenhum captcha na tela' (-not (Find-Captcha $img)) 'tem captcha aberto agora'
       $img.Dispose()
     }
@@ -1957,7 +2096,7 @@ try {   # preflight no start: 10s conferindo tudo evita a noite inteira perdida 
   $pf = Run-Preflight $false
   if($pf){ Notify "MudinhoX" "$pf verificacao(oes) falharam no start - veja o log. O bot vai tentar rodar mesmo assim." }
 } catch { Log "preflight falhou: $_" }
-try { Garantir-Watchdog } catch { Log "watchdog: $_" }   # se o bot morrer, alguem tem que traze-lo de volta
+try { Limpar-Watchdog } catch { Log "watchdog: $_" }   # apaga a Tarefa Agendada da versao antiga: nada pode sobreviver ao fechamento da janela
 Load-Estado   # retoma fase/warmup/modo de onde parou (o warmup.flag abaixo ainda tem prioridade)
 # Se o $WarmupResets do CONFIG baixou (10 -> 3) e o estado.txt guardou uma contagem maior, o char ja cumpriu a
 # cota: sai do warmup na hora, em vez de gastar mais um ciclo de ~220s no Lost Tower so pra descobrir isso.
@@ -1984,7 +2123,7 @@ while($true){
   if($script:mixNow){ Hold-Focus; try { Tick-Inventory } finally { Release-Focus } }   # botao MIXAR JOIAS: atende ANTES do warp (senao so era visto la dentro do loop de farm, e o bot parecia ignorar o botao)
 
   $script:restartCycle = $false   # comecando um ciclo novo (botoes de fase ja aplicaram phase/forceMR)
-  Hold-Focus; try { $warpOk = Warp-To-Spot; if($warpOk){ Start-Helper; $script:lvlChangedAt = Get-Date; if($script:forceMR){ $script:forceMR = $false; $script:statDue = Get-Date; Log "forcando distribuicao + MR" } } } finally { Release-Focus }
+  Hold-Focus; try { $warpOk = Warp-To-Spot; if($warpOk){ Start-Helper; $script:lvlChangedAt = Get-Date; $script:lvlSame = 0; if($script:forceMR){ $script:forceMR = $false; $script:statDue = Get-Date; Log "forcando distribuicao + MR" } } } finally { Release-Focus }
   if(-not $warpOk){ Wait 15; continue }
 
   # upando: le level, checa captcha, manda stats (traz o jogo 1x por iteracao, devolve o foco pra sua janela no fim)
@@ -2005,7 +2144,12 @@ while($true){
           }
           $lvl = Read-Level $img
           if($null -ne $lvl){
-            if(-not (Check-Progress $lvl $img)){ $img.Dispose(); continue }
+            # No teto do servidor ($LevelMaximo) o level NAO SOBE MAIS, entao o detector de miss infinito
+            # dispararia a cada $StallReads leituras pra sempre - ESC + pausa + anda + religa helper de 40 em 40s, com o
+            # char farmando normalmente. Foram 16 das 113 ocorrencias do log. O Ciclo-Joias ja tinha a guarda;
+            # o loop normal nao (o char chega no teto quando o /resetar demora a pegar).
+            if($lvl -ge $LevelMaximo){ $script:lvlPrev = $lvl; $script:lvlChangedAt = Get-Date; $script:lvlSame = 0 }
+            elseif(-not (Check-Progress $lvl $img)){ $img.Dispose(); continue }
             # perto do alvo o poll e de 2s: logar todo tick enche o arquivo e atrapalha achar problema. So loga salto real ou queda (reset)
             if($null -eq $script:lvlLogged -or $lvl -lt $script:lvlLogged -or ($lvl - $script:lvlLogged) -ge $LogLevelDelta){ Log "level: $lvl"; $script:lvlLogged = $lvl }
           }
@@ -2072,9 +2216,10 @@ while($true){
     }
   } until ($resetOk -or $script:restartCycle)
   if($script:restartCycle){ continue }   # botao mudou a fase no meio do reset: recomeca o ciclo (nao conta este reset)
-  $script:resets++
+  $script:resets++; $script:resetsSessao++   # resets = do MR atual (zera no /darmr); resetsSessao = so deste processo
   $agora = Get-Date
-  if($script:ultimoReset){ $seg = [int]($agora - $script:ultimoReset).TotalSeconds; $tg = ($script:tagsCiclo -join "+"); $script:ciclos = @(@($script:ciclos) + $(if($tg){"${seg}:$tg"}else{"$seg"}) | select -Last $CapCiclosMax) }
+  if($script:ultimoReset){ $seg = [Math]::Max(0, [int](($agora - $script:ultimoReset).TotalSeconds - $script:pausaSeg)); $tg = ($script:tagsCiclo -join "+"); $script:ciclos = @(@($script:ciclos) + $(if($tg){"${seg}:$tg"}else{"$seg"}) | select -Last $CapCiclosMax) }
+  $script:pausaSeg = 0.0   # ciclo novo: zera o cronometro de pausa
   $script:tagsCiclo = @()   # ciclo novo comeca sem etiqueta
   $script:ultimoReset = $agora
   Log "reset feito, recomecando"
@@ -2109,7 +2254,7 @@ while($true){
       }
       if(((Get-Date) - $avisou).TotalSeconds -ge $RenotifySec){ Notify "MudinhoX" "Ainda esperando o jogo abrir."; $avisou = Get-Date }
     }
-  } else { Log "ERRO: $_"; Notify "MudinhoX RPA parou" "$_"; Wait 30; $script:stop = $true }   # erro que nao seja o jogo fechado: para de verdade (nao entra em loop de erro)
+  } else { Log "ERRO: $_"; Notify "MudinhoX RPA parou" "$_"; Wait 30; $script:stopReason = "erro: $_"; $script:stop = $true }   # erro que nao seja o jogo fechado: sai sem stop.flag - quem decide se volta e o watchdog (que agora conta relancamento em vao e desiste)
 }
 }
 Check-Stop

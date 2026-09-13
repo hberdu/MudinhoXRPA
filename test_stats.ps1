@@ -81,6 +81,18 @@ $StatMinOutros = 1000
 $StatPertoDoMax = 30000
 $StatMinPerto = 500
 $StatMinAgi = 100
+# 6b. o piso aprendido e o ponto do exercicio: com 1000, um bloco tipico de pontos do log (~700) nao rende
+#     comando nenhum - foram 2109 leituras assim numa sessao. Com o piso baixado ele vira comando.
+$StatMinOutros = 1000
+if((Plan-Stats (St 5000 5000 5000 5000) 700).Count -ne 0){ throw "com piso 1000, 700 pontos nao deviam render comando" }
+$StatMinOutros = 100
+$pl = Plan-Stats (St 5000 5000 5000 5000) 700
+if($pl.Count -eq 0){ throw "com piso 100, 700 pontos TEM que render comando (e o ganho todo da mudanca)" }
+if($pl[0] -notmatch '^/e 700$'){ throw "esperava '/e 700' (energia e a primeira da ordem), veio '$($pl[0])'" }
+# o /a nunca entra nessa: o piso dele e $StatMinCmd, por causa do teleporte pra AIDA
+if(($pl | Where-Object { $_ -match '^/a (\d+)$' -and [int]$Matches[1] -lt $StatMinCmd })){ throw "/a nao pode ir abaixo de $StatMinCmd" }
+$StatMinOutros = 1000
+
 # 7. Points-Needed / Stat-Stage
 if((Points-Needed (St 0 0 0 0)) -ne 131068){ throw "Points-Needed do zero errado" }
 if((Stat-Stage (St 5000 5000 5000 4999)) -ne 5000){ throw "etapa deveria continuar em 5000 ate todos chegarem" }

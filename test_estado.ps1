@@ -4,6 +4,12 @@ $EstadoFile = Join-Path $env:TEMP 'estado_rt_test.txt'
 $WarmupResets = 10
 $AutoTune = $true
 $TargetLevel = 350
+$WarpCmd = '/k37'
+$WarpMap = ''
+$StatMinAprende = $true
+$StatMinTeste = 100
+$StatMinOutros = 1000
+$script:statMinOk = 0
 function Log($m){ }
 
 $src = Get-Content "$PSScriptRoot\mudinhox_rpa.ps1" -Raw
@@ -114,6 +120,39 @@ Chk 'formato antigo: warmup' $script:warmupCount 4
 $script:resets = 99
 Load-Estado
 Chk 'corrompido nao zera resets' $script:resets 99
+
+# 4. mapa do spot aprendido. O bot descobre no primeiro teleporte que nome o minimapa mostra pro $WarpCmd
+#    (nao da pra saber de fora), grava, e retoma no restart. Mas so quando ele mesmo aprendeu.
+$script:phase='normal'; $script:warmupCount=0
+$script:WarpMap = 'kant'; Save-Estado                        # aprendeu 'kant' rodando /k37
+$script:WarpMap = ''; Load-Estado
+Chk 'mapa aprendido volta no restart'   $script:WarpMap 'kant'
+
+$script:WarpMap = 'kant'; Save-Estado
+$script:WarpMap = 'stad'; Load-Estado                        # nome fixo no CONFIG: e ele que manda
+Chk 'CONFIG preenchido ignora o aprendido' $script:WarpMap 'stad'
+
+$script:WarpMap = 'kant'; Save-Estado
+$script:WarpCmd = '/s18'; $script:WarpMap = ''; Load-Estado  # trocou de spot: o nome antigo nao serve mais
+Chk 'trocar de comando manda reaprender'   $script:WarpMap ''
+$script:WarpCmd = '/k37'
+
+# 5. veredito do piso de /f /v /e. E uma pergunta feita ao servidor UMA vez na vida: se nao sobreviver ao
+#    restart, todo start gasta um /f e uma leitura de status pra reaprender o que ja se sabia.
+$script:statMinOk = 1; $script:StatMinOutros = $StatMinTeste; Save-Estado
+$script:statMinOk = 0; $script:StatMinOutros = 1000; Load-Estado
+Chk 'veredito "aceita" volta no restart' $script:statMinOk 1
+Chk 'e o piso ja vem baixado'            $script:StatMinOutros $StatMinTeste
+
+$script:statMinOk = -1; Save-Estado
+$script:statMinOk = 0; $script:StatMinOutros = 1000; Load-Estado
+Chk 'veredito "recusa" tambem persiste' $script:statMinOk -1
+Chk 'e o piso continua alto'            $script:StatMinOutros 1000   # senao ele reperguntaria a cada start
+
+$script:statMinOk = 1; $script:StatMinOutros = $StatMinTeste; Save-Estado
+$StatMinAprende = $false; $script:statMinOk = 0; $script:StatMinOutros = 1000; Load-Estado
+Chk 'AutoAprender off ignora o aprendido' $script:StatMinOutros 1000
+$StatMinAprende = $true
 
 Remove-Item $EstadoFile -ErrorAction SilentlyContinue
 if($script:erros -eq 0){ "OK: estado sobrevive ao round-trip, ao formato antigo e a arquivo corrompido" }

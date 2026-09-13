@@ -94,5 +94,80 @@ Chk '1 vazia: dobra pra 30s' ([int]($script:statDue - (Get-Date)).TotalSeconds) 
 # perto do maximo o recuo e curto: la os ultimos pontos e que liberam o /darmr
 $script:pertoDoMax = $true; $script:statVazias = 5; $script:statDue = Get-Date; Tick-Stats
 Chk 'perto do maximo o recuo para em 4x o intervalo curto' ([int]($script:statDue - (Get-Date)).TotalSeconds) 20
-if($script:erros -eq 0){ "OK: mediana ignora etiquetas, culpa dividida certo, Tick-Stats so rele quando precisa" }
+
+# --- miss infinito: detectar sem esperar 40s e sem acusar por leitura que falhou ------------------
+# A metrica do proprio bot aponta 'stall' como 23-27% de TODO o tempo, e a maior parte e latencia de
+# deteccao: 113 disparos x 40s = ~75 min so pra perceber. Agora sao DUAS condicoes - N leituras iguais
+# seguidas (sinal forte, e leitura que falhou nao chega aqui) E um piso de segundos (char fraco pos-reset).
+$StallReads = 3; $StallMinSec = 15
+$script:reteleportou = 0; $script:destravouStall = 0
+function Log($m){ }
+function In-Farm($img){ $script:noSpot }
+function Warp-To-Spot { $script:reteleportou++; $true }
+function Start-Helper { $true }
+function Close-Popup { }
+function Click-Client($x,$y){ $script:destravouStall++; $true }
+function Walk-Forward { }
+function Wait([double]$s){ }
+$PlayBtn = @{ X = 77; Y = 33 }
+if($src -notmatch '(?s)(function Check-Progress.*?\r?\n\})'){ throw "nao achei a Check-Progress" }
+. ([scriptblock]::Create($Matches[1]))
+
+function ZeraStall($segAtras){ $script:lvlPrev = 100; $script:lvlSame = 0; $script:lvlChangedAt = (Get-Date).AddSeconds(-$segAtras); $script:noSpot = $true; $script:destravouStall = 0; $script:reteleportou = 0 }
+
+# level parado ha bastante tempo, mas ainda nao houve $StallReads leituras: nao dispara
+ZeraStall 60
+Chk 'antes de 3 leituras iguais nao dispara' (Check-Progress 100 $null) $true   # 1a
+$null = Check-Progress 100 $null                                                # 2a
+Chk '  (nada de desbugar ainda)'             $script:destravouStall     0
+$null = Check-Progress 100 $null                                                # 3a
+Chk 'na 3a leitura igual dispara'            $script:destravouStall     1
+
+# 3 leituras iguais mas cedo demais no relogio: e o char fraco logo apos o reset, nao um travamento
+ZeraStall 5
+1..4 | ForEach-Object { $null = Check-Progress 100 $null }
+Chk 'sem o piso de segundos nao dispara'     $script:destravouStall     0
+
+# o level mudou: zera tudo (e o caminho normal)
+ZeraStall 60
+$null = Check-Progress 100 $null; $null = Check-Progress 101 $null
+Chk 'level novo zera o contador'             $script:lvlSame            0
+$null = Check-Progress 101 $null
+Chk 'e recomeca a contagem do zero'          $script:destravouStall     0
+
+# fora do spot o remedio e outro: re-teleporta em vez de dancar no lugar
+ZeraStall 60; $script:noSpot = $false
+$null = Check-Progress 100 $null; $null = Check-Progress 100 $null; $r = Check-Progress 100 $null
+Chk 'fora do spot re-teleporta'              $script:reteleportou       1
+# UM valor, nao dois. Start-Helper devolve $true/$false e sem descartar isso a Check-Progress saia com
+# @($true,$false) - array de 2 itens e sempre verdadeiro, o `if(-not (...))` do chamador nunca entrava e o
+# ciclo nao reiniciava depois de re-teleportar.
+Chk 'devolve UM valor so'                    (@($r).Count)              1
+Chk 'e manda reiniciar o ciclo'              $r                         $false
+Chk '  (sem dancar no lugar)'                $script:destravouStall     0
+
+
+# --- barra de progresso do MR ---------------------------------------------------------------------
+# A barra mede PONTOS ate o cap, nao resets: quantos resets cabem num MR muda com o alvo, com o spot e
+# com a fase, entao contar reset daria uma barra que anda torto. $ptsNeeded = -1 e "ainda nao li o status".
+$StatMaxValue = 32767
+if($src -notmatch '(?s)(function Progresso-MR \{.*?\r?\n\})'){ throw "nao achei a Progresso-MR" }
+. ([scriptblock]::Create($Matches[1]))
+$script:ptsTotal = 4 * $StatMaxValue
+
+$script:ptsNeeded = -1
+Chk 'sem leitura de status, barra em 0'  (Progresso-MR) 0
+$script:ptsNeeded = $script:ptsTotal
+Chk 'char zerado (pos-MR), barra em 0'   (Progresso-MR) 0
+$script:ptsNeeded = 0
+Chk 'cap fechado, barra cheia'           (Progresso-MR) 1
+$script:ptsNeeded = [int]($script:ptsTotal / 2)
+Chk 'metade do caminho'                  ([Math]::Round((Progresso-MR),2)) 0.5
+# leitura ruim nao pode estourar a barra (Value fora do Minimum..Maximum lanca excecao no WinForms)
+$script:ptsNeeded = $script:ptsTotal * 3
+Chk 'ptsNeeded absurdo nao vai abaixo de 0' (Progresso-MR) 0
+$script:ptsNeeded = -50
+Chk 'ptsNeeded negativo tambem cai em 0'    (Progresso-MR) 0
+
+if($script:erros -eq 0){ "OK: mediana ignora etiquetas, culpa dividida certo, Tick-Stats so rele quando precisa, miss infinito por leituras+tempo, barra do MR nao estoura" }
 else { "$($script:erros) FALHA(S)"; exit 1 }
