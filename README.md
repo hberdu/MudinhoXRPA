@@ -56,7 +56,7 @@ O mix acha o resto por OCR. Se algum texto não bater com `$MixMenuWords` / `$Mi
 
 - Coordenadas relativas à área cliente do jogo em 1920x1009.
 - `$StatStep` (5000) e `$StatMaxLeftover` (10000): tamanho da etapa e teto de pontos parados.
-- `$InvGrid` (grade do inventário) e `$MixNpcPos` (posição do Lahap): já calibrados nesta resolução; refaça com `-TestInv` / `-TestNpc` se mudar de resolução.
+- A grade do inventário é localizada **dinamicamente** pelo título da janela (`$InvTituloWords` + `$InvGridDx/Dy`): o painel não tem posição fixa — abriu em (1317,408) e depois em (607,333). `$MixNpcPos` (posição do Lahap) continua fixo; refaça com `-TestNpc` se mudar de resolução.
 - `$KeyHoldMs` / `$KeyGapMs` (40/40): velocidade da digitação. **Não baixe** — abaixo disso o comando embaralha e o `/s18` sai inválido.
 - `$LoginServerWords` (`Server Vip Gold`): qual botão clicar na tela de escolha de servidor. `$LoginDangerWords` lista o que **nunca** pode ser clicado por coordenada chutada (`CRIAR NOVA CONTA`, `Sair`) — o fallback `$LoginBtn` (960,940) cai justo em cima do "criar conta", então numa tela dessas o bot avisa em vez de clicar.
 - `$MetricsEvery` (5): a cada N resets loga `pontos/h`, ETA do MR e a **mediana** do ciclo + quanto do tempo vazou nos ciclos lentos.

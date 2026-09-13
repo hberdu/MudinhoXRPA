@@ -134,7 +134,12 @@ $MixListaWords = '(?i)^(soul|life|creation|chaos|fragment|stone|jewel)'   # algu
 $MixWaitSec    = 5        # espera entre o mix de um tipo e o proximo
 $MixRounds     = 12      # no maximo N voltas (a lista tem 7 opcoes; sobra folga)
 $InvKey        = 0x56     # V = inventario
-$InvGrid       = @{ X = 1317; Y = 408; Cell = 34.4; Cols = 8; Rows = 8 }   # grade do inventario, medida no print do usuario (1920x1009): bate 64/64 celulas
+# A grade do inventario e localizada DINAMICAMENTE pelo titulo da janela: o painel abriu em (1317,408) na
+# calibracao e em (607,333) depois - nao tem posicao fixa. Offsets medidos nos dois prints; a celula (34.4px) bate.
+$InvTituloWords = '(?i)^invent'   # titulo da janela; acha-lo tambem prova que o painel esta aberto
+$InvGridDx     = -133    # do CENTRO do titulo ate a borda esquerda da 1a celula
+$InvGridDy     = 296     # do TOPO do titulo ate o topo da 1a celula
+$InvCellPx     = 34.4    # lado da celula (fracionario: arredondar acumula erro na 8a coluna)
 $InvCellLit    = 210      # soma R+G+B acima disso = pixel "com item" (celula vazia e escura)
 $InvCellMin    = 10       # N pixels claros na celula = ocupada
 $InvFreeMin    = 4        # menos que N celulas livres = inventario cheio -> vai mixar
@@ -512,10 +517,8 @@ function Fugir-Da-Area([int]$x,[int]$y,[int]$w,[int]$h,[string]$oque){   # a jan
 }
 function Unblock-Areas {   # chamado quando uma leitura falha, e no start
   $null = Fugir-Da-Area $MapLabel.X $MapLabel.Y $MapLabel.W $MapLabel.H 'rotulo do minimapa'
-  if($InvGrid){
-    $c = [double]$InvGrid.Cell
-    $null = Fugir-Da-Area $InvGrid.X $InvGrid.Y ([int]($InvGrid.Cols*$c)+40) ([int]($InvGrid.Rows*$c)+90) 'grade do inventario'
-  }
+  # A grade do inventario nao tem posicao fixa, entao aqui vale a metade direita da tela, que e onde ela ja apareceu.
+  $null = Fugir-Da-Area 560 300 1060 420 'area onde o inventario costuma abrir'
 }
 function Unblock-MapLabel { Unblock-Areas }   # nome antigo, mantido pelos chamadores
 function Save-Shot([string]$nome){   # print pra diagnostico (chamar com o jogo na frente)
@@ -1001,28 +1004,31 @@ function Word-Color($img,$w){   # cor do BOTAO atras da palavra: 'green' (dispon
   } }
   if($g -gt $rd -and $g -gt 20){ 'green' } elseif($rd -gt $g -and $rd -gt 20){ 'red' } else { 'other' }
 }
-function Inv-Occupancy($img){   # matriz de celulas ocupadas do inventario ($true = tem item). $null se $InvGrid nao esta calibrado
-  if(-not $InvGrid){ return $null }
-  $c = [double]$InvGrid.Cell   # celula tem tamanho fracionario (34.4): arredondar acumula 3px de erro na 8a coluna
-  @(for($r = 0; $r -lt $InvGrid.Rows; $r++){
-    ,@(for($k = 0; $k -lt $InvGrid.Cols; $k++){
+function Inv-Occupancy($img,$grid){   # matriz de celulas ocupadas ($true = tem item). $null se a grade nao foi localizada
+  if(-not $grid){ $grid = Achar-InvGrid $img }
+  if(-not $grid){ return $null }
+  $c = [double]$grid.Cell   # celula tem tamanho fracionario (34.4): arredondar acumula 3px de erro na 8a coluna
+  @(for($r = 0; $r -lt $grid.Rows; $r++){
+    ,@(for($k = 0; $k -lt $grid.Cols; $k++){
       $lit = 0
       for($y = 5; $y -lt $c-5; $y += 2){ for($x = 5; $x -lt $c-5; $x += 2){
-        $px = [int]($InvGrid.X + $k*$c + $x); $py = [int]($InvGrid.Y + $r*$c + $y)
+        $px = [int]($grid.X + $k*$c + $x); $py = [int]($grid.Y + $r*$c + $y)
         if($px -lt $img.Width -and $py -lt $img.Height){ $p = $img.GetPixel($px,$py); if(($p.R + $p.G + $p.B) -gt $InvCellLit){ $lit++ } }
       } }
       ($lit -gt $InvCellMin)
     })
   })
 }
-function Inv-Open($img){   # a janela do inventario esta MESMO aberta? Sem isso a grade cai em cima do chao do mapa e TUDO parece ocupado (= mix infinito)
-  if(-not $InvGrid){ return $false }
-  $y = [int]($InvGrid.Y + $InvGrid.Rows * [double]$InvGrid.Cell) + 2   # faixa do "Zen" logo abaixo da grade
-  $c = Crop-Bitmap $img ([int]$InvGrid.X - 20) $y 320 45 3
-  $t = (Ocr-Bitmap $c).Text; $c.Dispose()
-  $script:invZenTxt = ($t -replace '\s+',' ').Trim()   # guarda o que leu: diferencia "janela nao abriu" de "abriu mas o Zen nao esta onde eu procuro"
-  [bool]($t -match '(?i)zen')
+function Achar-InvGrid($img){   # acha a grade ANCORADA NO TITULO da janela. Coordenada fixa nao serve: o painel abriu
+  # em (1317,408) na calibracao e em (607,333) depois - ele NAO tem posicao fixa. O titulo "Inventario" e a ancora,
+  # e achar o titulo tambem prova que a janela esta aberta (bem melhor que caçar a palavra "Zen", pequena e vermelha).
+  $t = Screen-Words $img | ? { $_.Text -match $InvTituloWords } | select -First 1
+  if(-not $t){ return $null }
+  $r = $t.BoundingRect
+  $cx = [int]($r.X + $r.Width/2)
+  @{ X = $cx + $InvGridDx; Y = [int]$r.Y + $InvGridDy; Cell = $InvCellPx; Cols = 8; Rows = 8; Titulo = "$($t.Text)" }
 }
+function Inv-Open($img){ [bool](Achar-InvGrid $img) }   # titulo visivel = painel aberto
 function Abrir-Inv-PeloMenu {   # caminho alternativo: a tecla configurada nao abre o inventario neste cliente, mas o
   # menu do jogo (botao de 3 barras no topo direito) tem um item "Inventario". Mesmo padrao do NPC do mix:
   # clica, CONFIRMA por OCR que o menu abriu, so entao clica no item. Nunca clica no escuro.
@@ -1048,7 +1054,7 @@ function Abrir-Inv-PeloMenu {   # caminho alternativo: a tecla configurada nao a
   $true
 }
 function Inv-Free {   # abre o inventario (V), conta celulas livres, fecha. -1 se nao calibrado, nao abriu ou nao deu pra ler
-  if(-not $InvGrid -or $script:invDesligado){ return -1 }
+  if($script:invDesligado){ return -1 }
   $prev = Focus-Game; if(-not $script:gameFg){ Restore-Focus $prev; return -1 }
   Close-Chat
   $map = $null
@@ -1059,13 +1065,13 @@ function Inv-Free {   # abre o inventario (V), conta celulas livres, fecha. -1 s
       Press-Vk $InvKey $HotkeyHoldMs; Start-Sleep -Milliseconds 900
     } else { Start-Sleep -Milliseconds 300 }
     $img = Capture-Raw
-    if($script:capOk -and (Inv-Open $img)){ $map = Inv-Occupancy $img }
+    if($script:capOk){ $g = Achar-InvGrid $img; if($g){ $map = Inv-Occupancy $img $g; Log "inventario: grade em ($($g.X),$($g.Y)) pelo titulo '$($g.Titulo)'" } }
     $img.Dispose()
   }
   if(-not $map -and $InvUsarMenu){   # a tecla nao abriu: tenta pelo menu do jogo antes de desistir
     if(Abrir-Inv-PeloMenu){
       $img = Capture-Raw
-      if($script:capOk -and (Inv-Open $img)){ $map = Inv-Occupancy $img; Log "inventario: abriu pelo menu" }
+      if($script:capOk){ $g = Achar-InvGrid $img; if($g){ $map = Inv-Occupancy $img $g; Log "inventario: abriu pelo menu, grade em ($($g.X),$($g.Y))" } }
       $img.Dispose()
     }
   }
@@ -1075,7 +1081,7 @@ function Inv-Free {   # abre o inventario (V), conta celulas livres, fecha. -1 s
     # Falha recorrente em todo start. O print + o que o OCR leu na faixa do Zen dizem QUAL dos dois casos e:
     # janela nao abriu (faixa com cenario/vazio) ou abriu noutro lugar (faixa com outro texto do jogo).
     $script:invFalhas++
-    Log "inventario: nao consegui abrir/confirmar a janela (tecla $('{0:X2}' -f $InvKey)). Na faixa do 'Zen' o OCR leu: '$($script:invZenTxt)'"
+    Log "inventario: nao consegui abrir/confirmar a janela (tecla $('{0:X2}' -f $InvKey))"
     Unblock-Areas   # pode ser a propria janela do bot cobrindo a grade
     $null = Save-Shot 'inventario_falhou.png'
     if($script:invFalhas -ge $InvMaxFalhas){
@@ -1265,7 +1271,7 @@ function Ciclo-Dragoes {   # MODO DRAGOES: so caca. Nao checa inventario, nao ch
 $script:invDue = (Get-Date).AddSeconds($InvCheckSec); $script:mixNow = $false; $script:semPlay = 0; $script:invFalhas = 0; $script:invDesligado = $false
 function Tick-Inventory {   # de tempos em tempos checa o inventario; cheio (ou botao MIXAR) -> vai mixar e reinicia o ciclo (volta pro spot)
   if(-not $script:mixNow){
-    if(-not $InvGrid -or (Get-Date) -lt $script:invDue){ return }
+    if((Get-Date) -lt $script:invDue){ return }
     $script:invDue = (Get-Date).AddSeconds((Jit $InvCheckSec))
     $free = Inv-Free
     if($free -lt 0){ return }
@@ -1442,7 +1448,7 @@ if($TestInv){   # abra o inventario NO JOGO antes de rodar
   $img = Capture-Game; if(-not $img){ Log "jogo nao ficou na frente, nada lido"; exit }
   New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null
   $f = Join-Path $CaptchaShotDir 'inventario.png'; $img.Save($f); Log "print do inventario salvo: $f  (me passe o X,Y do canto sup-esq da primeira celula e o tamanho da celula em pixels)"
-  if(-not (Inv-Open $img)){ Log "AVISO: nao achei a linha do 'Zen' abaixo da grade -> a janela do inventario NAO esta aberta (ou `$InvGrid esta errado). O mapa abaixo e do chao do mapa, ignore." }
+  if(-not (Inv-Open $img)){ Log "AVISO: nao achei o titulo do inventario -> a janela NAO esta aberta. O mapa abaixo e do chao do mapa, ignore." }
   $map = Inv-Occupancy $img
   if($map){ Log "ocupacao ($((@($map | % { $_ } | ? { -not $_ }).Count)) livres):"; foreach($r in $map){ Log ("  " + (($r | % { if($_){'X'}else{'.'} }) -join '')) } }
   else { Log "InvGrid ainda nao calibrado (veja o bloco CONFIG)" }
@@ -1499,7 +1505,7 @@ function Run-Preflight([bool]$comSpot){   # valida os subsistemas de leitura no 
     if($st){ Log "       pontos disponiveis: $(if([int]$st.Pts -ge 0){$st.Pts}else{"0 (linha ausente)"})" }
     if($st){ Log "       F=$($st.For) A=$($st.Agi) V=$($st.Vit) E=$($st.Ene) Pts=$($st.Pts) | faltam $(Points-Needed $st) pro cap" }
     $free = Inv-Free
-    Ok 'le o inventario' ($free -ge 0) 'Inv-Free devolveu -1 (tecla V ou $InvGrid)'
+    Ok 'le o inventario' ($free -ge 0) 'Inv-Free devolveu -1 (tecla errada e o menu tambem nao abriu)'
     if($free -ge 0){ Log "       $free celulas livres (mixa abaixo de $InvFreeMin)" }
     $m = Read-Msgs $null
     Log $(if($m){ "  OK   le a faixa de mensagens: '$m'" } else { "  (faixa de mensagens vazia agora - normal se o chat esta quieto)" })
@@ -1593,6 +1599,20 @@ if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guard
     $i.Dispose()
   }
 
+  # Painel ABERTO, mas em (607,333) - longe dos (1317,408) da calibracao original. Prova que a posicao nao e fixa
+  # e que ancorar no titulo funciona nos dois lugares.
+  $i = Fx 'inventario_ABERTO_esquerda.png'
+  if($i){
+    $g = Achar-InvGrid $i
+    Ok 'acha a grade pelo titulo, mesmo fora do lugar antigo' ([bool]$g) 'nao localizou o painel aberto'
+    if($g){
+      Ok 'grade cai onde foi medida (607,333)' ([Math]::Abs($g.X-607) -le 12 -and [Math]::Abs($g.Y-333) -le 12) "deu ($($g.X),$($g.Y))"
+      $m = Inv-Occupancy $i $g
+      $livres = @($m | % { $_ } | ? { -not $_ }).Count
+      Ok 'inventario cheio e visto como cheio' ($livres -le 4) "$livres celulas livres (o print mostra quase tudo ocupado)"
+    }
+    $i.Dispose()
+  }
   $i = Fx 'inventario_FECHADO.png'
   # regressao real: com o inventario FECHADO a grade cai no chao do mapa e leu "8 livres" - o bot acharia que esta cheio e mixaria pra sempre
   if($i){ Ok 'Inv-Open recusa inventario fechado' (-not (Inv-Open $i)) 'achou o Zen onde nao tem inventario'; $i.Dispose() }
