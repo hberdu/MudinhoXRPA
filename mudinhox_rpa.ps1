@@ -585,8 +585,8 @@ function Save-Estado {   # fase/warmup E as metricas do MR. Medir um MR leva hor
       "fase=$($script:phase)"
       "modo=$($script:modo)"
       "warmup=$($script:warmupCount)"
-      "warmupTeste=$(if($script:warmupTeste){1}else{0})"
-      "warmupTesteIni=$($script:warmupTesteIni.Ticks)"
+      "spotTeste=$(if($script:spotTeste){1}else{0})"
+      "spotTesteIni=$($script:spotTesteIni.Ticks)"
       "resets=$($script:resets)"
       "ptsSent=$($script:ptsSent)"
       "runStart=$($script:runStart.Ticks)"
@@ -625,8 +625,8 @@ function Load-Estado {
       if($kv.warmup){ $script:warmupCount = [int]$kv.warmup }
       # O teste do spot normal atravessa restart: sem isto, uma queda no meio do teste voltaria o bot pro warmup
       # (ou o deixaria testando pra sempre, com o relogio zerado a cada start).
-      if($kv.warmupTeste){ $script:warmupTeste = ($kv.warmupTeste -eq '1') }
-      if($kv.warmupTesteIni){ $script:warmupTesteIni = [datetime]::new([long]$kv.warmupTesteIni) }
+      if($kv.spotTeste){ $script:spotTeste = ($kv.spotTeste -eq '1') }
+      if($kv.spotTesteIni){ $script:spotTesteIni = [datetime]::new([long]$kv.spotTesteIni) }
       if($kv.resets){ $script:resets = [int]$kv.resets }
       if($kv.ptsSent){ $script:ptsSent = [int]$kv.ptsSent }
       if($kv.mrs){ $script:mrs = [int]$kv.mrs }
@@ -1107,7 +1107,7 @@ function Master-Reset {   # atributos cheios: /darmr -> tela de selecao -> clica
     # warmup custava por MR. Se nao aguentar, Tick-WarmupTeste percebe e cai pro Lost Tower sem perder a noite.
     if($WarmupTeste){
       $script:phase = 'normal'; $script:warmupCount = 0
-      $script:warmupTeste = $true; $script:warmupTesteIni = Get-Date
+      $script:spotTeste = $true; $script:spotTesteIni = Get-Date
       Log "pos-MR: testando o spot normal ($WarpCmd) por ate $WarmupTesteSec s antes de decidir pelo warmup"
     } else {
       $script:phase = 'warmup'; $script:warmupCount = 0; Log "modo warmup ($WarmupCmd ate $WarmupResets resets)"
@@ -1479,11 +1479,14 @@ function Tick-Inventory {   # aviso do jogo (ou botao MIXAR JOIAS) -> vai mixar 
   $script:ptsLastGain = Get-Date   # mixar tambem nao distribui pontos: nao deixa o watchdog de progresso contar esse tempo
   $script:restartCycle = $true   # volta pro spot pelo caminho normal (warp + andar + play)
 }
-$script:warmupTeste = $false; $script:warmupTesteIni = Get-Date
+# ATENCAO: nomes de variavel no PowerShell sao case-INSENSITIVE. $script:warmupTeste e o MESMO que $WarmupTeste
+# do CONFIG - a variavel de estado zerava a config no start e o teste do spot nunca rodava (visto ao vivo no
+# MR #5: caiu direto no "modo warmup"). Por isso o estado se chama $script:spotTeste, e nao warmupTeste.
+$script:spotTeste = $false; $script:spotTesteIni = Get-Date
 function Tick-WarmupTeste {   # o teste do spot normal pos-MR estourou o tempo? cai pro warmup em vez de insistir
-  if(-not $script:warmupTeste){ return }
-  if(((Get-Date) - $script:warmupTesteIni).TotalSeconds -lt $WarmupTesteSec){ return }
-  $script:warmupTeste = $false
+  if(-not $script:spotTeste){ return }
+  if(((Get-Date) - $script:spotTesteIni).TotalSeconds -lt $WarmupTesteSec){ return }
+  $script:spotTeste = $false
   $script:phase = 'warmup'; $script:warmupCount = 0; $script:restartCycle = $true; Save-Estado
   Log "pos-MR: o spot normal nao fechou um reset em $WarmupTesteSec s - char fraco demais, indo pro warmup ($WarmupCmd)"
 }
@@ -2073,9 +2076,9 @@ while($true){
   Save-Estado   # metricas do MR sobrevivem a reinicio do bot (medir um MR leva horas)
   if(($script:resets % $MetricsEvery) -eq 0){ Metrics }
   $null = Wait-Map '' 8   # espera o mapa RENDERIZAR (o jogo ignora teclas durante o teleporte); segue assim que ler, em vez de dormir 8s
-  if($script:warmupTeste){   # fechou um reset no spot normal dentro do prazo: o warmup era desperdicio
-    $seg = [int]((Get-Date) - $script:warmupTesteIni).TotalSeconds
-    $script:warmupTeste = $false
+  if($script:spotTeste){   # fechou um reset no spot normal dentro do prazo: o warmup era desperdicio
+    $seg = [int]((Get-Date) - $script:spotTesteIni).TotalSeconds
+    $script:spotTeste = $false
     Log "pos-MR: o spot normal fechou um reset em ${seg}s - PULANDO o warmup (economia medida: 37-56 min por MR)"
     Save-Estado
   }

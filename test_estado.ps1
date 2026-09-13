@@ -36,15 +36,22 @@ Chk 'ciclos de joias' $script:joiasCiclos 9
 
 # 1d. o teste do spot normal pos-MR sobrevive a restart (senao uma queda no meio dele mandaria o char
 #     de volta pro warmup, que e justamente o que ele existe pra evitar)
-$script:warmupTeste = $true; $script:warmupTesteIni = (Get-Date).AddSeconds(-200)
-$ini = $script:warmupTesteIni.Ticks
+$script:spotTeste = $true; $script:spotTesteIni = (Get-Date).AddSeconds(-200)
+$ini = $script:spotTesteIni.Ticks
 Save-Estado
-$script:warmupTeste = $false; $script:warmupTesteIni = Get-Date
+$script:spotTeste = $false; $script:spotTesteIni = Get-Date
 Load-Estado
-Chk 'teste do spot normal sobrevive' $script:warmupTeste $true
-Chk 'relogio do teste sobrevive' $script:warmupTesteIni.Ticks $ini
-$script:warmupTeste = $false; Save-Estado; $script:warmupTeste = $true; Load-Estado
-Chk 'teste desligado sobrevive' $script:warmupTeste $false
+Chk 'teste do spot normal sobrevive' $script:spotTeste $true
+Chk 'relogio do teste sobrevive' $script:spotTesteIni.Ticks $ini
+$script:spotTeste = $false; Save-Estado; $script:spotTeste = $true; Load-Estado
+Chk 'teste desligado sobrevive' $script:spotTeste $false
+
+# 1d-bis. REGRESSAO da colisao de nomes: no PowerShell $script:xxx e $Xxx sao a MESMA variavel (case-insensitive).
+# A variavel de estado chamava-se warmupTeste e zerava a config $WarmupTeste no start - o teste do spot nunca
+# rodava (visto ao vivo no MR #5). Aqui: mexer no estado NAO pode apagar a config.
+$WarmupTeste = $true
+$script:spotTeste = $false
+Chk 'estado do teste nao pisa na config' $WarmupTeste $true
 # 1e. com o A/B desligado, o alvo do estado.txt NAO pode sobrescrever a escolha do usuario no CONFIG
 $AutoTune = $false; $script:TargetLevel = 380; Save-Estado; $script:TargetLevel = 350; Load-Estado
 Chk 'A/B desligado: CONFIG manda no alvo' $script:TargetLevel 350

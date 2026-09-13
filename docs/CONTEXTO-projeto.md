@@ -459,3 +459,9 @@ nos comandos.
   subiu durante a propria janela dele (126941 -> 241948 -> 272925), sinal de que algo mudou junto. Com
   `$AutoTune = $false` o `alvo` do `estado.txt` passa a ser ignorado: quem manda e o CONFIG, senao um alvo
   gravado pelo experimento sobrescreveria a escolha do usuario pra sempre. Regressao no `test_estado.ps1`.
+- **Bug do mesmo dia, pego ao vivo no MR #5:** o teste do spot nao rodou - o log mostrou `modo warmup` direto.
+  Causa: **nomes de variavel no PowerShell sao case-INSENSITIVE**, entao `$script:warmupTeste` (estado) e
+  `$WarmupTeste` (config) eram **a mesma variavel**. A linha de inicializacao do estado, no topo do script,
+  zerava a config antes do loop rodar. Estado renomeado pra `$script:spotTeste`. Regressao no `test_estado.ps1`
+  cobre a colisao (mexer no estado nao pode apagar a config), verificada renomeando de volta.
+  Vale como regra pro projeto: **nunca usar o mesmo nome pra config e pra estado**, nem trocando a caixa.
