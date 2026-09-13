@@ -141,6 +141,7 @@ $GoldBlobMin   = 30       # minimo de pixels dourados no bloco pra considerar qu
 $GoldSelfR     = 90      # ignora esse raio em volta do centro (seu personagem tem fogo/asas). 150 escondia o mob colado em voce; o filtro de cor ja rejeita laranja. CALIBRAR com -TestGold
 $GoldStepSec   = 2.0      # espera depois de mandar o personagem pro bloco dourado
 $GoldRepetMax  = 4       # mesma coordenada N vezes na caca = cenario, nao mob: para e avisa (no log de 31/08 foram 21 de 26 deteccoes no mesmo x)
+$GoldMaxSeguidas = 10    # alvo achado em N varreduras SEGUIDAS = cenario dourado (chao de Tarkan), nao mob. Mob e raro e some entre varreduras
 $GoldRoamSec   = 4.0      # sem nada dourado na tela: anda pra um lado e procura de novo
 # ---------------------------------------------------------------------------------------
 
@@ -1044,7 +1045,7 @@ function Hunt-Golden {   # botao DRAGOES: /tarkan2 e caca os Golden Tantalos ate
   }
   if(-not (Same-Map (Read-Map $null) $GoldMap)){ Notify "MudinhoX" "Nao consegui chegar em Tarkan com $GoldCmd."; return }
   Start-Helper   # o helper bate no que estiver perto; o bot so leva o personagem ate o mob dourado
-  $fim = (Get-Date).AddMinutes($GoldMinutes); $achados = 0; $vazios = 0; $vistos = @{}
+  $fim = (Get-Date).AddMinutes($GoldMinutes); $achados = 0; $vazios = 0; $vistos = @{}; $seguidas = 0
   while((Get-Date) -lt $fim -and -not $script:stop -and -not $script:restartCycle){
     $img = Capture-Game
     if(-not $img){ Wait 2; continue }
@@ -1054,6 +1055,16 @@ function Hunt-Golden {   # botao DRAGOES: /tarkan2 e caca os Golden Tantalos ate
       $vazios = 0; $achados++
       # Mob se move e morre. Mesma coordenada varias vezes = CENARIO, nao mob. No log de 31/08 foram 21 de 26
       # deteccoes na coluna x=655, e a caca passou o tempo batendo em nada. Vale mesmo com o filtro de cor errado.
+      # Segunda guarda, pra falso positivo ESPALHADO: em Tarkan o CHAO e dourado e o detector achou "mob" em 20
+      # varreduras seguidas, cada uma num lugar diferente. Um Golden Tantalos e raro ("restam 9 no mapa inteiro"):
+      # achar um em toda varredura, sem intervalo, e impossivel. A guarda de coordenada repetida nao pega isso.
+      $seguidas++
+      if($seguidas -ge $GoldMaxSeguidas){
+        Log "dragoes: achei alvo em $seguidas varreduras SEGUIDAS, cada uma num lugar - isso e o cenario dourado, nao mob. Parando."
+        Notify "MudinhoX" "A caca esta casando com o chao de Tarkan. \$GoldPix precisa ser calibrado com -TestGold. Parei."
+        $null = Save-Shot 'gold_falso_positivo.png'
+        break
+      }
       $chave = "$($alvo.X),$($alvo.Y)"
       $vistos[$chave] = [int]$vistos[$chave] + 1
       if($vistos[$chave] -ge $GoldRepetMax){
@@ -1067,7 +1078,7 @@ function Hunt-Golden {   # botao DRAGOES: /tarkan2 e caca os Golden Tantalos ate
       Wait $GoldStepSec
       Start-Helper
     } else {
-      $vazios++
+      $vazios++; $seguidas = 0   # varredura limpa quebra a sequencia: mob de verdade some da tela entre um e outro
       if($vazios % 10 -eq 0){ Log "dragoes: nada dourado na tela ha $vazios varreduras, continuo procurando" }
       Walk-Forward   # mapa grande e spawn variavel: anda pra um lado e procura de novo
       Wait $GoldRoamSec
