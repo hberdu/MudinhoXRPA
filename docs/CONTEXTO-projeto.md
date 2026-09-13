@@ -1,14 +1,13 @@
 ---
 name: proj-rpa-mudinhox
-description: "MudinhoX (MU Online) RPA bot in PowerShell at OneDrive\\Área de Trabalho\\proj_RPA — state, decisions, gotchas"
+description: "MudinhoX (MU Online) RPA bot in PowerShell — state, decisions, gotchas"
 metadata: 
   node_type: memory
   type: project
-  originSessionId: 91c75d33-d4ea-46cd-b767-bfa23cfc1b67
   modified: 2026-08-28T13:09:59.169Z
 ---
 
-Project: `c:\Users\henri\OneDrive\Área de Trabalho\proj_RPA\mudinhox_rpa.ps1` + launcher `MudinhoX RPA.cmd`.
+Project: `mudinhox_rpa.ps1` + launcher `MudinhoX RPA.cmd`.
 Bot loop for game MudinhoX (process `mudx.exe`): warp (`$WarpCmd`, currently `/s18`) -> 4 steps random dir -> click play (MU Helper) -> wait level 350 -> `/resetar` -> repeat. Stats `/f`,`/a`,`/v`,`/e`: each tick opens status window (C), OCRs "Pontos: N" and distributes real available points — splits avail across the attributes still below max (share = avail/remaining), capped by what each attr needs, unique values; drains fast (re-schedules 4s while points remain). `/darmr` (master reset) ONLY when all 4 attrs (For/Agi/Vit/Ene) >= 32767 — user premise. Level stalled 120s -> Check-Progress (re-warp if not on farm map, else re-toggle helper); random "human" actions; captcha auto-solve, wrong twice -> kill game and stop.
 Warp target changed from `/icarus` to `/s18` (2026-08-28). Teleport is confirmed by the minimap MAP NAME CHANGING (not by a hardcoded name) — `$WarpCmd` can be swapped to any `/sN` and `In-Farm`/`Warp-To-Spot` still work; `$script:farmMap` records the farm map (compared by first 4 chars).
 Pure PowerShell 5.1 + Windows OCR (WinRT) + WinForms window with PARAR button; also stops on `stop.flag`; logs to `rpa.log`. Folder also has a Python/pyautogui/Tesseract version (`rpa_mudinhox.py`, created 2026-08-28 02:11, not by Claude — provenance unknown).
@@ -37,10 +36,8 @@ Decisions / gotchas (as of 2026-08-28):
 - **Log resilience**: `Add-Content` per line stopped writing to rpa.log mid-run (froze at a line while the WinForms logBox kept updating) — concurrent-access flake. Fixed: one `StreamWriter` over `FileStream(...,Append,Write,FileShare.ReadWrite)`, AutoFlush, opened once. Reader (tail/Get-Content/monitor) must open with FileShare.ReadWrite too; monitor now reads via `cp rpa.log tmp` before grep.
 - BOM gotcha: don't re-prepend a BOM to a heredoc file that already starts with one — double BOM makes PowerShell read `?$sp` and the var becomes empty (then FromFile fails, $img null, Read-Map falls back to live capture and reads the wrong map). Write the BOM exactly once.
 - User plays manually in the same client while testing -> tests that type into the game get corrupted; ask them to stay off the game during runs.
-- 2026-08-28: two Claude sessions edited this file concurrently, one clobbered the other's Read-Level; restored from backup. Check `.claude/projects/*proj-RPA*` transcript mtime before editing.
+- 2026-08-28: two Claude sessions edited this file concurrently, one clobbered the other's Read-Level; restored from backup. Confira o mtime do arquivo antes de editar se houver mais de uma sessao aberta.
 - Elevated test pattern: write .ps1 with UTF-8 BOM (path has "Área"), run via `Start-Process powershell -Verb RunAs -Wait`, log to a file in scratchpad (hidden window has no stdout).
-
-**How to apply:** when user says "continue" from C:\Users\henri with no context, this project is the likely one; check its session transcript under `.claude/projects/c--Users-henri-OneDrive--rea-de-Trabalho-proj-RPA`.
 
 Mudancas 2026-08-31 (pedido do usuario: "MR demora muito", distribuicao precisa, mix automatico):
 - **Distribuicao em 4 etapas** (`$StatStages = 10000,20000,30000,32767`), ordem `$StatOrder = 'Ene','Agi','For','Vit'`. Dentro de uma etapa enche UM atributo por vez ate a meta (nao divide mais os pontos entre os 4). `Plan-Stats $st $p` e pura (so calcula os comandos) e tem self-check em `test_stats.ps1` (16 comandos do zero ao cap, ultima leva `2767` em cada — o usuario falou "2676", e 32767-30000=2767).
@@ -83,7 +80,7 @@ Travamento de 2h no reset (2026-08-31 18:57-20:58):
 "stats: nao consegui ler o status" - causa raiz achada 2026-08-31 21:25 (~25% das leituras, desde sempre):
 - Descartado por medicao, nao por palpite: (1) taxa de falha por hora no rpa.log e ~20-35% ANTES e DEPOIS das mudancas de velocidade (17h, com a espera ja cortada, teve a MELHOR taxa: 14%) — nao era regressao do tickrate; (2) OCR rodado 5x sobre um `status_ultimo.png` real deu 5/5 com os 4 rotulos, 93 palavras — **o OCR e deterministico e nao erra quando a janela esta na tela**; (3) so 8 de 50 falhas caem dentro de 30s de um reset/warp — nao e o gotcha do "C ignorado apos teleporte".
 - **E o FOCO**: `Read-Status` conferia `$script:gameFg` uma vez no comeco e depois apertava C. Se a janela do usuario voltasse pra frente no meio, o C ia pra ELA e o status nunca abria. Mesma causa raiz da captura que fotografou o navegador do usuario. Por isso as falhas agrupam nos horarios em que ele esta usando o PC.
-- Correcoes: `Capture-Raw` confere o foco DEPOIS da foto (`$script:capOk`) e refoca 1x; `Read-Status`/`Inv-Free` descartam captura suspeita (e nunca salvam print da tela de outro programa — o `captcha\status_ultimo.png` chegou a conter o checkout do Mercado Livre do usuario, e a pasta sincroniza no OneDrive); `Read-Status` reafirma `Focus-Game` antes de CADA tecla C. Tambem: 6 tentativas, espera de 900ms de volta, e print `status_falhou.png` quando desiste.
+- Correcoes: `Capture-Raw` confere o foco DEPOIS da foto (`$script:capOk`) e refoca 1x; `Read-Status`/`Inv-Free` descartam captura suspeita (e nunca salvam print da tela de outro programa — um print da tela de outro aplicativo ja foi parar nessa pasta, que ainda por cima pode estar sincronizando pra nuvem); `Read-Status` reafirma `Focus-Game` antes de CADA tecla C. Tambem: 6 tentativas, espera de 900ms de volta, e print `status_falhou.png` quando desiste.
 
 7 melhorias implementadas 2026-08-31 22:00 (usuario pediu "faca do 1 ao 7"):
 1. **Tela de login no loop de farm**: `Login-Btn($img)` exige DOIS sinais (botao play 'unknown' + texto de `$LoginWords`) e so e consultado apos **3 leituras seguidas** sem o play (`$script:semPlay`) — loading normal some em 1-2, e assim nao paga OCR da tela toda a toa nem da falso positivo com chat. `Enter-Game` extraido do `Master-Reset` e reusado nos dois lugares; so cai pra coordenada `$LoginBtn` apos 3 tentativas sem achar o texto (nao clica a esmo dentro do jogo).
@@ -132,7 +129,7 @@ Rodada 5, 2026-08-31 23:30:
 - Gotcha reencontrado: script de teste escrito FORA do projeto le `C:\...\Área de Trabalho\...` como `�?rea` (heredoc bash gera UTF-8 sem BOM, PowerShell 5.1 le como ANSI). Testes tem que morar na pasta do projeto e usar `$PSScriptRoot`.
 
 Rodada 6, 2026-08-31 23:45 (auditoria achou 3 defeitos, 2 deles introduzidos nas rodadas anteriores):
-- **`captcha\` tinha 4.9GB / 2640 PNGs** acumulados desde 28/08, e a pasta esta DENTRO do OneDrive (sincronizando tudo pra nuvem). O .gitignore tirava do git, nao do OneDrive. `$CapKeepShots` = 40, podado a cada captcha novo.
+- **`captcha\` tinha 4.9GB / 2640 PNGs** acumulados desde 28/08, e a pasta pode estar dentro de uma pasta sincronizada pra nuvem. O .gitignore tirava do git, nao do OneDrive. `$CapKeepShots` = 40, podado a cada captcha novo.
 - **Watchdog de progresso disparava a toa**: `$GoldMinutes` (20) > `$SemProgressoMin` (12), e cacar/mixar nao distribui pontos — ao voltar da caca o `Tick-Progresso` via 20 min "sem progresso" e reiniciava o ciclo sem motivo. `Hunt-Golden` e `Tick-Inventory` agora zeram `$ptsLastGain` na volta.
 - **`$script:ciclos` crescia sem limite**: `+=` em array PowerShell realoca a cada item (O(n^2)) e a lista inteira ia pro estado.txt a cada reset. Capado em `$CapCiclosMax` = 200.
 - **`-Preflight`**: valida TODOS os subsistemas no jogo real antes de deixar rodando sozinho (privilegios, resolucao, captura, level, play, mapa, spot, captcha, 4 atributos, inventario, mensagens). Diferente do `-Check`, ele APERTA C e V, que e a parte que mais falha. Exit code 1 se algo falhar. Na 1a execucao ja mostrou o encadeamento certo: sem admin -> UIPI descarta C/V -> status e inventario falham.

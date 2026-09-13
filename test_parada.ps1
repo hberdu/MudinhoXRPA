@@ -117,7 +117,7 @@ Chk 'vigia de progresso roda com warp falho' ($src -match 'if\(-not \$warpOk\)\{
 
 # --- aprender o level minimo de reset pela mensagem do servidor -----------------------------------
 # O mecanismo existia e estava MORTO: o regex pedia "level" e "resetar" literais, e o OCR le "Iovol 350 para
-# rosetar". Seis avisos do servidor no rpa.log, zero aprendizados, alvo parado em 305 contra os 350 exigidos -
+# rosetar". Seis avisos do servidor no rpa.log, zero aprendizados, alvo parado abaixo do exigido -
 # um reenvio de /resetar sobrando a cada reset. Estas sao as leituras REAIS, com os erros de OCR que aconteceram.
 if($src -notmatch "(?m)^\`$MsgMinResetWords\s*=\s*'([^']+)'"){ throw "nao achei o `$MsgMinResetWords no CONFIG" }
 $minRe = $Matches[1]

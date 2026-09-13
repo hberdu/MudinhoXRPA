@@ -1,10 +1,10 @@
 # Self-check da PROJECAO DE RESETS e do piso de reset (nao toca no jogo): .\test_projecao.ps1
 # Duas coisas que so se pode saber MEDINDO, nunca supondo:
-#   1. quanto um reset rende - depende do level do alvo, do Fenrir e de quao forte o char esta;
+#   1. quanto um reset rende - depende do level do alvo e de quao forte o char esta;
 #   2. se o servidor aceita resetar no level pedido - a mensagem dele e a unica fonte de verdade.
-# O erro que este arquivo guarda: o aprendizado do piso so sabia SUBIR. Uma recusa (Fenrir desequipado, por
-# exemplo) prendia o char em 350 pra sempre, inclusive depois de reequipar - e o alvo de 305 do CONFIG nunca
-# mais era tentado, porque o proprio $TargetLevel tinha sido sobrescrito.
+# O erro que este arquivo guarda: o aprendizado do piso so sabia SUBIR. Uma recusa unica prendia o char naquele
+# level pra sempre, mesmo depois de a exigencia cair - e o alvo do CONFIG nunca mais era tentado, porque o
+# proprio $TargetLevel tinha sido sobrescrito.
 $src = Get-Content "$PSScriptRoot\mudinhox_rpa.ps1" -Raw
 $script:erros = 0
 function Chk($n,$got,$exp){ if("$got" -ne "$exp"){ "FALHOU $n : '$got' != '$exp'"; $script:erros++ } }
@@ -69,8 +69,8 @@ Chk 'sem resets, sem projecao'           (Resets-Faltando) ''
 
 # --- 4. o piso do reset tem que saber DESCER ------------------------------------------------------
 # Era so-sobe: a mensagem do servidor ("precisa estar no level 350") empurrava o piso pra cima e ele ficava la,
-# gravado no estado.txt. Com o Fenrir - que baixa a exigencia em 45 levels - isso e o pior caso possivel: uma
-# unica recusa com o item desequipado prendia o char em 350 pra sempre.
+# gravado no estado.txt. A exigencia do servidor pode CAIR (evento, mudanca de regra, item que desconta level),
+# e ai uma unica recusa antiga prendia o char num alvo alto pra sempre.
 Chk 'existe o alvo do CONFIG preservado' ($src -match '(?m)^\$TargetLevelConfig = \$TargetLevel') 'True'
 Chk 'aceite abaixo do piso baixa o piso' ($src -match '\$lvlEnvio -lt \$script:LevelMinReset') 'True'
 # A prova tem que ser um reset aceito DE PRIMEIRA: com reenvio o char subiu de level no meio e nao da pra dizer
@@ -84,15 +84,15 @@ Chk 'e o ganho e marcado por reset'      ($src -match '(?m)^\s*Marcar-Ganho-Do-R
 # o re-teste em si: so conta resets enquanto o alvo estiver acima do pedido, e dispara no N-esimo
 if($src -notmatch '(?s)(function Ajustar-Alvo-Do-Proximo-Ciclo \{.*?\r?\n\})'){ throw "nao achei a Ajustar-Alvo-Do-Proximo-Ciclo" }
 . ([scriptblock]::Create($Matches[1]))
-$TargetLevelConfig = 305; $ResetRetestResets = 20
+$TargetLevelConfig = 320; $ResetRetestResets = 20
 $script:TargetLevel = 350; $script:LevelMinReset = 350; $script:resetsDesdeTeste = 0
 1..19 | ForEach-Object { Ajustar-Alvo-Do-Proximo-Ciclo }
 Chk 'antes do N-esimo nao testa'         $script:TargetLevel 350
 Ajustar-Alvo-Do-Proximo-Ciclo
-Chk 'no N-esimo volta pro alvo pedido'   $script:TargetLevel 305
+Chk 'no N-esimo volta pro alvo pedido'   $script:TargetLevel 320
 Chk '  (e o contador zera)'              $script:resetsDesdeTeste 0
 # ja no alvo pedido: nao ha o que testar, e o contador nao pode ficar correndo
-$script:TargetLevel = 305; $script:resetsDesdeTeste = 7
+$script:TargetLevel = 320; $script:resetsDesdeTeste = 7
 Ajustar-Alvo-Do-Proximo-Ciclo
 Chk 'no alvo pedido nao conta nada'      $script:resetsDesdeTeste 0
 

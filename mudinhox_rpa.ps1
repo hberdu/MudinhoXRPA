@@ -22,14 +22,11 @@ param([switch]$Check, [string]$TestImage, [string]$TestStatus = "", [switch]$Tes
 # pra caber quatro bots no mesmo primeiro plano, mas o que ele resolve de verdade e nao roubar a sua tela.
 
 # ---------- CONFIG (coordenadas relativas a area cliente do jogo, 1920x1009) ----------
-$TargetLevel   = 315     # level pra resetar. Nunca abaixo de $LevelMinReset (o servidor recusa).
-                         # 315 desde 13/09: o FENRIR (que dava -45, alvo 305) foi VENDIDO; agora e HELLISH HORSE, -35.
-                         # O desconto vem do ITEM EQUIPADO, entao este numero muda quando a montaria muda - e por isso
-                         # o piso se re-testa sozinho (ver $ResetRetestResets) em vez de ficar cravado em lugar nenhum.
-                         # Era 350 por decisao sua; o A/B de antes tinha apontado 380 (272925 vs 175938 pontos/h), mas os
-                         # dois bracos rodaram em sequencia e nao intercalados, entao a comparacao nao era controlada.
-                         # O que aquele A/B sugere e que alvo MENOR rende mais - o ciclo encurta mais do que os pontos
-                         # por reset caem -, entao 305 deve render acima de 350. Da pra conferir no `pontos/h` do log.
+$TargetLevel   = 350     # level pra resetar. Nunca abaixo de $LevelMinReset (o servidor recusa).
+                         # O A/B antigo apontou 380 (272925 vs 175938 pontos/h), mas os dois bracos rodaram em
+                         # sequencia e nao intercalados, entao a comparacao nao era controlada. O que ele sugere e
+                         # que alvo MENOR rende mais - o ciclo encurta mais do que os pontos por reset caem.
+                         # Da pra conferir no `pontos/h` do log antes de mexer aqui.
 $PollSec       = 6       # intervalo de leitura do level com o jogo na frente
 $PollNearSec   = 2       # perto do level alvo le a cada N seg: o level sobe ~150 entre leituras e o reset saia com 400 em vez de 350 (farm jogado fora)
 $PollNearFrom  = 0.82    # "perto" = a partir de N% do $TargetLevel
@@ -210,7 +207,7 @@ $MsgTravadoWords = '(?i)s[eo]\s+mover'   # + 'moment' (conferido junto, pra nao 
 # "Voce precisa de estar no level 350 para resetar!" - o servidor DIZ o piso, e o bot aprende dai (ver o
 # reenvio do /resetar). O regex antigo pedia a palavra "level" e a palavra "resetar" literais e por isso NUNCA
 # casou: o OCR le "Iovol"/"lovol"/"levei"/"leve!" e "rosetar"/"resetad". Ficaram 6 avisos do servidor no log
-# sem nenhum aprendizado, com o alvo parado em 305 e um reenvio de /resetar sobrando a cada reset.
+# sem nenhum aprendizado, com o alvo parado abaixo do exigido e um reenvio de /resetar sobrando a cada reset.
 # Ancora no que o OCR acerta: o NUMERO colado em "para r?seta?". As letras de dentro e que ele erra.
 $MsgMinResetWords = '(?i)(\d{2,4})\s*para\s*r[eo0]s[eo0]ta'
 $ClientEsperado = @{ W = 1920; H = 1009 }   # resolucao pra qual as coordenadas fixas foram calibradas; muda isso se recalibrar noutra
@@ -220,20 +217,19 @@ $UiLogMaxChars = 60000   # teto do log da janelinha (o TextBox crescia sem limit
 $AutoTune      = $false  # A/B do alvo DESLIGADO: o alvo agora e escolha sua ($TargetLevel), nao do experimento
 $AutoTuneAlvos = 350, 380   # alvos a testar. NAO usar abaixo de $LevelMinReset: o servidor recusa e o /resetar so vira reenvio ate o char passar do minimo sozinho
 $LevelMaximo   = 400     # teto de level do servidor ("voce esta no nivel maximo"). No modo joias o char fica parado nele, entao o detector de miss infinito nao pode usar o level la
-$LevelMinReset = 315     # level minimo pra resetar. O servidor pede 350 ("Voce precisa de estar no level 350 para
-                         # resetar!") e a MONTARIA desconta: Fenrir dava -45 (305), o Hellish Horse de agora da -35 (315).
-                         # Valor so de partida: o que manda e a mensagem do servidor, que sobe o piso, e o reset aceito
-                         # de primeira, que o baixa. Trocar de montaria nao exige mexer aqui - o bot reaprende sozinho.
+$LevelMinReset = 350     # level minimo pra resetar, confirmado pela mensagem do servidor ("Voce precisa de estar
+                         # no level 350 para resetar!"). Valor so de PARTIDA: quem manda e o servidor, e o bot
+                         # aprende dos dois lados - a mensagem de recusa sobe o piso, um reset aceito de primeira
+                         # abaixo dele o baixa. Servidor que mude a regra nao exige mexer aqui.
 $ResetRetestResets = 20  # PISO APRENDIDO NAO PODE SER DEFINITIVO. Quando o servidor recusa o alvo do CONFIG, o bot
-                         # sobe o piso pro que a mensagem disser - e ate 12/09 ficava la pra sempre, gravado no
-                         # estado.txt. Isso e errado pro caso que interessa aqui: o FENRIR baixa a exigencia em 45
-                         # levels, e se ele estiver desequipado (ou vencido) numa unica tentativa o bot desistiria
-                         # do 305 pro resto da vida do char. A cada N resets ele tenta o alvo do CONFIG de novo;
-                         # com o Fenrir valendo o servidor aceita e o piso CAI na hora, sozinho.
+                         # sobe o piso pro que a mensagem disser - e isso ja ficou gravado no estado.txt pra
+                         # sempre. Errado: a exigencia pode cair (evento, mudanca de regra, item que desconta
+                         # level), e o bot nunca mais tentaria o alvo pedido. A cada N resets ele tenta de novo;
+                         # se o servidor aceitar, o piso CAI na hora, sozinho.
                          # Custo de um teste que falha: um /resetar recusado (~11s), uma vez a cada ~MR inteiro.
 # O ALVO DO CONFIG, guardado antes que alguem mexa. O $TargetLevel e mutavel em runtime (o aprendizado do piso e
-# o Load-Estado escrevem nele), entao depois da primeira recusa ele NAO e mais "o que voce pediu" - e o que o
-# servidor impos. Sem esta copia nao havia como voltar pro 305 depois, nem como saber que 305 era o pedido.
+# o Load-Estado escrevem nele), entao depois da primeira recusa ele NAO e mais o que esta escrito aqui em cima -
+# e o que o servidor impos. Sem esta copia nao ha como voltar pro alvo pedido, nem como saber qual era.
 $TargetLevelConfig = $TargetLevel
                          # O bot re-aprende sozinho pela mensagem do servidor se estiver errado - mas so pra CIMA
                          # (ver Master-Reset), entao um valor baixo demais se corrige e um alto demais nao.
@@ -2353,7 +2349,7 @@ function Ajustar-Alvo-Do-Proximo-Ciclo {   # re-testa o alvo do CONFIG de tempos
   $script:resetsDesdeTeste++
   if($script:resetsDesdeTeste -lt $ResetRetestResets){ return }
   $script:resetsDesdeTeste = 0
-  Log "testando de novo o alvo do CONFIG (lvl $TargetLevelConfig) contra o piso aprendido ($($script:LevelMinReset)): com o Fenrir valendo o servidor aceita e o piso cai sozinho"
+  Log "testando de novo o alvo do CONFIG (lvl $TargetLevelConfig) contra o piso aprendido ($($script:LevelMinReset)): se o servidor aceitar, o piso cai sozinho"
   $script:TargetLevel = $TargetLevelConfig   # o teste E resetar no alvo pedido; recusando, o aprendizado sobe o piso de novo
 }
 function Marcar-Ganho-Do-Reset {   # chamar UMA vez por reset, logo apos ele fechar
@@ -3114,12 +3110,12 @@ while($true){
   $script:tagsCiclo = @()   # ciclo novo comeca sem etiqueta
   $script:ultimoReset = $agora
   Log "reset feito, recomecando"
-  # ACEITO DE PRIMEIRA abaixo do piso que estava gravado = o piso estava errado (Fenrir equipado, ou o servidor
-  # mudou a regra). Sem isto o aprendizado so sabia SUBIR: uma recusa unica - com o Fenrir desequipado, por
-  # exemplo - prendia o char em 350 pra sempre, inclusive depois de reequipar. $resends -eq 0 e a prova: com
-  # reenvio o char subiu de level no meio e nao da pra dizer em qual delas o servidor cedeu.
+  # ACEITO DE PRIMEIRA abaixo do piso que estava gravado = o piso estava errado. Sem isto o aprendizado so sabia
+  # SUBIR, e uma recusa unica prendia o char naquele level pra sempre - mesmo depois de a exigencia cair.
+  # $resends -eq 0 e a prova: com reenvio o char subiu de level no meio e nao da pra dizer em qual tentativa o
+  # servidor cedeu, entao gravar o piso ali seria gravar um numero que ele nunca aceitou.
   if($resends -eq 0 -and $null -ne $lvlEnvio -and $lvlEnvio -lt $script:LevelMinReset){
-    Log "servidor ACEITOU reset no level $lvlEnvio (piso gravado era $($script:LevelMinReset)): baixando o piso - e o Fenrir valendo"
+    Log "servidor ACEITOU reset no level $lvlEnvio (piso gravado era $($script:LevelMinReset)): baixando o piso"
     $script:LevelMinReset = $lvlEnvio
     if($script:TargetLevel -gt $TargetLevelConfig){ $script:TargetLevel = [Math]::Max($TargetLevelConfig, $lvlEnvio) }   # volta pro alvo pedido, que o aprendizado tinha empurrado pra cima
     Save-Estado

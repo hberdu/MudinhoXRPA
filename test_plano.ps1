@@ -26,7 +26,7 @@ $WarmupTeste = $false
 
 # --- 1. o plano confere com o CONFIG --------------------------------------------------------------
 $script:linhas = @(); $script:modo = 'reset'; $script:phase = 'warmup'; $script:warmupCount = 0
-$script:TargetLevel = 315; $script:LevelMinReset = 315; $script:resets = 0; $script:ptsSent = 0
+$script:TargetLevel = 350; $script:LevelMinReset = 350; $script:resets = 0; $script:ptsSent = 0
 Log-Plano
 Chk 'sao duas linhas'                $script:linhas.Count 2
 Tem 'diz quantos resets de warmup'   $script:linhas[0] "$WarmupResets resets em $WarmupCmd"
@@ -34,7 +34,7 @@ Tem 'diz o spot normal depois'       $script:linhas[0] "depois $WarpCmd"
 Tem 'e onde isso termina'            $script:linhas[0] '/darmr'
 Tem 'diz a fase atual'               $script:linhas[1] "warmup 0/$WarmupResets"
 Tem 'e o proximo passo concreto'     $script:linhas[1] "vai pra $WarmupCmd"
-Tem 'diz o level de reset'           $script:linhas[1] 'reseta no level 315'
+Tem 'diz o level de reset'           $script:linhas[1] 'reseta no level 350'
 
 # --- 2. warmup ja cumprido: o proximo passo muda ---------------------------------------------------
 # Retomar do estado.txt na fase normal e o caso em que o plano MAIS importa: o bot nao vai pro Lost Tower, e
