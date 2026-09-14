@@ -52,7 +52,7 @@ Tem 'e avisa que nao reseta'         $script:linhas[1] 'NAO reseta'
 
 # --- 4. o $WarmupTeste muda o ciclo, e o plano tem que dizer ---------------------------------------
 # Ligado, o bot TESTA o spot normal antes e pode pular o warmup inteiro. Um plano que continuasse prometendo
-# "3 resets em losttower7" estaria mentindo - e mentira no log e pior que silencio.
+# "3 resets no spot de warmup" estaria mentindo - e mentira no log e pior que silencio.
 $script:linhas = @(); $script:modo = 'reset'; $script:phase = 'warmup'; $WarmupTeste = $true
 Log-Plano
 Tem 'com WarmupTeste o plano muda'   $script:linhas[0] "TESTA $WarpCmd primeiro"

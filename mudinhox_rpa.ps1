@@ -51,7 +51,7 @@ $GameTitle     = ''       # DEFAULT: considerar o jogo em aberto como cliente de
                           # daria pra capturar os pixels, mas nao pra mirar a janela do navegador la dentro,
                           # nem pra conferir foco.
 $WarpCmd       = '/k37'   # comando de teleporte pro spot de farm normal (troque aqui se mudar de spot). Era /s18 (Stadium)
-$WarmupCmd     = '/losttower7'   # apos /darmr o personagem volta fraco em Lorencia: farma AQUI (Lost Tower 7) ate juntar os primeiros resets
+$WarmupCmd     = '/losttower6'   # apos /darmr o personagem volta fraco em Lorencia: farma AQUI (Lost Tower 6) ate juntar os primeiros resets
 $WarmupResets  = 3           # quantos resets fazer no modo warmup (pos-darmr) antes de voltar ao spot normal ($WarpCmd).
                              # Era 10, depois 3. Chegou a ir pra 2 em 08/09 e voltou pra 3 no rollback daquele lote.
                              # Medido em 9 master resets: o warmup e o MAIOR ponto isolado de demora - 13.9 min de um
@@ -75,7 +75,7 @@ $WarmupTesteSec = 300    # o teste falha se o primeiro ciclo no spot normal pass
 $WarpMap       = 'kant'      # 4 primeiras letras do nome que o minimapa mostra no spot do $WarpCmd - o /k37 cai em KANTURU (confirmado no log de 12:01). VAZIO = o bot APRENDE no primeiro teleporte e grava no estado.txt.
                              # Era 'stad' (Stadium, do /s18). Chutar o nome errado e pior que nao saber: o bot acha que nunca chegou e re-teleporta a noite toda.
                              # Pra reaprender depois de trocar de spot: deixe vazio aqui, ou apague a linha warpMap= do estado.txt
-$WarmupMap     = 'lost'      # nome esperado do mapa do /losttower7 (Lost Tower). Evita aceitar mapa errado (ex AIDA) como spot
+$WarmupMap     = 'lost'      # nome esperado do mapa do  (Lost Tower). Serve pra qualquer andar: o minimapa diz so 'Lost Tower'. Evita aceitar mapa errado (ex AIDA) como spot
 $WarpWaitSec   = 9       # espera apos o teleporte (dar tempo do mapa trocar)
 $ResetWaitSec  = 8       # sem captcha e level ainda alto apos N seg -> reenvia /resetar. Era 15: no log 83 dos 179 /resetar se perderam (o REENVIO funciona quase sempre na hora), entao esperar 15s so jogava ~20 min fora
 $ResetRetries  = 2       # apos N reenvios de /resetar avisa (mas NUNCA para de reenviar)
@@ -171,7 +171,7 @@ $WatchdogTask  = 'MudinhoX RPA Watchdog'   # Tarefa Agendada do watchdog ANTIGO.
 $EstadoFile    = Join-Path $PSScriptRoot 'estado.txt'   # fase + contagem de warmup, pra sobreviver a reinicio do bot
 $LogMaxMB      = 5       # rpa.log maior que isso no start vira .bak (a pasta sincroniza no OneDrive)
 $LogKeepBaks   = 5       # quantos .bak manter
-$WarmupFile    = Join-Path $PSScriptRoot 'warmup.flag'   # se existir no start, o bot comeca em modo warmup (/losttower7) — use apos dar MR manualmente
+$WarmupFile    = Join-Path $PSScriptRoot 'warmup.flag'   # se existir no start, o bot comeca em modo warmup () — use apos dar MR manualmente
 # Captcha: offsets a partir do centro do texto "Selecione a mesma imagem abaixo:" (achado por OCR)
 $CapRefDy      = -80                          # imagem de referencia (acima do texto)
 $CapRowDy      = 80, 210                      # 2 linhas de opcoes
@@ -1980,7 +1980,7 @@ function Wait-Map([string]$want,[double]$maxSec,[string]$diff = ''){   # espera 
   } while((Get-Date) -lt $fim -and -not $script:stop)
   Read-Map $null
 }
-function Warp-To-Spot {   # teleporta pro spot da fase atual (warmup=/losttower7, normal=/s18) e confirma pelo mapa. Sucesso = ja num mapa de farm ou chegou num. $false = desistiu
+function Warp-To-Spot {   # teleporta pro spot da fase atual (warmup=, normal=) e confirma pelo mapa. Sucesso = ja num mapa de farm ou chegou num. $false = desistiu
   $cmd = if($script:phase -eq 'warmup'){ $WarmupCmd } else { $WarpCmd }
   $want = Spot-Map
   $before = Read-Map $null
