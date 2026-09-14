@@ -51,7 +51,7 @@ $GameTitle     = ''       # DEFAULT: considerar o jogo em aberto como cliente de
                           # daria pra capturar os pixels, mas nao pra mirar a janela do navegador la dentro,
                           # nem pra conferir foco.
 $WarpCmd       = '/k37'   # comando de teleporte pro spot de farm normal (troque aqui se mudar de spot). Era /s18 (Stadium)
-$WarmupCmd     = '/losttower4'   # apos /darmr o personagem volta fraco em Lorencia: farma AQUI (Lost Tower 4) ate juntar os primeiros resets
+$WarmupCmd     = '/losttower5'   # apos /darmr o personagem volta fraco em Lorencia: farma AQUI (Lost Tower 5) ate juntar os primeiros resets
 $WarmupResets  = 3           # quantos resets fazer no modo warmup (pos-darmr) antes de voltar ao spot normal ($WarpCmd).
                              # Era 10, depois 3. Chegou a ir pra 2 em 08/09 e voltou pra 3 no rollback daquele lote.
                              # Medido em 9 master resets: o warmup e o MAIOR ponto isolado de demora - 13.9 min de um
