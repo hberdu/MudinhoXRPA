@@ -43,6 +43,18 @@ Chk 'stop.flag externo para o bot'       $script:stop               $true
 Chk 'e o motivo fica registrado'         $script:stopReason         'stop.flag'
 Chk 'e o arquivo e consumido'            (Test-Path $StopFile)      $false
 
+# --- quem para, para LIMPO: nenhum caminho de saida pode deixar heartbeat pra tras ----------------
+# 14/09: o bot bateu o heartbeat no start, morreu no teto de "janela menor que a calibracao" sem limpar, e
+# BLOQUEOU A SI MESMO - as duas tentativas seguintes de abrir bateram em "ja existe um bot rodando (heartbeat
+# fresco)" pelos $HeartbeatVivoSec seguintes. O Check-Stop ja limpava; este caminho tinha escapado da regra.
+Chk 'saida por janela pequena limpa o heartbeat' ($src -match '(?s)PARANDO: a area cliente.*?Remove-Item \$HeartbeatFile') 'True'
+# E minimizado NAO e "janela pequena": area cliente 0x0 e estado passageiro, a instrucao "ponha em 1920x1009"
+# nao faz sentido (nao ha o que redimensionar) e morrer por isso e pior ainda. Espera.
+Chk 'minimizado espera, nao morre'               ($src -match '(?s)IsIconic\(\$h0\).*?MINIMIZADO.*?while\(-not \$script:stop -and \[W\]::IsIconic') 'True'
+# ...e a espera nao pode contar como TEMPO ATIVO: entraria no divisor do pontos/h. Por isso escreve o arquivo
+# direto, e nao via Bater-Heartbeat (mesma razao do Pause-Gate).
+Chk '  (e a espera nao vira tempo ativo)'        ($src -match '(?s)MINIMIZADO.*?while\(-not \$script:stop -and \[W\]::IsIconic.*?Set-Content -Path \$HeartbeatFile') 'True'
+
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 
 # --- painel de status congelado -------------------------------------------------------------------

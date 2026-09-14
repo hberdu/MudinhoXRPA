@@ -2989,12 +2989,34 @@ try {   # preflight no start: 10s conferindo tudo evita a noite inteira perdida 
   # "O parametro deve ser positivo e < Width", que nao diz nada sobre o tamanho da janela.
   # Maior que a calibracao nao para: as coordenadas ainda caem dentro, e o $ChatBox ja mede a partir
   # da BASE da area cliente, entao altura extra e tolerada (ja rodou assim em 1920x1061).
+  # MINIMIZADA NAO E "JANELA PEQUENA". Janela minimizada devolve area cliente 0x0, e o bot dizia "esta 0x0,
+  # menor que a calibracao - ponha em 1920x1009", que e a instrucao errada: nao ha o que redimensionar, e so
+  # restaurar. Pior, ele MORRIA por isso - sendo que minimizado e um estado passageiro. Agora espera.
+  $h0 = Get-Game
+  if([W]::IsIconic($h0)){
+    Log "o jogo esta MINIMIZADO (area cliente 0x0). Restaure a janela - eu espero, nao vou fechar."
+    Notify "MudinhoX" "O jogo esta minimizado. Restaure a janela que o bot continua sozinho."
+    # Bate o heartbeat DIRETO no arquivo, nao via Bater-Heartbeat: aquele acumula TEMPO ATIVO, e esperar voce
+    # restaurar a janela nao e o bot trabalhando - entraria no divisor do pontos/h e afundaria a taxa. Mesma
+    # razao do Pause-Gate. O heartbeat em si tem que continuar, senao outra instancia acha que este morreu.
+    while(-not $script:stop -and [W]::IsIconic((Get-Game))){
+      try { (Get-Date).Ticks | Set-Content -Path $HeartbeatFile -Encoding ASCII } catch {}
+      Check-Stop; Wait 5
+    }
+    if(-not $script:stop){ Log "jogo restaurado, seguindo"; Wait 2 }
+  }
   $cli = New-Object W+RECT; [W]::GetClientRect((Get-Game),[ref]$cli) | Out-Null
-  if($cli.R -lt $ClientEsperado.W -or $cli.B -lt $ClientEsperado.H){
+  if(-not $script:stop -and ($cli.R -lt $ClientEsperado.W -or $cli.B -lt $ClientEsperado.H)){
     Log "PARANDO: a area cliente do jogo esta $($cli.R)x$($cli.B), menor que a calibracao $($ClientEsperado.W)x$($ClientEsperado.H)."
     Log "  Todas as coordenadas do bot sao fixas nesse tamanho - numa janela menor ele le fora da tela e quebra."
     Log "  Ponha a janela do jogo em $($ClientEsperado.W)x$($ClientEsperado.H) e suba de novo."
     Notify "MudinhoX" "Janela do jogo em $($cli.R)x$($cli.B); precisa ser $($ClientEsperado.W)x$($ClientEsperado.H). Bot parado."
+    # APAGA O HEARTBEAT ANTES DE SAIR. Sem isto o bot bloqueava a si mesmo: ele bate o heartbeat no start, morre
+    # aqui sem limpar, e as tentativas seguintes batiam em "ja existe um bot rodando (heartbeat fresco)" pelos
+    # $HeartbeatVivoSec (180s) seguintes. Foi o que aconteceu em 14/09: duas tentativas de reabrir recusadas
+    # em sequencia depois de uma parada por janela minimizada. Quem para, para limpo - a regra ja valia pro
+    # Check-Stop, e este caminho de saida tinha escapado dela.
+    Remove-Item $HeartbeatFile -ErrorAction SilentlyContinue
     if($script:logW){ $script:logW.Dispose() }; if($script:ui){ $script:ui.Dispose() }
     exit
   }
