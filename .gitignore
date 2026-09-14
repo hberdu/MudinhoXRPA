@@ -32,3 +32,6 @@ watchdog.log
 # scripts temporarios de investigacao
 _*.ps1
 testes.log
+
+# sobra do git filter-branch (diretorio temporario na raiz do repo)
+.git-rewrite/
