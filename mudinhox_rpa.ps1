@@ -1238,7 +1238,15 @@ function Read-Level($img){
         $reads = @($reads | ? { $_ -ge 1 -and $_ -le $LevelMaximo })
         if($reads.Count){ $out = [int]($reads | Group-Object | Sort-Object Count -Descending | Select-Object -First 1).Name }
       }
-      if($null -eq $out){ $script:lvlBox = $null; Log "level: a caixa calibrada parou de dar numero valido - vou recalibrar na proxima leitura de status" }
+      if($null -eq $out){
+        # PEDE A RECALIBRACAO AGORA, nao "na proxima leitura de status". Sem a caixa o bot fica CEGO pro level,
+        # que e o unico gatilho do /resetar - e quem recalibra e o Read-Status, que so roda quando o $statDue
+        # vence. Pior: com o level ilegivel o $lvlPrev congela, o portao "mesmo level, nao rele" do Tick-Stats
+        # acha que nada mudou e PULA justamente a leitura que resolveria. Sobrava o teto de $StatMaxSec pra
+        # destravar. Medido: 11 episodios, 37s em media, ate 116s - com o char parado no level 400 esperando.
+        $script:lvlBox = $null; $script:statDue = Get-Date; $script:forcaStat = $true
+        Log "level: a caixa calibrada parou de dar numero valido - recalibrando agora"
+      }
     }
   } catch { $out = $null; $script:lvlBox = $null }
   if($own){ $img.Dispose() }
@@ -1281,8 +1289,14 @@ function Achar-Botao-Play($img){   # devolve @{X;Y;Estado} do centro do botao, o
       # quase tudo. Limiar baixo pegava barra de vida e favicon. Clicar no lugar errado e pior que nao achar -
       # 'unknown' o Start-Helper ja trata (espera sem clicar).
       $tot = [Math]::Max($r,$g)
-      if($tot -ge 20 -and (-not $melhor -or $tot -gt $melhor.Tot)){
-        $melhor = @{ X = $cx + [int]($PlayCell/2); Y = $cy + [int]($PlayCell/2); Tot = $tot
+      # Entre os que passam do limiar, vence o MAIS ALTO (e, empatando, o mais a esquerda) - nao o mais forte.
+      # Escolher pelo tamanho do borrao fazia o orbe de vida e outros blocos coloridos da HUD ganharem do botao,
+      # que e pequeno: das 20 buscas do log, 11 devolveram coordenada errada - (72,96), (348,60), (252,204)... -
+      # e como o resultado vai pro cache ($script:playBox), a posicao errada ficava valendo. O estado lido dali e
+      # chute, e 'running' falso e o pior deles: o bot nao clica no play e o char passa o ciclo sem farmar.
+      # O botao mora no ALTO do canvas; essa e a informacao que a regiao ja tentava dizer e que o "maior" anulava.
+      if($tot -ge 20 -and (-not $melhor -or $cy -lt $melhor.Cy -or ($cy -eq $melhor.Cy -and $cx -lt $melhor.Cx))){
+        $melhor = @{ X = $cx + [int]($PlayCell/2); Y = $cy + [int]($PlayCell/2); Cx = $cx; Cy = $cy; Tot = $tot
                      Estado = $(if($r -ge $g){ 'running' } else { 'stopped' }) }
       }
     }
@@ -1640,6 +1654,7 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
 # de novo so custa: rouba o foco, gasta 2-3s e loga "0 a distribuir". No log foram 84 leituras assim.
 # O teto de tempo continua existindo porque o level as vezes nao e legivel (OCR) e nao da pra confiar so nele.
 $script:statLvlLast = -1; $script:statMax = Get-Date; $script:pertoDoMax = $false; $script:statVazias = 0
+$script:forcaStat = $false   # o Read-Level liga isto quando perde a caixa: a proxima leitura de status e obrigatoria
 $script:stFp = ''; $script:stFpLvl = $null; $script:stFpN = 0   # assinatura da ultima leitura de status (detector de painel congelado)
 $script:statMinOk = 0   # veredito do servidor sobre comando abaixo do piso: 0 = ainda nao perguntei, 1 = aceita, -1 = recusa. Vai pro estado.txt: a pergunta e feita UMA vez na vida
 # Memoria dos 4 atributos: ultimo valor LIDO de cada um, somado ao que o bot mandou desde entao. Serve pra
@@ -1655,10 +1670,14 @@ function Tick-Stats {   # so roda enquanto upa (nunca durante captcha)
   # Depois de N leituras vazias seguidas o intervalo dobra, ate o teto; a primeira leitura util zera o recuo.
   $teto = if($script:pertoDoMax){ $StatEveryNearSec * 4 } else { $StatMaxSec }   # perto do cap o recuo e curto: la a pressa vale
   $intervalo = [Math]::Min($teto, $base * [Math]::Pow(2, [Math]::Min($script:statVazias, 5)))
-  if(-not $script:pertoDoMax){
+  # O portao do level NAO vale quando quem pediu a leitura foi o Read-Level, por ter perdido a caixa calibrada:
+  # ali o $lvlPrev esta CONGELADO justamente porque o level nao pode ser lido, entao "mesmo level" seria sempre
+  # verdade e o bot pularia a unica leitura capaz de recalibrar. Era esse o laco que deixava ate 116s cego.
+  if(-not $script:pertoDoMax -and -not $script:forcaStat){
     $mesmoLevel = ($null -ne $script:lvlPrev -and $script:lvlPrev -eq $script:statLvlLast)
     if($mesmoLevel -and (Get-Date) -lt $script:statMax){ $script:statDue = (Get-Date).AddSeconds((Jit $intervalo)); return }
   }
+  $script:forcaStat = $false
   $script:statLvlLast = $script:lvlPrev
   $script:statMax = (Get-Date).AddSeconds($StatMaxSec)
   Distribute-Points
