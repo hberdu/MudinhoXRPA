@@ -22,11 +22,14 @@ param([switch]$Check, [string]$TestImage, [string]$TestStatus = "", [switch]$Tes
 # pra caber quatro bots no mesmo primeiro plano, mas o que ele resolve de verdade e nao roubar a sua tela.
 
 # ---------- CONFIG (coordenadas relativas a area cliente do jogo, 1920x1009) ----------
-$TargetLevel   = 350     # level pra resetar. Nunca abaixo de $LevelMinReset (o servidor recusa).
-                         # O A/B antigo apontou 380 (272925 vs 175938 pontos/h), mas os dois bracos rodaram em
-                         # sequencia e nao intercalados, entao a comparacao nao era controlada. O que ele sugere e
-                         # que alvo MENOR rende mais - o ciclo encurta mais do que os pontos por reset caem.
-                         # Da pra conferir no `pontos/h` do log antes de mexer aqui.
+$TargetLevel   = 350     # level pra resetar: o MINIMO que o servidor aceita, e e de proposito. NAO SUBIR.
+                         # A razao e do jogo, nao do bot: quanto MAIOR o level, mais devagar ele sobe. Entao os
+                         # levels entre 350 e o alvo maior sao os mais caros do ciclo, e os pontos a mais que
+                         # eles rendem no reset nao pagam o tempo. Resetar no piso e o ciclo mais curto possivel.
+                         # Ha um A/B antigo (350 vs 380) no historico que parece dizer o contrario - ignore-o: os
+                         # dois bracos rodaram em SEQUENCIA, nao intercalados, entao mediram noites diferentes e
+                         # nao o alvo. Foi por isso que o $AutoTune ficou desligado.
+                         # Se um dia isto for testado de novo, tem que ser intercalando reset a reset.
 $PollSec       = 6       # intervalo de leitura do level com o jogo na frente
 $PollNearSec   = 2       # perto do level alvo le a cada N seg: o level sobe ~150 entre leituras e o reset saia com 400 em vez de 350 (farm jogado fora)
 $PollNearFrom  = 0.82    # "perto" = a partir de N% do $TargetLevel
@@ -214,8 +217,10 @@ $ClientEsperado = @{ W = 1920; H = 1009 }   # resolucao pra qual as coordenadas 
 $SemProgressoMin = 12    # sem ganhar UM ponto por N min = travou em algo que a gente ainda nao previu -> avisa e reinicia o ciclo
 $LogLevelDelta = 40      # so loga o level quando ele salta N (ou cai = reset). Com poll de 2s, logar todo tick so enche o arquivo
 $UiLogMaxChars = 60000   # teto do log da janelinha (o TextBox crescia sem limite rodando dias seguidos)
-$AutoTune      = $false  # A/B do alvo DESLIGADO: o alvo agora e escolha sua ($TargetLevel), nao do experimento
-$AutoTuneAlvos = 350, 380   # alvos a testar. NAO usar abaixo de $LevelMinReset: o servidor recusa e o /resetar so vira reenvio ate o char passar do minimo sozinho
+$AutoTune      = $false  # A/B do alvo DESLIGADO, e nao e "ainda nao ligamos": a resposta ja e conhecida. Level
+                         # alto sobe mais devagar, entao o alvo certo e o piso do servidor - ver $TargetLevel.
+                         # Ligar isto faria o bot passar resets medindo um alvo maior que ja se sabe pior.
+$AutoTuneAlvos = 350, 380   # alvos que ele testaria. NAO usar abaixo de $LevelMinReset: o servidor recusa e o /resetar so vira reenvio ate o char passar do minimo sozinho
 $LevelMaximo   = 400     # teto de level do servidor ("voce esta no nivel maximo"). No modo joias o char fica parado nele, entao o detector de miss infinito nao pode usar o level la
 $LevelMinReset = 350     # level minimo pra resetar, confirmado pela mensagem do servidor ("Voce precisa de estar
                          # no level 350 para resetar!"). Valor so de PARTIDA: quem manda e o servidor, e o bot
