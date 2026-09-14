@@ -1,0 +1,16 @@
+tree cd410b018187f0e61339d51d0d7ac5bed4f9285d
+parent 3fa2edf51e7b9288a30a591c4bcdd7e8fab98e4e
+author Henrique Berdu <henriqueberdu@gmail.com> 1789307400 -0300
+committer Henrique Berdu <henriqueberdu@gmail.com> 1789307400 -0300
+
+fix: para de insistir na tecla errada do inventario
+
+A tecla configurada nao abre o inventario neste cliente, e o bot tentava
+de novo a cada 5 min - apertando 4x uma tecla que nao se sabe o que faz no
+personagem, e reescrevendo um print de 3MB toda vez.
+
+Apos $InvMaxFalhas (3) falhas seguidas, desliga a checagem automatica e
+avisa UMA vez, dizendo qual config ajustar. O botao MIXAR JOIAS continua
+funcionando normalmente. Uma leitura bem-sucedida zera o contador.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>

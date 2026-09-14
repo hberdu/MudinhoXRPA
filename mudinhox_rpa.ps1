@@ -99,15 +99,15 @@ $StatPertoDoMax = 30000  # com os 4 atributos acima disso, o piso por comando ca
 $StatMinPerto  = 500     # piso reduzido na reta final: o que importa la e FECHAR o cap pro /darmr, nao economizar comando
 $StatMinAgi    = 100     # o /a NUNCA vai abaixo disso, nem na reta final: abaixo de 100 ele teleporta o char pra AIDA (perigo documentado, medido)
 $StatEveryNearSec = 5    # perto do maximo le o status a cada N seg (em vez de $StatEverySec): os ultimos pontos e que destravam o /darmr
-$StatEverySec  = 35      # distribui os pontos a cada N seg enquanto upa (alem de logo apos cada reset e antes de cada /resetar)
-                         # Era 15, e o numero de COMANDOS e o que custa caro: medido em 541 resets do log, a duracao
-                         # de um reset e ~46s + 5.1s POR COMANDO de distribuicao (o comando custa 2.5s de sleeps e
-                         # puxa uma releitura de status atras). Com 15s saiam 10.9 comandos por reset - ~56s dos
-                         # 100s. E comando = leitura: os pontos chegam a ~37/s e cada leitura gastava os ~554 que
-                         # tinham chegado. Esperando mais, o MESMO total sai em menos comandos maiores (o teto por
-                         # comando e a etapa, $StatStep = 5000, longe dos ~1300 que 35s acumulam).
-                         # Nao atrasa o /darmr: na reta final o $Perto-Do-Max troca este intervalo pelo
-                         # $StatEveryNearSec (5s), e sao os ultimos pontos que destravam o /darmr.
+$StatEverySec  = 15      # distribui os pontos a cada N seg enquanto upa (alem de logo apos cada reset e antes de cada /resetar)
+                         # Foi pra 35 na teoria de que "comando = leitura" e que esperar mais renderia comandos
+                         # maiores. MEDIDO depois, em 80 resets: nao rendeu NADA - 99s por reset contra os 100s de
+                         # antes, e 9.4 comandos contra 10.9. A teoria estava errada porque a mediana entre
+                         # leituras e 3s, nao $StatEverySec: quem manda e o laco interno do Distribute-Points e o
+                         # $StatEveryNearSec da reta final. Este intervalo quase nao aparece.
+                         # O que ele fez de verdade foi DOBRAR todo intervalo cego: o recuo do Tick-Stats
+                         # multiplica esta base, entao uma leitura vazia passou de 30s pra 70s de silencio. Um
+                         # ciclo do log ficou 77s sem olhar atributo nem level com o char ja passando do alvo.
 $StatMaxSec    = 90      # teto: mesmo com o level parado (ou ilegivel), rele o status a cada N seg
 $StatCongeladoN = 2      # N leituras de status IDENTICAS (4 atributos + pontos) com o level andando entre elas = painel velho na tela -> destrava. Em 01/09 ficou 12 min com "752 pontos" congelados e so o $SemProgressoMin pegou
 $StatRoundSec  = 0.25    # espera entre uma rodada de distribuicao e a releitura do status (era 0.5; a releitura ja custa ~1s de captura+OCR, nao precisa de folga por cima)
@@ -1597,10 +1597,21 @@ function Distribute-Points {   # le os 4 atributos + pontos e distribui em etapa
           }
         }
         if($testou){ continue }   # com o veredito na mao, refaz o plano ja com o piso novo
-        # Mostrar o piso REAL: na reta final ele nao e o $StatMinOutros, e a mensagem "418 pontos; minimo 100"
-        # fez a recusa parecer um absurdo quando o piso aplicado tinha sido 500.
-        $pisoReal = if($script:pertoDoMax){ [Math]::Min($StatMinPerto, $StatMinOutros) } else { $StatMinOutros }
-        Log "stats: nada a distribuir agora ($p pontos; minimo $pisoReal por comando)"
+        # Mostrar o piso REAL, e de QUEM. Nao ha um piso so: /f /v /e usam o $StatMinOutros (que o servidor ja
+        # deixou cair pra 100), mas o /a tem piso proprio de $StatMinCmd (1000, perigo da AIDA). A mensagem
+        # antiga imprimia so o primeiro, entao "988 pontos; minimo 100" parecia absurdo - o que faltava eram
+        # 1000 pro /a, unico atributo abaixo da etapa naquela hora. Sem dizer QUEM esta travado nao da pra saber
+        # se o bot esta esperando ponto (normal) ou preso num piso que nunca vai ser alcancado.
+        $etapa = Stat-Stage $st
+        $trava = @()
+        foreach($k in $StatOrder){
+          if([int]$st[$k] -ge $etapa){ continue }   # ja cumpriu a etapa: nao e ele que esta segurando
+          $sc = $StatCmds | ? { $_.Key -eq $k } | select -First 1
+          $piso = if($sc.Cmd -eq '/a'){ if($script:pertoDoMax){ [Math]::Max($StatMinPerto, $StatMinAgi) } else { $StatMinCmd } }
+                  else { if($script:pertoDoMax){ [Math]::Min($StatMinPerto, $StatMinOutros) } else { $StatMinOutros } }
+          $trava += "$($sc.Cmd) precisa de $piso"
+        }
+        Log "stats: nada a distribuir agora ($p pontos em maos; $(if($trava.Count){ $trava -join ', ' } else { 'nenhum atributo abaixo da etapa' }))"
       }
       $script:statVazias++   # leitura que nao rendeu comando: da proxima vez espera mais (ver Tick-Stats)
       return
@@ -3021,7 +3032,14 @@ while($true){
             # perto do alvo o poll e de 2s: logar todo tick enche o arquivo e atrapalha achar problema. So loga salto real ou queda (reset)
             if($null -eq $script:lvlLogged -or $lvl -lt $script:lvlLogged -or ($lvl - $script:lvlLogged) -ge $LogLevelDelta){ Log "level: $lvl"; $script:lvlLogged = $lvl }
           }
-          Tick-Stats; Tick-Inventory; Tick-Msgs $img; Tick-Progresso; Tick-Human; Tick-WarmupTeste
+          # CHEGOU NO ALVO = sai JA, sem pagar a rodada de Ticks. O `until` la embaixo so e avaliado depois que
+          # tudo isto roda, entao o reset ficava esperando um Read-Status (~3s), um comando de distribuicao
+          # (~2.5s) e ate um disfarce do Tick-Human - medido no log: 10s entre o level passar do alvo e o
+          # /resetar sair, em TODO reset. Nada do que essas Ticks fazem muda o que vem a seguir, que e resetar:
+          # os pontos nao somem, e quem os gasta e a subida do proximo ciclo.
+          if($null -eq $lvl -or $lvl -lt $TargetLevel){
+            Tick-Stats; Tick-Inventory; Tick-Msgs $img; Tick-Progresso; Tick-Human; Tick-WarmupTeste
+          }
         }
         $img.Dispose()
       }

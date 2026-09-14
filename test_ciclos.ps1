@@ -95,6 +95,17 @@ Chk '1 vazia: dobra pra 30s' ([int]($script:statDue - (Get-Date)).TotalSeconds) 
 $script:pertoDoMax = $true; $script:statVazias = 5; $script:statDue = Get-Date; Tick-Stats
 Chk 'perto do maximo o recuo para em 4x o intervalo curto' ([int]($script:statDue - (Get-Date)).TotalSeconds) 20
 
+# --- chegou no alvo: nao paga a rodada de Ticks antes de resetar ----------------------------------
+# O `until` do laco de farm so e avaliado DEPOIS de Tick-Stats/Inventory/Msgs/Progresso/Human rodarem. Medido no
+# log: 10s entre o level passar do alvo e o /resetar sair, em todo reset - um Read-Status (~3s), um comando de
+# distribuicao (~2.5s) e as vezes um disfarce do Tick-Human. Nada disso muda o que vem a seguir, que e resetar.
+Chk 'no alvo, pula as Ticks'    ($src -match '(?s)if\(\$null -eq \$lvl -or \$lvl -lt \$TargetLevel\)\{\s*\r?\n\s*Tick-Stats') 'True'
+# E o intervalo de status NAO pode voltar a inflar: o recuo do Tick-Stats multiplica esta base, entao cada
+# segundo aqui vira o dobro (ou mais) de tempo cego. Medido: 35 nao rendeu nada (99s/reset contra 100s) e dobrou
+# todo intervalo cego - um ciclo ficou 77s sem olhar atributo nem level com o char ja passando do alvo.
+if($src -notmatch '(?m)^\$StatEverySec\s*=\s*(\d+)'){ throw "nao achei o `$StatEverySec" }
+Chk 'intervalo de status curto' ([int]$Matches[1] -le 20) 'True'
+
 # --- miss infinito: detectar sem esperar 40s e sem acusar por leitura que falhou ------------------
 # A metrica do proprio bot aponta 'stall' como 23-27% de TODO o tempo, e a maior parte e latencia de
 # deteccao: 113 disparos x 40s = ~75 min so pra perceber. Agora sao DUAS condicoes - N leituras iguais
