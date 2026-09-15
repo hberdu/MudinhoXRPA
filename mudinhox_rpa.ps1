@@ -2863,7 +2863,14 @@ function Run-Preflight([bool]$comSpot){   # valida os subsistemas de leitura no 
   Hold-Focus
   try {
     $img = Capture-Game
-    Ok 'consegue capturar a tela do jogo' ($img -and $script:capOk) 'capturou outra janela ou o jogo nao veio pra frente'
+    # PERGUNTA AO WINDOWS de quem sao os pixels, em vez de confiar no $capOk. Com $NoFocusRead o $capOk e
+    # sempre verdadeiro (a leitura nem pede foco), entao este check passava SEMPRE - inclusive em 15/09 14:41,
+    # quando o bot estava lendo outra janela: as tres verificacoes seguintes falharam e a faixa de mensagens
+    # trouxe prosa em portugues que nao existe no jogo ("...ela se arrependeu bastante"). Dizer OK ali e pior
+    # que nao checar: manda procurar o defeito nos subsistemas de leitura, que estavam certos.
+    # Aqui vale ser ESTRITO. Falso negativo no preflight custa um aviso a mais; falso positivo manda o bot rodar
+    # cego e ainda aponta a culpa pro lugar errado. No caminho quente a escolha e a oposta, de proposito.
+    Ok 'os pixels sao mesmo do jogo' ($img -and (Pixels-Sao-Do-Jogo)) 'tem outra janela por cima do jogo - o bot vai ler a tela dela'
     if($img){
       Ok 'reconhece o botao play' ((Get-HelperState $img) -ne 'unknown') 'botao play irreconhecivel (fora do jogo? tela de login?)' -PrecisaDoSpot
       $mapa = Read-Map $img
