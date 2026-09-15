@@ -1086,6 +1086,7 @@ function Save-Estado {   # fase/warmup E as metricas do MR. Medir um MR leva hor
       "mrsDiaData=$($script:mrsDiaData)"
       "cotaJoias=$(if($script:cotaJoias){1}else{0})"
       "mrStart=$($script:mrStart.Ticks)"
+      "mixLast=$($script:mixLast.Ticks)"
       "ciclos=$(@($script:ciclos) -join ",")"
       "alvo=$TargetLevel"
       "tuneOn=$(if($script:tuneOn){1}else{0})"
@@ -1148,6 +1149,12 @@ function Load-Estado {
       if($kv.joiasMix){ $script:joiasMix = [int]$kv.joiasMix }
       if($kv.joiasCiclos){ $script:joiasCiclos = [int]$kv.joiasCiclos }
       if($kv.mrStart){ $script:mrStart = [datetime]::new([long]$kv.mrStart) }
+      # O relogio do mix TEM que sobreviver a reinicio. Ele vivia so em memoria, entao cada abertura do bot
+      # voltava o contador a zero - e com $MixEveryMin em 25 min bastava reabrir mais cedo que isso pra ele
+      # NUNCA chegar. Medido em 15/09: 15 reinicios num dia, maior janela ininterrupta de 14 min, ZERO mixagens
+      # numa sessao inteira. "25 min farmando" e propriedade do inventario do personagem, nao do processo -
+      # entao mora no estado.txt junto com o resto do estado do MR.
+      if($kv.mixLast){ $script:mixLast = [datetime]::new([long]$kv.mixLast) }
       if($kv.ciclos){ $script:ciclos = @($kv.ciclos -split "," | ? { $_ }) }
       # O alvo do estado.txt so vale quando foi o A/B que o escolheu. Com $AutoTune desligado quem manda e o
       # CONFIG - senao um alvo antigo gravado pelo experimento sobrescreveria a sua decisao pra sempre.

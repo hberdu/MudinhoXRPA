@@ -26,11 +26,12 @@ function Chk($n,$got,$exp){ if("$got" -ne "$exp"){ "FALHOU $n : '$got' != '$exp'
 # 1. round-trip completo
 $script:phase='warmup'; $script:warmupCount=7; $script:resets=42; $script:ptsSent=91234
 $script:mrs=3; $script:runStart=(Get-Date).AddHours(-2.5); $script:mrStart=(Get-Date).AddHours(-1.25)
+$script:mixLast=(Get-Date).AddMinutes(-18)
 $script:ciclos=@(88,91,102,301,77); $script:ativoSeg=4200; $script:joiasMix=37; $script:joiasCiclos=9
-$rs=$script:runStart.Ticks; $ms=$script:mrStart.Ticks
+$rs=$script:runStart.Ticks; $ms=$script:mrStart.Ticks; $mx=$script:mixLast.Ticks
 Save-Estado
 $script:phase='normal'; $script:warmupCount=0; $script:resets=0; $script:ptsSent=0; $script:mrs=0
-$script:ciclos=@(); $script:ativoSeg=0; $script:joiasMix=0; $script:joiasCiclos=0; $script:runStart=Get-Date; $script:mrStart=Get-Date
+$script:ciclos=@(); $script:ativoSeg=0; $script:joiasMix=0; $script:joiasCiclos=0; $script:runStart=Get-Date; $script:mrStart=Get-Date; $script:mixLast=Get-Date
 Load-Estado
 Chk 'fase' $script:phase 'warmup'
 Chk 'warmup' $script:warmupCount 7
@@ -39,6 +40,11 @@ Chk 'ptsSent' $script:ptsSent 91234
 Chk 'mrs' $script:mrs 3
 Chk 'runStart' $script:runStart.Ticks $rs
 Chk 'mrStart' $script:mrStart.Ticks $ms
+# O relogio do mix vivia so em memoria: cada reinicio do bot o zerava, e com $MixEveryMin em 25 min bastava
+# reabrir mais cedo que isso pra o mix NUNCA disparar. Em 15/09 foram 15 reinicios num dia, maior janela
+# ininterrupta de 14 min e ZERO mixagens numa sessao inteira. "25 min farmando" e do inventario do char, nao
+# do processo - entao tem que sobreviver ao round-trip igual ao resto do estado do MR.
+Chk 'relogio do mix' $script:mixLast.Ticks $mx
 Chk 'ciclos' ($script:ciclos -join ',') '88,91,102,301,77'
 Chk 'tempo ativo' $script:ativoSeg 4200
 Chk 'joias mixadas' $script:joiasMix 37
