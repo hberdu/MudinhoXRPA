@@ -2153,6 +2153,17 @@ function Warp-To-Spot {   # teleporta pro spot da fase atual (warmup=, normal=) 
     Notify "MudinhoX" "O jogo diz que o char NAO PODE SE MOVER e o ESC nao resolveu: deve ter janela de NPC aberta. Fecha na mao. Print: $f"
     return $false
   }
+  # MAPA QUE NAO MUDA E NAO E O ESPERADO: mesma classe de problema do minimapa ilegivel, so que pior de ver -
+  # porque aqui ele devolve um nome. Em 15/09 09:21 o menu do jogo estava por cima do minimapa e o Read-Map leu
+  # 'blackr' - lixo, mas NAO vazio. Como a leitura "funcionou", o caminho acima (que fecha o que esta por cima)
+  # nunca foi tentado, e o bot passou a reenviar warp contra uma tela onde nada chega. O sintoma real nao e
+  # "estou no mapa errado", e "o mapa nao MUDA e nao e o meu" - se o warp tivesse pegado, o nome teria mudado.
+  if($now -and $before -and $now -eq $before){
+    Log "mapa parado em '$now' apos $WarpTries warps: pode ser janela por cima do minimapa dando nome falso - tentando fechar"
+    $pf = Focus-Game; Close-Popup; Restore-Focus $pf
+    $agora = Read-Map $null
+    if($agora -and $agora -ne $now){ Log "era janela por cima: o mapa agora le '$agora'"; return $false }
+  }
   Notify "MudinhoX" "Nao consegui teleportar com $cmd ($WarpTries tentativas). Da uma olhada."; $false
 }
 function Start-Helper {   # liga o helper e CONFIRMA. Para de clicar apos PlayTries (nao insiste cego). $true se confirmou running
