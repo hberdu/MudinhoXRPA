@@ -1345,6 +1345,7 @@ $PlayCanto     = @{ X = 0.20; Y = 0.35 }   # fracao da area cliente varrida no c
                                            # (o botao sai de y=33 no desktop pra ~116 na aba do Chrome).
 $PlayCell      = 12                        # lado do quadradinho agregador, em px
 $script:playBox = $null
+$script:playBoxMiss = 0   # leituras SEGUIDAS com a caixa do play ilegivel; so descarta ao chegar em $LevelBoxMiss
 $PlayAcimaDoMapa = 80   # px que o topo do canvas fica ACIMA do rotulo do minimapa
 function Topo-Do-Canvas($img){   # primeira linha que e JOGO, nao enfeite do navegador
   # No cliente desktop a area cliente E o jogo: 0. Na aba do navegador, abas + barra de endereco ocupam o topo
@@ -1399,7 +1400,16 @@ function Get-HelperState($img){   # pausa = barras vermelhas; play = triangulo v
         if($p.R -gt 120 -and $p.G -lt 100 -and $p.B -lt 100){ $red++ } elseif($p.G -gt 140 -and $p.R -lt 140 -and $p.B -lt 140){ $green++ }
       } }
       if($red -gt 10){ $out = 'running' } elseif($green -gt 10){ $out = 'stopped' }
-      if($out -eq 'unknown'){ $script:playBox = $null }   # sumiu dali: procura de novo
+      # UMA leitura 'unknown' nao condena a caixa - mesma licao do $LevelBoxMiss e do $StallReads. O botao fica
+      # ilegivel de passagem (efeito por cima, frame no meio do desenho), e descartar na primeira fazia a busca
+      # rodar de novo e travar numa posicao ERRADA: o log de 15/09 mostra a caixa pulando entre (78,30), que e a
+      # certa, e (48,42), repetidamente. Posicao errada em cache vira estado chutado, e o pior deles e um
+      # 'running' falso - o bot nao religa o helper e o char passa o ciclo sem farmar.
+      if($out -eq 'unknown'){
+        $script:playBoxMiss++
+        if($script:playBoxMiss -ge $LevelBoxMiss){ $script:playBox = $null; $script:playBoxMiss = 0 }   # sumiu de vez: procura de novo
+      }
+      else { $script:playBoxMiss = 0 }
     }
     if($out -eq 'unknown'){
       $achou = Achar-Botao-Play $img
