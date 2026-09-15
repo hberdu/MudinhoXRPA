@@ -2282,7 +2282,13 @@ function Lista-Mix-Aberta($words){   # a lista de joias esta na tela? (o modal f
 function Abrir-Modal-Mix([int]$volta){   # NPC -> botao "Mixar Joias". $true se abriu
   $npc = Hover-Npc
   if(-not $npc){
-    if($volta -eq 0){ Notify "MudinhoX" "Cheguei no $MixCmd mas o NPC nao apareceu na varredura." }
+    # A mensagem separa as duas causas, que pedem coisas opostas: NPC ausente no lugar CERTO e varredura pra
+    # ajustar ($MixNpcFrac / $MixNpcSweep); warp que nao pegou e outro problema, e varrer nao resolve.
+    if($volta -eq 0){
+      $null = Save-Shot 'mix_sem_npc.png'
+      Notify "MudinhoX" $(if($script:mixChegou){ "Cheguei no $MixCmd mas o NPC nao apareceu na varredura." }
+                         else { "O $MixCmd nao me levou pro mixer (o mapa nao mudou) - por isso nao achei o NPC." })
+    }
     else { Log "mix: nao achei o NPC pra reabrir o modal, encerrando" }
     return $false
   }
@@ -2315,6 +2321,21 @@ function Mix-Jewels {   # /mixer -> NPC -> "Mixar Joias" -> mixa TODAS as opcoes
   $mapaAntes = Read-Map $null
   $ate = (Get-Date).AddSeconds($WarpWaitSec)
   do { Wait 1; $mapaAgora = Read-Map $null } until (($mapaAgora -and $mapaAgora -ne $mapaAntes) -or (Get-Date) -ge $ate)
+  # REGISTRA se chegou mesmo. Sem isto o bot dizia "Cheguei no /mixer mas o NPC nao apareceu" sem ter conferido
+  # que chegou - e as duas causas pedem coisas opostas: NPC ausente no lugar certo e um problema de varredura,
+  # ja o warp que nao pegou e um problema de warp, e varrer 34s atras de um NPC noutro mapa nao resolve nenhum
+  # dos dois. Em 15/09 a unica falha do log ficou ambigua exatamente por isso.
+  $script:mixChegou = [bool]($mapaAgora -and $mapaAgora -ne $mapaAntes)
+  if($script:mixChegou){ Log "mix: cheguei (mapa '$mapaAntes' -> '$mapaAgora')" }
+  else {
+    Log "mix: o mapa NAO mudou em ${WarpWaitSec}s (li '$mapaAgora', antes '$mapaAntes') - reenviando $MixCmd"
+    if(Send-Chat $MixCmd){
+      $ate = (Get-Date).AddSeconds($WarpWaitSec)
+      do { Wait 1; $mapaAgora = Read-Map $null } until (($mapaAgora -and $mapaAgora -ne $mapaAntes) -or (Get-Date) -ge $ate)
+      $script:mixChegou = [bool]($mapaAgora -and $mapaAgora -ne $mapaAntes)
+      Log $(if($script:mixChegou){ "mix: cheguei na 2a tentativa (mapa '$mapaAgora')" } else { "mix: o mapa continua '$mapaAgora' - sigo assim mesmo, o NPC confirma ou nao" })
+    }
+  }
   $prev = Focus-Game; if(-not $script:gameFg){ Restore-Focus $prev; return $false }
   try {
     $mixados = 0; $anterior = $null   # $anterior = joia clicada na volta passada, ainda sem veredito
@@ -2396,6 +2417,7 @@ function Mix-Jewels {   # /mixer -> NPC -> "Mixar Joias" -> mixa TODAS as opcoes
 }
 $script:mixNow = $false; $script:semPlay = 0; $script:invFalhas = 0; $script:invDesligado = $false
 $script:mixLast = Get-Date   # quando o bot foi mixar pela ultima vez (gatilho por tempo do ciclo normal)
+$script:mixChegou = $false   # o ultimo $MixCmd levou mesmo o char pro mixer? (separa "NPC sumido" de "warp nao pegou")
 function Tick-Inventory {   # aviso do jogo, teto de tempo (ou botao MIXAR AGORA) -> vai mixar e reinicia o ciclo (volta pro spot)
   # A contagem periodica de celulas saiu daqui: abria e fechava o inventario a cada 2 min (dois cliques, foco
   # roubado) pra produzir um numero que oscila com o alinhamento da grade - o MESMO inventario cheio leu 0 e 26
@@ -2721,7 +2743,19 @@ function Run-Preflight([bool]$comSpot){   # valida os subsistemas de leitura no 
   # Diferente do -Check: este APERTA teclas (C e V), que e a parte que mais falha. Rodado no start (sem checar spot,
   # porque o bot ainda vai warpar) e sob demanda com -Preflight (checando spot).
   $script:falhas = 0
-  function Ok([string]$nome,$cond,[string]$detalhe){ if($cond){ Log "  OK   $nome" } else { $script:falhas++; Log "  FALHOU $nome -> $detalhe" } }
+  # Duas contas, nao uma. Ha verificacoes que SO fazem sentido com o char no spot de farm - o botao play e o
+  # nome do mapa. No start o char costuma estar na cidade (acabou de logar, ou de mixar), e o bot vai warpar
+  # daqui a 2 segundos: cobrar isso ali e falha inventada. Elas seguem no LOG, porque ajudam a ler o que estava
+  # acontecendo, mas nao entram no aviso. Notificacao a toa ensina a ignorar notificacao - e esta disparava em
+  # TODO start feito da cidade, que hoje foram varios.
+  # Com -Preflight (comSpot) e outra historia: ali voce mandou conferir com o char no lugar, entao contam.
+  $script:falhasReais = 0
+  function Ok([string]$nome,$cond,[string]$detalhe,[switch]$PrecisaDoSpot){
+    if($cond){ Log "  OK   $nome"; return }
+    $script:falhas++
+    if(-not ($PrecisaDoSpot -and -not $comSpot)){ $script:falhasReais++ }
+    Log "  FALHOU $nome -> $detalhe$(if($PrecisaDoSpot -and -not $comSpot){ ' (esperado fora do spot: o bot ainda vai warpar)' })"
+  }
   if((Game-IsAdmin) -and -not (Is-Admin)){ Log "  FALHOU privilegios -> o jogo roda elevado e este processo nao; o Windows vai ignorar teclado/mouse"; $script:falhas++ }
   else { Log "  OK   privilegios" }
 
@@ -2733,9 +2767,9 @@ function Run-Preflight([bool]$comSpot){   # valida os subsistemas de leitura no 
     $img = Capture-Game
     Ok 'consegue capturar a tela do jogo' ($img -and $script:capOk) 'capturou outra janela ou o jogo nao veio pra frente'
     if($img){
-      Ok 'reconhece o botao play' ((Get-HelperState $img) -ne 'unknown') 'botao play irreconhecivel (fora do jogo? tela de login?)'
+      Ok 'reconhece o botao play' ((Get-HelperState $img) -ne 'unknown') 'botao play irreconhecivel (fora do jogo? tela de login?)' -PrecisaDoSpot
       $mapa = Read-Map $img
-      Ok 'le o nome do mapa' ([bool]$mapa) 'minimapa recolhido ou tapado pela janela do bot?'
+      Ok 'le o nome do mapa' ([bool]$mapa) 'minimapa recolhido ou tapado pela janela do bot?' -PrecisaDoSpot
       # Com o $WarpMap ainda vazio nao ha nome pra comparar: cobrar isso seria uma falha inventada (o bot
       # aprende o nome no primeiro teleporte). Reporta e segue.
       if($comSpot){ $sp = Spot-Map; if($sp){ Ok 'esta no spot da fase atual' (Same-Map $mapa $sp) "mapa '$mapa', esperado '$sp'" } else { Log "       mapa do spot ainda nao aprendido: vou adotar o do primeiro $WarpCmd (li '$mapa' agora)" } }
@@ -3096,7 +3130,9 @@ try {   # preflight no start: 10s conferindo tudo evita a noite inteira perdida 
   }
   Log "preflight de inicializacao:"
   $pf = Run-Preflight $false
-  if($pf){ Notify "MudinhoX" "$pf verificacao(oes) falharam no start - veja o log. O bot vai tentar rodar mesmo assim." }
+  # So avisa pelas falhas que NAO sao "o char ainda nao esta no spot" - essas o proprio warp resolve em 2s.
+  if($script:falhasReais){ Notify "MudinhoX" "$($script:falhasReais) verificacao(oes) falharam no start - veja o log. O bot vai tentar rodar mesmo assim." }
+  elseif($pf){ Log "preflight: as $pf falhas sao so de estar fora do spot (o bot vai warpar) - nao te avisei por isso" }
 } catch { Log "preflight falhou: $_" }
 try { Limpar-Watchdog } catch { Log "watchdog: $_" }   # apaga a Tarefa Agendada da versao antiga: nada pode sobreviver ao fechamento da janela
 Load-Estado   # retoma fase/warmup/modo de onde parou (o warmup.flag abaixo ainda tem prioridade)
