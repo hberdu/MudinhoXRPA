@@ -1037,10 +1037,38 @@ function Unblock-Areas {   # chamado quando uma leitura falha, e no start
   } catch {}
 }
 function Unblock-MapLabel { Unblock-Areas }   # nome antigo, mantido pelos chamadores
-function Save-Shot([string]$nome){   # print pra diagnostico (chamar com o jogo na frente)
-  $img = Capture-Game; if(-not $img){ return '' }
+function Pixels-Sao-Do-Jogo {   # os pixels da area cliente sao MESMO da janela do jogo?
+  # Pergunta ao Windows quem esta nos pixels, em vez de confiar no Z-order que o Ver-Janela pediu: uma janela
+  # TopMost de outro programa continua por cima. Usada SO pra decidir se um print pode ir pro disco.
+  # A assimetria e de proposito. Pra LER, este teste ja deu falso negativo e travou leitura boa (13/09), entao
+  # la vale o teste simples. Pra SALVAR e o contrario: falso negativo custa um diagnostico perdido, falso
+  # positivo grava a TELA DO USUARIO num diretorio que sincroniza pra nuvem. Na duvida, nao salva.
+  try {
+    $h = Get-Game; $c = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c) | Out-Null
+    if($c.R -le 0 -or $c.B -le 0){ return $false }
+    $o = Client-Origin; $p = New-Object W+POINT
+    $p.X = $o.X + [int]($c.R/2); $p.Y = $o.Y + [int]($c.B/2)
+    $w = [W]::WindowFromPoint($p)
+    if($w -eq [IntPtr]::Zero){ return $false }
+    ($w -eq $h) -or ([W]::GetAncestor($w, 2) -eq $h)   # GA_ROOT=2: o ponto pode cair num controle filho do jogo
+  } catch { $false }
+}
+function Salvar-Print($img, [string]$nome){   # grava print de diagnostico SO se a tela for mesmo a do jogo
+  # Em 15/09 o captcha\status_ultimo.png guardado nesta pasta era a tela do VS CODE do usuario. O Read-Status
+  # salva o print justamente quando FALHA - e ele falha quando o jogo perdeu o foco, ou seja, exatamente quando
+  # ha outra janela por cima. Sem guarda, o diagnostico virava captura de tela alheia, num diretorio que pode
+  # estar sincronizando pra nuvem. Ja tinha acontecido antes e a protecao morava no $capOk; quando o
+  # $NoFocusRead passou a dispensar foco, o $capOk virou sempre-verdadeiro e a protecao sumiu junto.
+  if(-not $img){ return '' }
+  if(-not (Pixels-Sao-Do-Jogo)){ Log "print '$nome' NAO salvo: a tela nao e a do jogo agora (nao gravo a sua janela)"; return '' }
   New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null
-  $f = Join-Path $CaptchaShotDir $nome; $img.Save($f); $img.Dispose(); $f
+  $f = Join-Path $CaptchaShotDir $nome
+  try { $img.Save($f) } catch { return '' }
+  $f
+}
+function Save-Shot([string]$nome){   # print pra diagnostico; descarta se a tela nao for a do jogo
+  $img = Capture-Game; if(-not $img){ return '' }
+  $f = Salvar-Print $img $nome; $img.Dispose(); $f
 }
 $script:modo = 'reset'   # 'reset' = ciclo normal (farm/reset/darmr). 'joias' = farma ate encher, mixa, repete
 $script:farmMap = ''; $script:phase = 'normal'; $script:warmupCount = 0; $script:restartCycle = $false; $script:forceMR = $false
@@ -1848,7 +1876,7 @@ function Read-Status {   # abre a janela de status (C), le os 4 atributos + pont
       $miss = @('For','Agi','Vit','Ene') | ? { -not $v.ContainsKey($_) }
       # O print so serve quando a leitura FALHA. Antes ia pro disco em TODA leitura: ~3500 por sessao, 3.8MB
       # cada, numa pasta dentro do OneDrive - uns 13GB de re-upload por noite pra reescrever sempre o mesmo nome.
-      if($miss){ New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null; $img.Save((Join-Path $CaptchaShotDir 'status_ultimo.png')) | Out-Null }
+      if($miss){ $null = Salvar-Print $img 'status_ultimo.png' }
       # CALIBRA A CAIXA DO LEVEL enquanto o painel esta aberto: aqui o level e VERDADE (tem rotulo do lado) e a
       # HUD esta visivel na mesma foto. E o unico momento em que da pra saber qual dos numeros da tela e o level.
       # So quando nao ha caixa: custa um OCR de tela cheia, entao nao se paga isso a cada leitura de status.
@@ -1875,8 +1903,8 @@ function Read-Status {   # abre a janela de status (C), le os 4 atributos + pont
       break
     }
     if($try -eq 5){   # desistiu: salva a tela pra dar pra ver se a janela ESTAVA aberta (OCR falhou) ou nao abriu mesmo (tecla C engolida)
-      New-Item -ItemType Directory -Force $CaptchaShotDir | Out-Null
-      $img.Save((Join-Path $CaptchaShotDir 'status_falhou.png')); Log "status: nao abriu em 6 tentativas. Print em captcha\status_falhou.png"
+      if(Salvar-Print $img 'status_falhou.png'){ Log "status: nao abriu em 6 tentativas. Print em captcha\status_falhou.png" }
+      else { Log "status: nao abriu em 6 tentativas (sem print: a tela nao era a do jogo)" }
     }
     $img.Dispose(); Wait 1   # nao abriu (tecla ignorada logo apos reset): tenta de novo
   }

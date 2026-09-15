@@ -55,6 +55,23 @@ Chk 'minimizado espera, nao morre'               ($src -match '(?s)IsIconic\(\$h
 # direto, e nao via Bater-Heartbeat (mesma razao do Pause-Gate).
 Chk '  (e a espera nao vira tempo ativo)'        ($src -match '(?s)MINIMIZADO.*?while\(-not \$script:stop -and \[W\]::IsIconic.*?Set-Content -Path \$HeartbeatFile') 'True'
 
+# --- NUNCA gravar a tela do usuario em disco ------------------------------------------------------
+# 15/09: o captcha\status_ultimo.png guardado pelo bot era a tela do VS CODE do usuario. O Read-Status salva o
+# print justamente quando FALHA - e ele falha quando o jogo perdeu o foco, ou seja, exatamente quando ha outra
+# janela por cima. A pasta ainda por cima pode estar sincronizando pra nuvem.
+# A protecao existia e morava no $capOk; quando o $NoFocusRead passou a dispensar foco, o $capOk virou
+# sempre-verdadeiro e ela sumiu junto, sem ninguem notar.
+Chk 'todo print passa pela guarda'   ($src -match '\$img\.Save\(\(Join-Path \$CaptchaShotDir') 'False'
+Chk 'a guarda existe'                ($src -match '(?s)function Salvar-Print.*?Pixels-Sao-Do-Jogo') 'True'
+Chk 'e o Save-Shot usa ela'          ($src -match '(?s)function Save-Shot.*?Salvar-Print \$img \$nome') 'True'
+# A guarda pergunta ao Windows QUEM esta nos pixels, em vez de confiar no Z-order que o Ver-Janela pediu -
+# janela TopMost de outro programa continua por cima.
+Chk 'e pergunta pelos pixels'        ($src -match '(?s)function Pixels-Sao-Do-Jogo.*?WindowFromPoint') 'True'
+# ASSIMETRIA de proposito: pra LER este mesmo teste ja deu falso negativo e recusou leitura boa (13/09), entao
+# la vale o teste simples. Pra SALVAR e o contrario - falso negativo custa um diagnostico, falso positivo grava
+# a tela do usuario. Se o caminho de leitura voltar a depender disto, o falso negativo volta junto.
+Chk 'leitura NAO depende da guarda'  ($src -match '\$script:capOk = \$NoFocusRead -or \(\[W\]::GetForegroundWindow\(\) -eq \$h\)') 'True'
+
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 
 # --- painel de status congelado -------------------------------------------------------------------
