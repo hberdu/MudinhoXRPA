@@ -1912,6 +1912,15 @@ function Read-Status {   # abre a janela de status (C), le os 4 atributos + pont
     if($try % 2 -eq 0){
       $null = Focus-Game   # reafirma o foco ANTES de cada tecla: so checar no inicio nao basta - se a sua janela volta, o C vai pra ELA e o status nunca abre (era a causa das falhas)
       if(-not $script:gameFg){ Log "status: jogo perdeu o foco, nao vou apertar C"; Wait 1; continue }
+      # O C JA FALHOU UMA VEZ: a causa de longe mais comum e a caixa de chat aberta, onde ele vira LETRA em vez
+      # de atalho. Medido em 15/09 09:15 - o print de diagnostico mostrava a caixa aberta com um 'c' digitado
+      # dentro dela. O Close-Chat la em cima devia ter evitado isso, mas ele depende do Chat-Open, e o Chat-Open
+      # NAO detecta todos os estados: nessa tela nao havia borda vermelha e o OCR nem leu o "Whisper" (texto
+      # apagado demais). Perseguir a deteccao e perseguir contraste; aqui a saida e pelo RESULTADO.
+      # Backspace + Enter fecha a caixa se ela estiver aberta. Se estiver FECHADA, o Enter abre - e ai a
+      # tentativa seguinte faz o mesmo e fecha. Em qualquer paridade o ciclo converge dentro das 6 tentativas,
+      # e backspace com o chat fechado nao e atalho de nada.
+      if($try -ge 2){ Log "status: o C nao abriu o painel - fechando a caixa de chat (ela engole a tecla) e tentando de novo"; Clear-ChatLine; Press-Vk 0x0D; Start-Sleep -Milliseconds 250 }
       Press-Vk $StatusKey $HotkeyHoldMs
       # Era Start-Sleep 900 fixo. Agora espera SO ate a janela aparecer: captura a cada 150ms e segue assim que
       # a leitura reconhece o painel. Com o recorte do OCR ela costuma aparecer em ~300ms, entao sobram ~600ms
@@ -2959,6 +2968,12 @@ if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guard
   # mensagem" visiveis) e a faixa inteira com 4px de corrida vermelha contra os 115 exigidos. O detector de
   # borda dizia FECHADO, a tecla C virava letra e o painel de status "nao abria em 6 tentativas". Quem resolve
   # este e a segunda prova, por texto - entao ele e o unico fixture que exercita esse caminho.
+  # LIMITE CONHECIDO, medido em 15/09: chat_ABERTO_c_digitado.png tem a caixa ABERTA (com um 'c' digitado
+  # dentro) e o Chat-Open NAO a detecta - nao ha borda vermelha nessa tela e o OCR nem le o "Whisper", que sai
+  # apagado demais. Ou seja: a deteccao cobre tres estados dos quatro que ja vi, e depende de contraste.
+  # Por isso o Read-Status NAO confia nela: apos o primeiro C falhar ele fecha a caixa por backspace+Enter,
+  # que funciona sem precisar detectar nada. O arquivo fica em fixtures/ como prova do limite; nao entra na
+  # lista abaixo porque afirmar que o detector o pega seria mentira.
   foreach($fx in 'chat_ABERTO.png','chat_ABERTO_2.png','chat_ABERTO_sem_borda.png'){   # duas amostras independentes; nas duas as bordas ficaram em 117-118 e 92-93
     $i = Fx $fx
     if($i){ Ok "Chat-Open detecta a caixa aberta ($fx)" (Chat-Open $i) 'disse fechada com a caixa aberta (o C viraria letra no chat)'; $i.Dispose() }
