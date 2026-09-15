@@ -2579,8 +2579,17 @@ function Metrics {   # o objetivo e o /darmr, nao o reset: o numero que importa 
       foreach($t in $tags){ $porCausa[$t] = [int]$porCausa[$t] + [int]($extra / $tags.Count) }   # divide o excesso entre as causas do ciclo
     }
     $culpa = (@($porCausa.GetEnumerator() | sort Value -Descending | % { "{0} {1}%" -f $_.Key, [int]($_.Value * 100 / [Math]::Max(1,$total)) }) -join ', ')
-    Log ("   ciclo mediano {0}s | {1}/{2} lentos (>{3}s) | {4}% do tempo perdido neles{5} | fase {6}" -f `
-         $med, $lentos.Count, $script:ciclos.Count, [int]($med*1.5), $pctT, $(if($culpa){ " -> $culpa" }else{''}), $script:phase)
+    # O CICLO MEDIANO SO SE COMPARA NA MESMA FAIXA DE ATRIBUTOS, e por isso ele sai acompanhado da faixa.
+    # O /darmr ZERA os atributos: medido em 15/09, o char saiu de 32767 nos quatro para ~15000, e no mesmo passo
+    # os pontos por leitura cairam de 625 pra 376 e o ciclo subiu de ~99s pra ~211s. Nenhuma falha disparou
+    # nesses ciclos - o tempo foi pro farm, porque o char estava com metade da forca. Conforme os atributos
+    # voltam, o ciclo encurta sozinho.
+    # Eu mesmo li isso como regressao antes de conferir, comparando fim de MR (atributos no cap) com comeco de
+    # MR. Quem atravessa as duas faixas sem mentir e o pontos/h, que ja divide pelo tempo.
+    $faixaAtr = if($script:stCarry.Count){ [int]((@('For','Agi','Vit','Ene' | % { [int]$script:stCarry[$_] }) | measure -Average).Average) } else { -1 }
+    Log ("   ciclo mediano {0}s | {1}/{2} lentos (>{3}s) | {4}% do tempo perdido neles{5} | fase {6}{7}" -f `
+         $med, $lentos.Count, $script:ciclos.Count, [int]($med*1.5), $pctT, $(if($culpa){ " -> $culpa" }else{''}), $script:phase,
+         $(if($faixaAtr -ge 0){ " | atributos ~$faixaAtr de $StatMaxValue (ciclo so compara com ciclo na mesma faixa)" }else{''}))
   }
   if($script:ui -and -not $script:ui.IsDisposed){ $script:ui.Text = "MudinhoX RPA - $($script:resumo)" }
 }
