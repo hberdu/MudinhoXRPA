@@ -2829,7 +2829,16 @@ function Run-Preflight([bool]$comSpot){   # valida os subsistemas de leitura no 
   else { Log "  OK   privilegios" }
 
   $h0 = Get-Game; $c0 = New-Object W+RECT; [W]::GetClientRect($h0,[ref]$c0) | Out-Null
-  Ok 'resolucao bate com a calibracao' ($c0.R -eq $ClientEsperado.W -and $c0.B -eq $ClientEsperado.H) "$($c0.R)x$($c0.B), esperado $($ClientEsperado.W)x$($ClientEsperado.H)"
+  # A regra real e "nao pode ser MENOR", nao "tem que ser igual" - e a mesma do hard stop la embaixo. Janela
+  # maior nao quebra nada: as coordenadas continuam caindo dentro e o que le a partir da BASE (chat, level) e
+  # fracao da altura. Ja rodou assim em 1920x1061, que e o modo janela.
+  # Com `-eq` o preflight acusava falha e NOTIFICAVA em todo start no modo janela, por algo que o proprio bot
+  # tolera de proposito. Aviso que nao corresponde a problema ensina a ignorar aviso.
+  $menor = ($c0.R -lt $ClientEsperado.W -or $c0.B -lt $ClientEsperado.H)
+  Ok 'resolucao comporta a calibracao' (-not $menor) "$($c0.R)x$($c0.B) e MENOR que $($ClientEsperado.W)x$($ClientEsperado.H) - o bot le fora da tela e quebra"
+  if(-not $menor -and ($c0.R -ne $ClientEsperado.W -or $c0.B -ne $ClientEsperado.H)){
+    Log "       janela $($c0.R)x$($c0.B), maior que a calibracao $($ClientEsperado.W)x$($ClientEsperado.H) - tolerado (o que le da base usa fracao)"
+  }
 
   Hold-Focus
   try {
