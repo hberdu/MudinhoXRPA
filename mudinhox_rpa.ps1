@@ -3225,19 +3225,35 @@ while($true){
 }
 } catch {
   if("$_" -match 'nao esta rodando'){   # o cliente caiu: antes o bot MORRIA junto e a noite acabava ali. Agora espera ele voltar
-    Log "ERRO: $_"; Notify "MudinhoX" "O jogo fechou. Abra o MudinhoX que o bot continua sozinho."
+    # MINIMIZADO ou FECHADO sao coisas diferentes, e a mensagem precisa saber qual. Este mesmo erro cobre os
+    # dois: "nao achei o processo" e "a janela devolveu area cliente 0x0". Em 15/09 o bot disse "O jogo fechou.
+    # Abra o MudinhoX" com o mudx.exe rodando (PID 56812) e so minimizado - instrucao errada pra quem le.
+    $minim = $(try { $h = Get-Game; $h -ne [IntPtr]::Zero -and [W]::IsIconic($h) } catch { $false })
+    Log "ERRO: $_"
+    if($minim){ Notify "MudinhoX" "O jogo esta minimizado. Restaure a janela que o bot continua sozinho." }
+    else      { Notify "MudinhoX" "O jogo fechou. Abra o MudinhoX que o bot continua sozinho." }
     $avisou = Get-Date
     while(-not $script:stop){
       Wait 10
       $script:gameH = [IntPtr]::Zero   # forca re-resolver o handle (o processo antigo morreu)
-      # "o jogo voltou?" = existe de novo uma janela que o Get-Game aceitaria. Nao pode ser `Get-Process mudx`
-      # cravado: na versao web quem responde isso e o titulo da janela, nao o nome do processo.
-      if($(try { (Get-Game) -ne [IntPtr]::Zero } catch { $false })){
+      # "o jogo voltou?" = existe uma janela que o Get-Game aceitaria E ELA DA PRA LER. Janela minimizada
+      # devolve handle normalmente, entao so perguntar pelo handle faria o bot "retomar" e estourar no
+      # Capture-Raw na volta seguinte, em loop. O que prova que da pra trabalhar e a area cliente.
+      # Nao pode ser `Get-Process mudx` cravado: na versao web quem responde isso e o titulo da janela.
+      $pronto = $(try {
+        $h = Get-Game
+        if($h -eq [IntPtr]::Zero -or [W]::IsIconic($h)){ $false }
+        else { $c = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c) | Out-Null; $c.R -gt 0 -and $c.B -gt 0 }
+      } catch { $false })
+      if($pronto){
         Log "jogo voltou: esperando a tela carregar e retomando"; Wait 15
         Hold-Focus; try { $null = Enter-Game 'jogo reaberto' } finally { Release-Focus }   # pode ter voltado na tela de login
         break
       }
-      if(((Get-Date) - $avisou).TotalSeconds -ge $RenotifySec){ Notify "MudinhoX" "Ainda esperando o jogo abrir."; $avisou = Get-Date }
+      if(((Get-Date) - $avisou).TotalSeconds -ge $RenotifySec){
+        Notify "MudinhoX" $(if($(try { $h = Get-Game; $h -ne [IntPtr]::Zero -and [W]::IsIconic($h) } catch { $false })){ "Ainda esperando voce restaurar a janela do jogo." } else { "Ainda esperando o jogo abrir." })
+        $avisou = Get-Date
+      }
     }
   } else { Log "ERRO: $_"; Notify "MudinhoX RPA parou" "$_"; Wait 30; $script:stopReason = "erro: $_"; $script:stop = $true }   # erro que nao seja o jogo fechado: sai sem stop.flag - quem decide se volta e o watchdog (que agora conta relancamento em vao e desiste)
 }
