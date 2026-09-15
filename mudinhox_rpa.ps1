@@ -144,6 +144,13 @@ $LoginDangerWords = '(?i)(criar nova conta|create account|^sair$|delete)'   # se
                           # MinRun e o comprimento minimo da corrida vermelha CONTINUA, em fracao da largura: e
                           # o que separa a borda (linha longa) do orbe de vida (redondo, corrida curta por linha).
 $ChatFaixa     = @{ X1 = 0.30; X2 = 0.70; Y1FromBottom = 0.20; Y2FromBottom = 0.05; MinRun = 0.06 }
+# SEGUNDA prova de que o chat esta aberto, por TEXTO. A borda vermelha do $ChatFaixa existe num estado do chat e
+# nao existe noutro - em 15/09 a caixa estava aberta na tela e a faixa inteira tinha 4px de vermelho contra os
+# 115 exigidos. A palavra separou os dois grupos em 7 imagens sem um erro: aparece nas 3 com chat aberto
+# (inclusive a de hoje, sem borda) e em nenhuma das 4 com chat fechado. Faixa larga porque a caixa MUDA DE LUGAR
+# entre os estados (um recorte estreito pegou 2 de 3). Custo medido: 56ms, e so paga quando a borda diz fechado.
+$ChatTxtWords  = '(?i)whisper'
+$ChatTxtFaixa  = 0.22    # fracao da ALTURA, a partir da base, onde procurar a palavra
 # Miss infinito. A METRICA DO PROPRIO BOT aponta 'stall' como 23-27% de TODO o tempo (113 disparos numa sessao),
 # e a maior parte disso e latencia de DETECCAO, nao a recuperacao. Por isso duas condicoes em vez de um relogio so:
 $StallReads    = 3       # N LEITURAS seguidas com o level identico. E o sinal forte, e imune a OCR: uma leitura que falhou nao entra na conta (antes ela empurrava o relogio como se o level estivesse parado)
@@ -900,8 +907,28 @@ function Chat-Open($img){   # caixa de chat aberta = bordas vermelhas em cima e 
       if($maior -ge $minRun){ $linhas++ }
     }
   } catch { $linhas = 0 }
+  $aberta = ($linhas -ge 2)   # borda de cima + borda de baixo
+  # SEGUNDA PROVA, por TEXTO. A borda vermelha existe num estado do chat e NAO existe noutro: no print de
+  # 15/09 02:17 a caixa estava visivelmente aberta ("Whisper" e "Digite sua mensagem" na tela) e a faixa inteira
+  # tinha no maximo 4px de corrida vermelha contra os 115 exigidos - o detector dizia FECHADO.
+  # O estrago disso e grande e silencioso: com o chat aberto a tecla C vira LETRA, o painel de status nunca abre
+  # ("nao abriu em 6 tentativas") e o /resetar vira hotkey. E o caminho que existia pra corrigir - o
+  # Unstick-Tudo fechar o chat - so roda se esta funcao acertar.
+  # A palavra "Whisper" separou os dois grupos em 7 imagens, sem um erro: aparece nas 3 com chat aberto
+  # (inclusive a de hoje, sem borda) e em NENHUMA das 4 fechadas. Custa 56ms medidos, e so e paga quando a
+  # borda ja disse "fechado" - com o chat aberto de verdade a borda costuma resolver antes.
+  if(-not $aberta){
+    try {
+      $h = [int]($img.Height * $ChatTxtFaixa); $y0 = $img.Height - $h
+      if($h -gt 8){
+        $c = Crop-Bitmap $img 0 $y0 $img.Width $h
+        $txt = (Ocr-Bitmap $c).Text; $c.Dispose()
+        if($txt -match $ChatTxtWords){ $aberta = $true }
+      }
+    } catch {}
+  }
   if($own){ $img.Dispose() }
-  $linhas -ge 2   # borda de cima + borda de baixo
+  $aberta
 }
 function Close-Chat { if(Chat-Open){ Clear-ChatLine; Press-Vk 0x0D; Start-Sleep -Milliseconds 200 } }   # apaga residuo e fecha (Enter vazio fecha); chamar com o jogo na frente
 $script:semFgDesde = $null; $script:semFgN = 0
@@ -2877,7 +2904,11 @@ if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guard
     Ok 'Fragment of Death nao e verde' ($fd -and (Word-Color $i $fd) -ne 'green') 'classificou opcao vermelha como verde'
     $i.Dispose()
   }
-  foreach($fx in 'chat_ABERTO.png','chat_ABERTO_2.png'){   # duas amostras independentes; nas duas as bordas ficaram em 117-118 e 92-93
+  # chat_ABERTO_sem_borda.png e o caso que quebrou em 15/09: caixa aberta na tela ("Whisper" e "Digite sua
+  # mensagem" visiveis) e a faixa inteira com 4px de corrida vermelha contra os 115 exigidos. O detector de
+  # borda dizia FECHADO, a tecla C virava letra e o painel de status "nao abria em 6 tentativas". Quem resolve
+  # este e a segunda prova, por texto - entao ele e o unico fixture que exercita esse caminho.
+  foreach($fx in 'chat_ABERTO.png','chat_ABERTO_2.png','chat_ABERTO_sem_borda.png'){   # duas amostras independentes; nas duas as bordas ficaram em 117-118 e 92-93
     $i = Fx $fx
     if($i){ Ok "Chat-Open detecta a caixa aberta ($fx)" (Chat-Open $i) 'disse fechada com a caixa aberta (o C viraria letra no chat)'; $i.Dispose() }
   }
