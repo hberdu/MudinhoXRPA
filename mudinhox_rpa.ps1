@@ -151,6 +151,10 @@ $ChatFaixa     = @{ X1 = 0.30; X2 = 0.70; Y1FromBottom = 0.20; Y2FromBottom = 0.
 # entre os estados (um recorte estreito pegou 2 de 3). Custo medido: 56ms, e so paga quando a borda diz fechado.
 $ChatTxtWords  = '(?i)whisper'
 $ChatTxtFaixa  = 0.22    # fracao da ALTURA, a partir da base, onde procurar a palavra
+$EscMax        = 4       # prensas de ESC CONFERIDAS que o Close-Popup pode gastar depois da cega. Eram 2 e nao
+                         # bastaram: em 15/09 o menu do jogo ficou aberto tapando o minimapa, e o proprio bot
+                         # registrou "minimapa continua ilegivel" antes de desistir. ESC alterna, entao o que
+                         # decide e o SENSOR (minimapa legivel), nao a contagem - este numero e so o teto.
 # Miss infinito. A METRICA DO PROPRIO BOT aponta 'stall' como 23-27% de TODO o tempo (113 disparos numa sessao),
 # e a maior parte disso e latencia de DETECCAO, nao a recuperacao. Por isso duas condicoes em vez de um relogio so:
 $StallReads    = 3       # N LEITURAS seguidas com o level identico. E o sinal forte, e imune a OCR: uma leitura que falhou nao entra na conta (antes ela empurrava o relogio como se o level estivesse parado)
@@ -1245,11 +1249,17 @@ function Close-Popup {   # ESC fecha popup do jogo (ex "precisa estar fora da ci
   # terminou com a lista aberta, o 1o ESC fechou a lista, o 2o abriu o menu, e o bot passou 4+ min cego em
   # "NAO CONSEGUI LER o nome do mapa" reenviando /k37 pra um minimapa tapado. Entao aperta e CONFERE.
   # Os dois ESC de sempre ficam: fecham popup empilhado no MEIO da tela, que o sensor abaixo nao enxerga.
-  Press-Vk 0x1B; Start-Sleep -Milliseconds 300; Press-Vk 0x1B
-  # Sensor: o proprio rotulo do minimapa. Menu do jogo aberto = rotulo tapado = Read-Map vazio -> mais um ESC fecha.
-  Start-Sleep -Milliseconds 450
-  for($i = 0; $i -lt 2 -and -not (Read-Map $null); $i++){ Press-Vk 0x1B; Start-Sleep -Milliseconds 450 }
-  if(-not (Read-Map $null)){ Log "ESC: minimapa continua ilegivel (menu do jogo aberto? minimapa recolhido?)" }
+  # UM ESC cego, nao dois. O segundo cego era o problema: com o primeiro ja tendo fechado o modal, ele ABRIA o
+  # menu principal - e como ESC alterna, cada prensa seguinte podia desfazer a anterior. Em 15/09 o mix terminou
+  # bem (3 joias), o Close-Popup rodou, o sensor DETECTOU o minimapa tapado, gastou as 2 prensas extras e saiu
+  # mesmo assim - o print de 50s depois mostra o menu do jogo aberto na tela, tapando o minimapa.
+  # O cego que fica serve pro popup empilhado no MEIO da tela, que o sensor do minimapa nao enxerga.
+  Press-Vk 0x1B
+  # Dai em diante, uma de cada vez, CONFERINDO: para assim que o minimapa volta a ser legivel. Num alternador
+  # esse e o unico criterio seguro - contar prensas nao e, porque nao se sabe quantas o estado atual exige.
+  Start-Sleep -Milliseconds 600   # era 450: o menu tem animacao pra fechar, e conferir cedo demais fazia o bot achar que nao adiantou e prensar de novo (reabrindo)
+  for($i = 0; $i -lt $EscMax -and -not (Read-Map $null); $i++){ Press-Vk 0x1B; Start-Sleep -Milliseconds 600 }
+  if(-not (Read-Map $null)){ Log "ESC: minimapa continua ilegivel apos $EscMax tentativas (menu do jogo aberto? minimapa recolhido?)" }
 }
 function Is-FarmMap($m){ $m -and ($m -notmatch $CityWords) }   # nao e cidade conhecida
 function Spot-Map { if($script:phase -eq 'warmup'){ $WarmupMap } else { $WarpMap } }   # nome esperado do spot da fase atual
@@ -2111,8 +2121,15 @@ function Warp-To-Spot {   # teleporta pro spot da fase atual (warmup=, normal=) 
     else { $cego++; Tag-Ciclo 'warp'; Log "NAO CONSEGUI LER o nome do mapa (minimapa recolhido ou tapado?), tentativa $t/$WarpTries ($cmd)" }
   }
   if($cego -ge $WarpTries){   # nunca deu pra ler: o problema e a LEITURA, nao o teleporte. Reenviar /s18 nao resolve nada.
+    # Antes de chamar voce, tenta o que ja se sabe ser a causa mais comum: o MENU DO JOGO aberto por cima do
+    # minimapa. Em 15/09 foi exatamente isso - o print mostrava o painel (Shop/Inventario/Personagem/...) na
+    # tela -, e a mensagem mandava "abrir o painel do minimapa", que nao era o problema: ele nao estava
+    # recolhido, estava TAPADO. ESC e alternador, entao quem decide e o sensor, nao a contagem.
+    Log "mapa ilegivel: tentando fechar o que estiver por cima (menu do jogo tapa o minimapa)"
+    $pf = Focus-Game; Close-Popup; Restore-Focus $pf
+    if(Read-Map $null){ Log "mapa ilegivel: era janela por cima - fechei e voltei a ler"; return $false }
     $f = Save-Shot 'mapa_ilegivel.png'
-    Notify "MudinhoX" "Nao consigo LER o nome do mapa no minimapa. Abra o painel do minimapa (setinha no canto). Print: $f"
+    Notify "MudinhoX" "Nao consigo LER o nome do mapa: tem janela do jogo tapando o minimapa e o ESC nao fechou. Fecha na mao (ou abre o painel do minimapa, se estiver recolhido). Print: $f"
     return $false
   }
   # O aviso tem que dizer O QUE FAZER. Em 12/09 sairam 55 notificacoes iguais de "da uma olhada" enquanto a causa
