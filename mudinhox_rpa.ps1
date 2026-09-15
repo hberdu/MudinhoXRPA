@@ -187,6 +187,9 @@ $CapCiclosMax  = 200     # quantas duracoes de ciclo guardar pra mediana (array 
 $CapKillGame   = $false  # $true volta a regra antiga (fecha o mudx.exe e encerra). $false = pausa e espera voce
 $CapSelHalf    = 61                           # distancia do centro ate a borda vermelha (3px) da opcao selecionada; varre +-5px
 $WalkDist      = 140                          # apos /icarus anda ~4 passos (pixels a partir do centro) numa direcao aleatoria a cada chegada, antes do play
+$CapAncoraWords = '(?i)selecione.{0,20}mesma.{0,20}imagem'   # a FRASE do captcha ("Selecione a mesma imagem abaixo:").
+                                              # NAO afrouxar pra so "Selecione": o dialogo do mix diz "Selecione o
+                                              # metodo de combinacao" e virava captcha fantasma (ver Find-Captcha).
 $CapConfidence = 0.65                         # melhor precisa ser < N% do segundo, senao nao chuta. Era 0.5, e ESSE era o gargalo do MR:
                                               # captcha nao resolvido TRAVA o jogo (o char nao farma, o /resetar nao pega), e o bot ficava
                                               # relendo a mesma imagem estatica a cada 5s pra sempre. No MR #30 foram 12 captchas distintos,
@@ -1389,7 +1392,13 @@ function Play-XY {   # onde clicar pra ligar/desligar o helper. Sem caixa conhec
 
 # ---------- captcha ----------
 function Find-Captcha($img){   # centro do texto "Selecione a mesma imagem abaixo:" ou $null
-  $line = (Ocr-Bitmap $img).Lines | ? { $_.Text -match 'Selecione' } | select -First 1
+  # A ancora e a FRASE, nao a palavra "Selecione" sozinha. Casar so com ela pegava o dialogo do MIX, que diz
+  # "Selecione o metodo de combinacao": o bot entao interrompia a mixagem pra resolver um captcha que nao
+  # existia, comparava pedacos quaisquer da tela (dai as razoes de 0.99 - empate entre duas coisas que nao sao
+  # opcao de captcha nenhuma), nao tinha certeza e CHAMAVA VOCE. Medido em 15/09: 3 dos 4 "captchas" do log
+  # eram isso, e o print salvo mostrava o inventario e o painel de combinacao abertos, sem captcha na tela.
+  # O .{0,20} entre as palavras e folga pro OCR, que come letra e junta palavra.
+  $line = (Ocr-Bitmap $img).Lines | ? { $_.Text -match $CapAncoraWords } | select -First 1
   if(-not $line){ return $null }
   $r = $line.Words | % { $_.BoundingRect }
   $x1 = ($r | % { $_.X } | measure -Minimum).Minimum; $x2 = ($r | % { $_.X + $_.Width } | measure -Maximum).Maximum
@@ -2992,8 +3001,17 @@ if($TestVisao){   # regressao das funcoes de LEITURA DE TELA contra prints guard
   $i = Fx 'captcha.png'
   if($i){
     $a = Find-Captcha $i
-    Ok 'Find-Captcha acha a ancora' ([bool]$a) 'nao achou o texto "Selecione"'
+    Ok 'Find-Captcha acha a ancora' ([bool]$a) 'nao achou a frase "Selecione a mesma imagem"'
     if($a){ Ok 'Solve-Captcha tem certeza' ((Solve-Captcha $i $a -NoClick) -eq $true) 'ficou ambiguo' }
+    $i.Dispose()
+  }
+  # NEGATIVO, e e o que faltava: o dialogo do mix diz "Selecione o metodo de combinacao". Com a ancora casando
+  # so a palavra "Selecione", o bot interrompia a MIXAGEM pra resolver um captcha inexistente, comparava pedacos
+  # quaisquer da tela (razoes de 0.99 - empate entre coisas que nao sao opcao de captcha) e chamava o usuario.
+  # 3 dos 4 "captchas" do log de 15/09 eram isto.
+  $i = Fx 'mix_dialogo_metodo.png'
+  if($i){
+    Ok 'nao confunde o dialogo do mix com captcha' (-not (Find-Captcha $i)) 'achou captcha onde so ha o painel de combinacao'
     $i.Dispose()
   }
   Log $(if($script:falhas){ "TestVisao: $($script:falhas) FALHA(S)" } else { 'TestVisao: tudo OK' })
