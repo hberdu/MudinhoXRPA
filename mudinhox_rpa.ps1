@@ -147,6 +147,10 @@ $ChatFaixa     = @{ X1 = 0.30; X2 = 0.70; Y1FromBottom = 0.20; Y2FromBottom = 0.
 # Miss infinito. A METRICA DO PROPRIO BOT aponta 'stall' como 23-27% de TODO o tempo (113 disparos numa sessao),
 # e a maior parte disso e latencia de DETECCAO, nao a recuperacao. Por isso duas condicoes em vez de um relogio so:
 $StallReads    = 3       # N LEITURAS seguidas com o level identico. E o sinal forte, e imune a OCR: uma leitura que falhou nao entra na conta (antes ela empurrava o relogio como se o level estivesse parado)
+$LevelBoxMiss  = 3       # N leituras SEGUIDAS falhando antes de jogar fora a caixa calibrada do level. Uma falha e ruido
+                         # de OCR (dano por cima do numero, efeito, frame no meio do desenho): descartar na primeira
+                         # gerou 53 recalibracoes em 1003 linhas, sempre pro MESMO lugar, cada uma custando uma
+                         # leitura de status forcada. Mesma licao do $StallReads aqui em cima.
 $StallMinSec   = 15      # ...e pelo menos N seg. Piso de seguranca pra logo apos o reset, quando o char esta fraco e demora mesmo pra subir um level. Era 40 fixo (antes 75): 40s x 113 disparos = ~75 min so esperando pra perceber
 $CityWords     = 'lorencia|noria|devias|elbeland|lorenmarket|karutan|elveland'   # mapas-cidade onde NAO se farma (personagem cai aqui apos reset). Qualquer outro mapa = spot de farm (ex Stadium do /s18)
 # teleporte confirmado quando o mapa e um spot de farm (nao-cidade). $farmMap guarda o ultimo spot.
@@ -1193,6 +1197,7 @@ function In-Farm($img){ Same-Map (Read-Map $img) (Spot-Map) }   # $true so se es
 # rotulo (essa e a do painel) e guarda onde estava a outra - a da HUD. Dai em diante le so daquele recorte,
 # barato igual antes. Se o recorte parar de dar numero plausivel, a caixa e jogada fora e ele recalibra.
 $script:lvlBox = $null
+$script:lvlBoxMiss = 0   # falhas SEGUIDAS da caixa calibrada. So descarta ao chegar em $LevelBoxMiss - uma falha e ruido de OCR
 function Get-Level-Painel($words){   # level pelo ROTULO do painel. 'Levei:' e como o OCR le "Level:" nos 3 fixtures
   $lab = $words | ? { $_.Text -match '(?i)^(level|levei|lvl|n.vel)' } | select -First 1; if(-not $lab){ return $null }
   $yc = $lab.BoundingRect.Y + $lab.BoundingRect.Height/2
@@ -1220,6 +1225,7 @@ function Calibrar-LevelBox($img, [int]$lvlReal){   # acha o mesmo numero na HUD 
       $x = [int]($r.X / $esc); $y = [int]($r.Y / $esc) + $fy
       $ww = [int]($r.Width / $esc); $hh = [int]($r.Height / $esc)
       $script:lvlBox = @{ X = [Math]::Max(0, $x - 12); Y = [Math]::Max(0, $y - 8); W = $ww + 34; H = $hh + 16 }
+      $script:lvlBoxMiss = 0   # caixa nova comeca com a ficha limpa, senao ela ja nasceria a uma falha do descarte
       Log "level: caixa calibrada em ($($script:lvlBox.X),$($script:lvlBox.Y)) pelo painel (level $lvlReal)"
       return $true
     }
@@ -1244,14 +1250,21 @@ function Read-Level($img){
         if($reads.Count){ $out = [int]($reads | Group-Object | Sort-Object Count -Descending | Select-Object -First 1).Name }
       }
       if($null -eq $out){
-        # PEDE A RECALIBRACAO AGORA, nao "na proxima leitura de status". Sem a caixa o bot fica CEGO pro level,
-        # que e o unico gatilho do /resetar - e quem recalibra e o Read-Status, que so roda quando o $statDue
-        # vence. Pior: com o level ilegivel o $lvlPrev congela, o portao "mesmo level, nao rele" do Tick-Stats
-        # acha que nada mudou e PULA justamente a leitura que resolveria. Sobrava o teto de $StatMaxSec pra
-        # destravar. Medido: 11 episodios, 37s em media, ate 116s - com o char parado no level 400 esperando.
-        $script:lvlBox = $null; $script:statDue = Get-Date; $script:forcaStat = $true
-        Log "level: a caixa calibrada parou de dar numero valido - recalibrando agora"
+        # UMA leitura falha NAO condena a caixa. O OCR falha de vez em quando sozinho - numero de dano por cima,
+        # efeito de skill, frame no meio do desenho -, e jogar a caixa fora na primeira falha criou um churn:
+        # medido em 15/09, 53 perdas em 1003 linhas de log, com a caixa VIVENDO 4s de mediana e sendo
+        # recalibrada sempre pro MESMO lugar (1121,932 em 45 das 57 vezes). Ou seja: a caixa estava certa e o
+        # bot a descartava por ruido, pagando uma leitura de status forcada (~3s, abre e fecha o painel) a cada
+        # vez. E a mesma licao do $StallReads do Check-Progress: leituras seguidas sao o sinal forte, uma nao e.
+        # Custo de errar pro outro lado: se a caixa estiver MESMO invalida (a janela mudou), ficam $LevelBoxMiss
+        # leituras ate perceber - ~4s no poll rapido. Barato perto de 53 recalibracoes.
+        $script:lvlBoxMiss++
+        if($script:lvlBoxMiss -ge $LevelBoxMiss){
+          $script:lvlBox = $null; $script:statDue = Get-Date; $script:forcaStat = $true
+          Log "level: a caixa calibrada falhou $($script:lvlBoxMiss)x seguidas - recalibrando agora"
+        }
       }
+      else { $script:lvlBoxMiss = 0 }   # leu: a caixa esta viva, esquece as falhas anteriores
     }
   } catch { $out = $null; $script:lvlBox = $null }
   if($own){ $img.Dispose() }
