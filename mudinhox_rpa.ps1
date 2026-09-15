@@ -2096,7 +2096,15 @@ function Start-Helper {   # liga o helper e CONFIRMA. Para de clicar apos PlayTr
     Wait 2   # botao nao reconhecido (tela ainda carregando): espera sem clicar
   }
   if((Get-HelperState) -eq 'running'){ Log "helper rodando"; return $true }
-  Log "helper nao ligou apos $PlayTries cliques, parei de tentar"; $false
+  # FOTOGRAFA A FALHA. Medido em 15/09: o helper liga em 20 de 24 vezes (83%) e falha nas outras 4, e as tres
+  # explicacoes obvias ja cairam - a caixa (78,30) esta em cima do botao, o classificador acerta com folga ali
+  # (124 pixels vermelhos contra os >10 que ele exige) e nao ha relacao com o tempo desde o teleporte (sucesso e
+  # falha acontecem ambos 0-1s depois de chegar ao spot). Sem ver o botao no instante da falha, qualquer
+  # correcao aqui seria chute - e chute em limiar de cor ja produziu falso positivo neste projeto.
+  # O print passa pelo Salvar-Print, entao NAO grava nada se a tela nao for a do jogo.
+  $f = Save-Shot 'helper_nao_ligou.png'
+  Log "helper nao ligou apos $PlayTries cliques, parei de tentar$(if($f){ ' - print em captcha\helper_nao_ligou.png' })"
+  $false
 }
 # ---------- inventario / mix de joias ----------
 function Screen-Words($img){ @((Ocr-Bitmap $img).Lines | % { $_.Words }) }
