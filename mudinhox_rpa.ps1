@@ -1245,15 +1245,13 @@ function Load-Estado {
 function Same-Map($a,$b){ $a -and $b -and $a.Substring(0,[Math]::Min(4,$a.Length)) -eq $b.Substring(0,[Math]::Min(4,$b.Length)) }   # mesmo mapa pelos 4 primeiros caracteres (tolera ruido do OCR nas coords/fim)
 function Close-Popup {   # ESC fecha popup do jogo (ex "precisa estar fora da cidade" apos /darmr) - mas com NADA
   # aberto o ESC ABRE o menu principal (Shop / Inventario / Personagem / ... / Sair), e esse painel tapa o
-  # MINIMAPA. Dois ESC as cegas eram um a mais sempre que o primeiro fechava alguma coisa: em 04/09 o mix
-  # terminou com a lista aberta, o 1o ESC fechou a lista, o 2o abriu o menu, e o bot passou 4+ min cego em
-  # "NAO CONSEGUI LER o nome do mapa" reenviando /k37 pra um minimapa tapado. Entao aperta e CONFERE.
-  # Os dois ESC de sempre ficam: fecham popup empilhado no MEIO da tela, que o sensor abaixo nao enxerga.
-  # UM ESC cego, nao dois. O segundo cego era o problema: com o primeiro ja tendo fechado o modal, ele ABRIA o
-  # menu principal - e como ESC alterna, cada prensa seguinte podia desfazer a anterior. Em 15/09 o mix terminou
-  # bem (3 joias), o Close-Popup rodou, o sensor DETECTOU o minimapa tapado, gastou as 2 prensas extras e saiu
-  # mesmo assim - o print de 50s depois mostra o menu do jogo aberto na tela, tapando o minimapa.
-  # O cego que fica serve pro popup empilhado no MEIO da tela, que o sensor do minimapa nao enxerga.
+  # MINIMAPA. Duas vezes ja custaram caro: em 04/09 o mix terminou com a lista aberta, o 1o ESC fechou a lista,
+  # o 2o abriu o menu, e o bot passou 4+ min cego reenviando /k37 pra um minimapa tapado. Em 15/09 a mesma coisa,
+  # e desta vez o sensor ate DETECTOU ("minimapa continua ilegivel") antes de desistir - o print de 50s depois
+  # mostrava o menu na tela.
+  # A licao: num ALTERNADOR, contar prensas nao serve. Nao da pra saber quantas o estado atual exige, e uma a
+  # mais desfaz a anterior. Quem decide e o SENSOR.
+  # UM ESC as cegas - esse fecha o popup empilhado no MEIO da tela, que o sensor do minimapa nao enxerga.
   Press-Vk 0x1B
   # Dai em diante, uma de cada vez, CONFERINDO: para assim que o minimapa volta a ser legivel. Num alternador
   # esse e o unico criterio seguro - contar prensas nao e, porque nao se sabe quantas o estado atual exige.
