@@ -61,5 +61,23 @@ Chk "CONFIRMAR nao casa com 'Cancelar'"  ('Cancelar' -match $conf) 'False'
 # ensina a ignorar notificacao.
 Chk "so notifica se nem CANCELAR achou"  ($src -match '(?s)nem CONFIRMAR nem CANCELAR.*?Notify') 'True'
 
+# --- o dialogo do mix NAO pode ser lido como captcha ----------------------------------------------
+# 15/09: o bot chamou o usuario duas vezes pra "resolver um captcha" e nao havia captcha nenhum na tela - era o
+# painel de combinacao aberto. O Find-Captcha ancorava em qualquer linha com a palavra "Selecione", e o dialogo
+# do mix diz "Selecione o metodo de combinacao". No meio da mixagem o bot comparava pedacos quaisquer da tela,
+# empatava (0.83, 0.991, 0.992) e pedia socorro. 3 dos 4 "captchas" daquele log eram isso.
+# As duas strings abaixo sao o que o OCR do Windows LEU de verdade nas imagens - inclusive o erro dele em
+# "combinaqäo". O -TestVisao cobre isso com as imagens, mas fixtures/ e gitignored: noutra maquina aquele teste
+# PULA em silencio. Este aqui roda em qualquer lugar, porque so precisa do regex.
+Chk "existe a ancora do captcha"     ($src -match "(?m)^\`$CapAncoraWords\s*=") 'True'
+if($src -notmatch "(?m)^\`$CapAncoraWords = '([^']+)'"){ throw "nao achei o `$CapAncoraWords no CONFIG" }
+$anc = $Matches[1]
+Chk "acha o captcha de verdade"      ('Selecione a mesma imagem abaixo:' -match $anc) 'True'
+Chk "NAO acha no dialogo do mix"     ('Selecione o método de combinaqäo' -match $anc) 'False'
+# E a ancora nao pode voltar a ser so a palavra solta - foi exatamente esse o bug.
+Chk "nao casa 'Selecione' sozinho"   ('Selecione' -match $anc) 'False'
+# O Find-Captcha tem que USAR a constante, senao o padrao volta cravado no corpo da funcao e este teste mente.
+Chk "Find-Captcha usa a ancora"      ($src -match '(?s)function Find-Captcha.*?-match \$CapAncoraWords') 'True'
+
 if($script:erros){ "`n$($script:erros) FALHA(S)"; exit 1 }
 "OK: gatilho do mix por tempo ($teto min no CONFIG), botao, desligamento, e desistir CANCELA o dialogo"
