@@ -1845,7 +1845,13 @@ function Tick-Human {   # de vez em quando, em ordem aleatoria, faz algo que um 
   $h = Get-Game; $c = New-Object W+RECT; [W]::GetClientRect($h,[ref]$c) | Out-Null; $cx = [int]($c.R/2); $cy = [int]($c.B/2)   # personagem fica no centro
   switch(Get-Random -Maximum 4){
     0 { $dx = Get-Random -Minimum -160 -Maximum 160; $dy = Get-Random -Minimum -110 -Maximum 110; Log "humano: anda ($dx,$dy) e volta"
-        Restore-Focus $prev; $null = Click-Client ($cx+$dx) ($cy+$dy); Wait (Get-Random -Minimum 1.5 -Maximum 3.5); $null = Click-Client ($cx-$dx) ($cy-$dy); Wait 2; Start-Helper; return }
+        # O Start-Helper daqui SO vale fora de cidade. Na cidade o jogo recusa com um modal ("Voce precisa estar
+        # fora da cidade para ativar o MuHelper") - o clique funciona, quem diz nao e o servidor - e o bot
+        # gastava as 3 tentativas e ainda deixava o modal na tela. Aconteceu em 15/09 04:02, logo apos o /darmr:
+        # o char relogou em Lorencia e o disfarce disparou antes do warp.
+        Restore-Focus $prev; $null = Click-Client ($cx+$dx) ($cy+$dy); Wait (Get-Random -Minimum 1.5 -Maximum 3.5); $null = Click-Client ($cx-$dx) ($cy-$dy); Wait 2
+        if(Is-FarmMap (Read-Map $null)){ Start-Helper } else { Log "humano: nao religo o helper aqui (cidade - o jogo so ativa fora dela)" }
+        return }
     1 { Log "humano: abre e fecha o status"; Close-Chat; Press-Vk $StatusKey $HotkeyHoldMs; Wait (Get-Random -Minimum 1 -Maximum 3); Press-Vk $StatusKey $HotkeyHoldMs }
     2 { # Este arrastaria o SEU ponteiro por ate ~5s. Com o jogo noutro monitor nao vale o disfarce: pula.
         if($NoFocusRead){ Log "humano: pulei o 'mexe o mouse' (jogo noutro monitor, o ponteiro e seu)"; break }
@@ -2157,13 +2163,15 @@ function Start-Helper {   # liga o helper e CONFIRMA. Para de clicar apos PlayTr
     Wait 2   # botao nao reconhecido (tela ainda carregando): espera sem clicar
   }
   if((Get-HelperState) -eq 'running'){ Log "helper rodando"; return $true }
-  # FOTOGRAFA A FALHA. Medido em 15/09: o helper liga em 20 de 24 vezes (83%) e falha nas outras 4, e as tres
-  # explicacoes obvias ja cairam - a caixa (78,30) esta em cima do botao, o classificador acerta com folga ali
-  # (124 pixels vermelhos contra os >10 que ele exige) e nao ha relacao com o tempo desde o teleporte (sucesso e
-  # falha acontecem ambos 0-1s depois de chegar ao spot). Sem ver o botao no instante da falha, qualquer
-  # correcao aqui seria chute - e chute em limiar de cor ja produziu falso positivo neste projeto.
-  # O print passa pelo Salvar-Print, entao NAO grava nada se a tela nao for a do jogo.
+  # RESPONDIDO em 15/09 pelo print que este bloco salva: o clique FUNCIONA, quem recusa e o jogo. O modal dizia
+  # "Voce precisa estar fora da cidade para ativar o MuHelper", com o char em Lorencia logo apos o /darmr.
+  # Antes disso eu tinha derrubado as tres explicacoes obvias: a caixa (78,30) esta em cima do botao, o
+  # classificador acerta com folga ali (124 pixels vermelhos contra os >10 exigidos) e nao ha relacao com o
+  # tempo desde o teleporte. Nenhuma delas era o problema, e nenhum limiar precisava mudar.
+  # FECHA O MODAL antes de sair. Desistir com ele na tela e pior que a falha: modal aberto engole clique e
+  # tecla, entao a proxima tentativa - ja fora da cidade - falharia por tabela, sem causa aparente.
   $f = Save-Shot 'helper_nao_ligou.png'
+  Close-Popup
   Log "helper nao ligou apos $PlayTries cliques, parei de tentar$(if($f){ ' - print em captcha\helper_nao_ligou.png' })"
   $false
 }
