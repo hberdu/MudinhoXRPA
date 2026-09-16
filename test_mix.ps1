@@ -22,17 +22,17 @@ function Rodar([datetime]$ultimo,[bool]$avisado){
   $script:mixou
 }
 
-# --- gatilho por tempo: e o unico que sobrou no ciclo normal ---------------------------------------
+# --- mixagem temporariamente desativada -----------------------------------------------------------
 Chk "acabou de mixar: nao vai de novo"      (Rodar (Get-Date) $false) 0
 Chk "faltando 1 min pro teto: ainda nao"    (Rodar (Get-Date).AddMinutes(1-$MixEveryMin) $false) 0
-Chk "estourou o teto: MIXA"                 (Rodar (Get-Date).AddMinutes(-$MixEveryMin) $false) 1
-Chk "bem depois do teto: MIXA"              (Rodar (Get-Date).AddHours(-3) $false) 1
-# botao MIXAR AGORA / aviso do jogo continuam valendo antes do teto
-Chk "botao MIXAR AGORA fura o teto"         (Rodar (Get-Date) $true) 1
+Chk "estourou o teto: mix desativado"       (Rodar (Get-Date).AddMinutes(-$MixEveryMin) $false) 0
+Chk "bem depois do teto: mix desativado"    (Rodar (Get-Date).AddHours(-3) $false) 0
+# botao MIXAR AGORA / aviso do jogo tambem ficam desativados por enquanto
+Chk "botao MIXAR AGORA nao mistura"         (Rodar (Get-Date) $true) 0
 
-# --- o relogio zera, senao o bot volta pro /mixer a cada volta do loop -----------------------------
+# --- sem mix nao reinicia o ciclo nem mexe no relogio ----------------------------------------------
 $null = Rodar (Get-Date).AddHours(-3) $false
-Chk "mixou -> volta pro spot pelo warp"     $script:restartCycle 'True'
+Chk "nao mixou -> nao reinicia o ciclo"     $script:restartCycle 'False'
 Chk "mixou -> relogio zerado, nao repete"   (Rodar $script:mixLast $false) 0
 
 # --- desligar tem que desligar --------------------------------------------------------------------

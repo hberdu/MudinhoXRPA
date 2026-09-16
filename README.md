@@ -1,6 +1,6 @@
 # RPA do MudinhoX
 
-Loop automático: `/k37` -> play (MU Helper) -> espera level 350 -> `/resetar` -> repete.
+Loop automático: `/k38` -> play (MU Helper) -> espera level 315 -> `/resetar` -> repete. O bot ajusta o piso se o servidor recusar esse level.
 
 - Piso por comando: **1000** no geral e **500 na reta final** (`$StatMinPerto`, quando os 4 atributos passam de `$StatPertoDoMax` = 30000). O `/a` nunca vai abaixo de **100** (`$StatMinAgi`) — abaixo disso ele teleporta o char pra AIDA. `/f`, `/v`, `/e` podem mandar qualquer valor quando é pra **fechar exatamente** o 32767.
 - **A reta final nunca tem piso maior que o trecho normal.** O `$StatMinPerto` (500) existe pra *baixar* o piso de 1000 — mas depois que o servidor aceitou abaixo do piso (ver abaixo) o `$StatMinOutros` virou **100**, e pegar o 500 direto **subia** o piso justo onde fechar o cap é tudo que importa. Travou de verdade em 04/09: `F=30000 A=32767 V=30000 E=32767` com **418 pontos** em mãos, 418 < 500, nenhum comando saiu — 31 min parados, `/darmr` sem sair e auto-restart por "sem progresso". Agora o piso da reta final é o **menor** dos dois; sem o piso aprendido, continua 500, como era a intenção. A mensagem de recusa também mostrava o piso errado (`418 pontos; minimo 100`, quando o aplicado tinha sido 500).
