@@ -3622,6 +3622,10 @@ while($true){
     } finally { Release-Focus }
     if(((Get-Date) - $inicio).TotalMinutes -ge $ResetStuckMin){   # travado ha muito tempo: reinicia o ciclo (re-warp desbuga morte/teleporte/mapa errado)
       Log "reset travado ha $ResetStuckMin min: reiniciando o ciclo (re-warp) pra tentar desbugar"
+      # O loop de reenvio ja avisou antes (a cada $RenotifySec, bem antes de chegar aqui) - mas aquele toast dizia
+      # "ainda tentando"; este e outro fato: desisti de reenviar e vou re-teleportar. So dispara 1x (o `until`
+      # logo abaixo sai do loop assim que $restartCycle vira true, entao este bloco nao repete).
+      Notify "MudinhoX" "Reset travado ha $ResetStuckMin min: desisti de reenviar e vou re-teleportar pra tentar desbugar."
       $script:restartCycle = $true
     }
   } until ($resetOk -or $script:restartCycle)
