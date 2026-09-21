@@ -1,6 +1,6 @@
 # RPA do MudinhoX
 
-Loop automático: `/k38` -> play (MU Helper) -> espera level 315 -> `/resetar` -> repete. O bot ajusta o piso se o servidor recusar esse level.
+Loop automático: warp pro spot (`$WarpCmd`, editável na janelinha ou no CONFIG) -> play (MU Helper) -> espera o level alvo (`$TargetLevel`) -> `/resetar` -> repete. O bot ajusta o piso se o servidor recusar esse level.
 
 - Piso por comando: **1000** no geral e **500 na reta final** (`$StatMinPerto`, quando os 4 atributos passam de `$StatPertoDoMax` = 30000). O `/a` nunca vai abaixo de **100** (`$StatMinAgi`) — abaixo disso ele teleporta o char pra AIDA. `/f`, `/v`, `/e` podem mandar qualquer valor quando é pra **fechar exatamente** o 32767.
 - **A reta final nunca tem piso maior que o trecho normal.** O `$StatMinPerto` (500) existe pra *baixar* o piso de 1000 — mas depois que o servidor aceitou abaixo do piso (ver abaixo) o `$StatMinOutros` virou **100**, e pegar o 500 direto **subia** o piso justo onde fechar o cap é tudo que importa. Travou de verdade em 04/09: `F=30000 A=32767 V=30000 E=32767` com **418 pontos** em mãos, 418 < 500, nenhum comando saiu — 31 min parados, `/darmr` sem sair e auto-restart por "sem progresso". Agora o piso da reta final é o **menor** dos dois; sem o piso aprendido, continua 500, como era a intenção. A mensagem de recusa também mostrava o piso errado (`418 pontos; minimo 100`, quando o aplicado tinha sido 500).
@@ -178,7 +178,7 @@ O mix acha o resto por OCR. Se algum texto não bater com `$MixMenuWords` / `$Mi
 - `$LoginServerWords` (`Server Vip Gold`): qual botão clicar na tela de escolha de servidor. `$LoginDangerWords` lista o que **nunca** pode ser clicado por coordenada chutada (`CRIAR NOVA CONTA`, `Sair`) — o fallback `$LoginBtn` (960,940) cai justo em cima do "criar conta", então numa tela dessas o bot avisa em vez de clicar.
 - `$MixEveryMin` (25): no ciclo normal, vai mixar a cada N min sem parar de resetar. `0` desliga (aí só a mensagem do jogo e o botão). Não confunda com o `$JoiasFarmMax` (8), que é o teto do **modo jóias**.
 - `$MetricsEvery` (5): a cada N resets loga `pontos/h`, ETA do MR e a **mediana** do ciclo + quanto do tempo vazou nos ciclos lentos.
-- `$MsgBox`: faixa de mensagens do jogo que o bot lê (respostas do servidor, aviso de inventário cheio, evento dos dragões).
+- `$MsgBox`: faixa de mensagens do jogo que o bot lê (respostas do servidor, aviso de inventário cheio). O evento dos dragões é tirado do log (`$MsgEventoWords`).
 - `$ClientEsperado` (1920x1009): resolução da calibração. Se a janela do jogo mudar de tamanho, o bot avisa no start.
 - `$SemProgressoMin` (12): sem distribuir um ponto sequer por N min, o bot assume que travou, avisa e reinicia o ciclo.
 - O jogo precisa estar visível na leitura. Se outra janela estiver na frente, o bot traz o jogo por ~1s, lê e devolve o foco (aí lê a cada 60s em vez de 10s). Se o Windows negar o foco, ele pula em vez de digitar no lugar errado.

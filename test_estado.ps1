@@ -6,11 +6,13 @@ $AutoTune = $true
 $TargetLevel = 350
 $WarpCmd = '/k37'
 $WarpMap = ''
+$WarmupCmd = '/losttower7'
 $StatMinAprende = $true
 $StatMinTeste = 100
 $StatMinOutros = 1000
 $script:statMinOk = 0
 $script:stCarry = @{}
+$script:warpCmdUi = ''; $script:warmupCmdUi = ''
 function Log($m){ }
 
 $src = Get-Content "$PSScriptRoot\mudinhox_rpa.ps1" -Raw
@@ -135,6 +137,17 @@ $script:resets = 99
 Load-Estado
 Chk 'corrompido nao zera resets' $script:resets 99
 
+# 3b. estado.txt de ANTES de 20/09 (sem warpCmdUi=/warmupCmdUi=, chaves que nem existiam): tem que carregar sem
+#     erro e sem inventar override nenhum - CONFIG (ou o que ja estava em memoria) continua mandando.
+@('fase=normal','modo=reset','warmup=0','resets=10','warpCmd=/k37','warpMap=kant') -join "`r`n" | Set-Content $EstadoFile -Encoding ASCII
+$script:WarpCmd = '/s21'; $script:warpCmdUi = 'nao_deveria_sobreviver'; $script:WarmupCmd = '/losttower3'; $script:warmupCmdUi = 'nem_essa'
+Load-Estado
+Chk 'estado.txt antigo: nao inventa warpCmdUi'    $script:warpCmdUi 'nao_deveria_sobreviver'
+Chk 'estado.txt antigo: nao mexe no WarpCmd'      $script:WarpCmd '/s21'
+Chk 'estado.txt antigo: nao inventa warmupCmdUi'  $script:warmupCmdUi 'nem_essa'
+Chk 'estado.txt antigo: nao mexe no WarmupCmd'    $script:WarmupCmd '/losttower3'
+$script:warpCmdUi = ''; $script:warmupCmdUi = ''; $script:WarpCmd = '/k37'; $script:WarmupCmd = '/losttower7'
+
 # 4. mapa do spot aprendido. O bot descobre no primeiro teleporte que nome o minimapa mostra pro $WarpCmd
 #    (nao da pra saber de fora), grava, e retoma no restart. Mas so quando ele mesmo aprendeu.
 $script:phase='normal'; $script:warmupCount=0
@@ -150,6 +163,36 @@ $script:WarpMap = 'kant'; Save-Estado
 $script:WarpCmd = '/s18'; $script:WarpMap = ''; Load-Estado  # trocou de spot: o nome antigo nao serve mais
 Chk 'trocar de comando manda reaprender'   $script:WarpMap ''
 $script:WarpCmd = '/k37'
+
+# 4b. comando definido pela JANELINHA (warpCmdUi/warmupCmdUi). Diferente do warpMap acima: este sobrepoe o
+#     CONFIG mesmo que o .ps1 seja editado depois - e o UNICO jeito de um valor digitado na interface sobreviver
+#     a um restart (pedido do usuario em 20/09: trocar de spot vivia custando editar o .ps1 toda vez).
+$script:warpCmdUi = '/s21'; Save-Estado
+$script:warpCmdUi = ''; $script:WarpCmd = '/k37'; Load-Estado   # simula um processo novo, CONFIG puro
+Chk 'warpCmdUi sobrepoe o CONFIG no restart' $script:WarpCmd '/s21'
+Chk 'e fica guardado pra salvar nos proximos Save-Estado' $script:warpCmdUi '/s21'
+$script:warpCmdUi = ''; $script:WarpCmd = '/k37'; Save-Estado; Load-Estado   # limpa pros testes seguintes
+
+$script:warmupCmdUi = '/losttower3'; Save-Estado
+$script:warmupCmdUi = ''; $script:WarmupCmd = '/losttower7'; Load-Estado
+Chk 'warmupCmdUi sobrepoe o CONFIG no restart' $script:WarmupCmd '/losttower3'
+$script:warmupCmdUi = ''; $script:WarmupCmd = '/losttower7'; Save-Estado; Load-Estado
+
+# nunca mexeu na janelinha (warpCmdUi vazio no estado.txt): CONFIG continua mandando, sem apagar nem sobrescrever
+$script:warpCmdUi = ''; Save-Estado
+$script:WarpCmd = '/s18'; Load-Estado
+Chk 'warpCmdUi vazio nao mexe no CONFIG' $script:WarpCmd '/s18'
+$script:WarpCmd = '/k37'; Save-Estado; Load-Estado
+
+# trocar o comando pela janelinha invalida o mapa aprendido pro comando ANTIGO - mesma regra de sempre
+# (warpCmd=, a chave de comparacao) so que agora o comparado e o warpCmdUi recem-adotado, nao mais o CONFIG cru
+$script:WarpCmd = '/k37'; $script:WarpMap = 'kant'; Save-Estado          # aprendeu 'kant' rodando /k37
+$script:warpCmdUi = '/s21'; Save-Estado                                  # voce troca pela janelinha, sem reiniciar ainda
+$script:WarpCmd = '/k37'; $script:warpCmdUi = ''; $script:WarpMap = ''   # simula processo novo, CONFIG puro de novo
+Load-Estado
+Chk 'janelinha troca o comando'          $script:WarpCmd '/s21'
+Chk 'e o mapa do comando antigo NAO vem' $script:WarpMap ''
+$script:warpCmdUi = ''; $script:WarpCmd = '/k37'; $script:WarpMap = ''; Save-Estado; Load-Estado   # limpa
 
 # 5. veredito do piso de /f /v /e. E uma pergunta feita ao servidor UMA vez na vida: se nao sobreviver ao
 #    restart, todo start gasta um /f e uma leitura de status pra reaprender o que ja se sabia.

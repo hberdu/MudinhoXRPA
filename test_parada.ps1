@@ -169,5 +169,21 @@ Chk 'nao pega numero solto da faixa' ('Você adicionou 512 pontos, permanecendo 
 # E o teto de sanidade: OCR ruim devolvendo 3500 faria o char farmar pra sempre sem nunca resetar.
 Chk 'aprendizado tem teto'           ($src -match '\$min -le \$LevelMaximo') 'True'
 
+# --- evento dos dragoes fora do LOG ----------------------------------------------------------------
+# Repetido sem parar pelo servidor e sem uso nenhum desde que o modo dragoes saiu: era a maior parte do "jogo diz".
+# O que NAO pode sumir junto e o aviso que o bot usa, quando o OCR come o "!" e gruda as duas frases.
+foreach($v in 'MsgEventoWords','MsgInvWords'){
+  if($src -notmatch "(?m)^\`$$v\s*=\s*'([^']+)'"){ throw "nao achei o `$$v no CONFIG" }
+  Set-Variable $v $Matches[1]
+}
+$MsgTravadoWords = $travado; $MsgMinResetWords = $minRe
+if($src -notmatch '(?s)(function Sem-Evento\(\[string\]\$m\)\{.*?\r?\n\})'){ throw "nao achei a Sem-Evento" }
+. ([scriptblock]::Create($Matches[1]))
+Chk 'so evento: linha some'        (Sem-Evento 'Resta ainda 6 Golden Dragon vivo(s) em Devias! Resta ainda 2 Golden Tantalo vivo(s) em Tarkan! -DDR3- acabou de matar um Golden Dragon!') ''
+Chk 'invasao mastigada some'       (Sem-Evento 'Gold 1 a Invasão de Dragões Dourados em 4 minutos! Invasao ae uragoes uouraaos terminou!') ''
+Chk 'o resto da faixa fica'        (Sem-Evento 'Resta ainda 15 Golden Dragon vivo(s) em Noria! Você adicionou 128 pontos, permanecendo 16 pontos a serem distribuídos') 'Você adicionou 128 pontos, permanecendo 16 pontos a serem distribuídos'
+Chk 'VIP GOLD nao e evento'        (Sem-Evento 'Bem-vindo(a)! Você é um jogador VIP GOLD.') 'Bem-vindo(a)! Você é um jogador VIP GOLD.'
+foreach($m in $reaisMin[0], $reais[1]){ Chk "aviso grudado no evento fica: $($m.Substring(0,30))" (Sem-Evento $m) $m }
+
 if($script:erros -eq 0){ "OK: parada limpa o disco e registra o motivo, painel congelado pego em $StatCongeladoN leituras, e warp travado destrava" }
 else { "$($script:erros) FALHA(S)"; exit 1 }
