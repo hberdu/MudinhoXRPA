@@ -14,7 +14,7 @@ if($src -notmatch '(?s)(function Log-Plano \{.*?\r?\n\})'){ throw "nao achei a L
 . ([scriptblock]::Create($Matches[1]))
 
 # CONFIG de verdade, lido do arquivo: o teste tem que falhar se alguem trocar o spot e esquecer do resto.
-foreach($v in 'WarmupResets','WarmupTesteSec'){
+foreach($v in 'WarmupResets','WarmupTesteSec','WarmupPts'){
   if($src -notmatch "(?m)^\`$$v\s*=\s*(\d+)"){ throw "nao achei o `$$v no CONFIG" }
   Set-Variable $v ([int]$Matches[1])
 }
@@ -29,11 +29,12 @@ $script:linhas = @(); $script:modo = 'reset'; $script:phase = 'warmup'; $script:
 $script:TargetLevel = 350; $script:LevelMinReset = 350; $script:resets = 0; $script:ptsSent = 0
 Log-Plano
 Chk 'sao duas linhas'                $script:linhas.Count 2
-Tem 'diz quantos resets de warmup'   $script:linhas[0] "$WarmupResets resets em $WarmupCmd"
+Tem 'diz o criterio de saida do warmup (pontos, nao resets)' $script:linhas[0] "$WarmupCmd ate os 4 atributos passarem de $WarmupPts"
 Tem 'diz o spot normal depois'       $script:linhas[0] "depois $WarpCmd"
 Tem 'e onde isso termina'            $script:linhas[0] '/darmr'
-Tem 'diz a fase atual'               $script:linhas[1] "warmup 0/$WarmupResets"
-Tem 'e o proximo passo concreto'     $script:linhas[1] "vai pra $WarmupCmd"
+Tem 'diz quantos resets ja rodou'    $script:linhas[1] "warmup (0 resets ate agora)"
+Tem 'diz o proximo passo concreto'   $script:linhas[1] "vai pra $WarmupCmd"
+Tem 'diz o alvo de pontos'           $script:linhas[1] "ate passar de $WarmupPts"
 Tem 'diz o level de reset'           $script:linhas[1] 'reseta no level 350'
 
 # --- 2. warmup ja cumprido: o proximo passo muda ---------------------------------------------------
@@ -56,11 +57,11 @@ Tem 'e avisa que nao reseta'         $script:linhas[1] 'NAO reseta'
 $script:linhas = @(); $script:modo = 'reset'; $script:phase = 'warmup'; $WarmupTeste = $true
 Log-Plano
 Tem 'com WarmupTeste o plano muda'   $script:linhas[0] "TESTA $WarpCmd primeiro"
-if($script:linhas[0] -like "*$WarmupResets resets em*"){ "FALHOU 'com WarmupTeste nao promete os N resets'"; $script:erros++ }
+if($script:linhas[0] -like "*atributos passarem de*"){ "FALHOU 'com WarmupTeste nao promete o criterio de pontos do warmup'"; $script:erros++ }
 
 # --- 5. e o plano e logado DEPOIS de o estado ser retomado -----------------------------------------
 # Antes do Load-Estado ele imprimiria o CONFIG cru e diria "warmup 0/3" mesmo com 2 resets ja feitos.
 Chk 'Log-Plano vem depois do Load-Estado' ($src -match '(?s)Load-Estado.*?Log-Plano\s*#.*?\r?\nwhile\(-not \$script:stop\)') 'True'
 
 if($script:erros){ "`n$script:erros FALHA(S)"; exit 1 }
-"OK: o plano declarado no start bate com o CONFIG e com a fase retomada ($WarmupResets x $WarmupCmd -> $WarpCmd -> /darmr)"
+"OK: o plano declarado no start bate com o CONFIG e com a fase retomada ($WarmupCmd ate $WarmupPts -> $WarpCmd -> /darmr)"

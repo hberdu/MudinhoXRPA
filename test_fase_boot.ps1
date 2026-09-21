@@ -2,10 +2,10 @@
 # 20/09: o estado.txt podia estar errado, ausente ou velho (voce apagou o arquivo, ou deu /darmr na mao fora do
 # bot) e nada conferia isso contra o PERSONAGEM antes de decidir losttower7 (warmup) ou k37/s21 (normal). Agora
 # Valida-FaseBoot le os 4 atributos e corrige quando eles discordam do que foi retomado.
+# 21/09 (pedido do usuario): a regra virou "fica no warmup ate os 4 atributos passarem de $WarmupPts" - TODOS,
+# nao qualquer um. Um char com 1 atributo alto e os outros 3 baixos AINDA precisa do warmup.
 $StatOrder = 'Ene','Agi','For','Vit'
-$StatStep = 5000
-$StatMaxValue = 32767
-$StatStages = @(1..([Math]::Floor(($StatMaxValue - 1) / $StatStep)) | % { $_ * $StatStep }) + $StatMaxValue   # 5000,10000,...,32767 - mesma conta do CONFIG real
+$WarmupPts = 8000
 
 $src = Get-Content "$PSScriptRoot\mudinhox_rpa.ps1" -Raw
 if($src -notmatch '(?s)(function Valida-FaseBoot \{.*?\r?\n\})'){ throw "nao achei a Valida-FaseBoot" }
@@ -27,18 +27,31 @@ Chk 'atributos baixos -> corrige pra warmup' $script:phase 'warmup'
 Chk 'contador de warmup zera na correcao'    $script:warmupCount 0
 Chk 'grava a correcao'                       $script:saves 1
 
-# 2. char com progresso de verdade (qualquer atributo acima da 1a etapa): estado.txt dizia 'warmup' por engano -
-#    tem que corrigir pra normal. Nao precisa dos 4 acima, UM ja prova que nao acabou de resetar.
+# 2. SO UM atributo acima de $WarmupPts, os outros 3 ainda baixos: continua/corrige pra warmup. E a regra nova -
+#    "todos os 4", nao "qualquer um". Testa os dois sentidos: estado.txt dizia 'normal' (corrige) e 'warmup' (fica).
 $script:saves = 0
 function Read-Status { St 9744 1500 1500 1500 }
-$script:phase = 'warmup'; $script:warmupCount = 1
+$script:phase = 'normal'; $script:warmupCount = 0
 Valida-FaseBoot
-Chk 'um atributo alto -> corrige pra normal' $script:phase 'normal'
-Chk 'grava a correcao'                       $script:saves 1
+Chk 'so 1 atributo alto -> AINDA e warmup (faltam os outros 3)' $script:phase 'warmup'
+Chk 'grava a correcao'                                           $script:saves 1
 
-# 3. atributos CONCORDAM com a fase retomada: nao mexe em nada, nao gasta Save-Estado a toa
+$script:saves = 0; $script:phase = 'warmup'; $script:warmupCount = 1
+Valida-FaseBoot
+Chk 'so 1 atributo alto, warmup concordando: fica' $script:phase 'warmup'
+Chk 'concordando: nao salva a toa'                  $script:saves 0
+
+# 3. os 4 atributos passaram de $WarmupPts: estado.txt dizia 'warmup' por engano - corrige pra normal.
 $script:saves = 0
-function Read-Status { St 9744 9176 5304 10000 }
+function Read-Status { St 9744 9176 8304 10000 }
+$script:phase = 'warmup'; $script:warmupCount = 4
+Valida-FaseBoot
+Chk 'os 4 atributos altos -> corrige pra normal' $script:phase 'normal'
+Chk 'grava a correcao'                            $script:saves 1
+
+# 4. atributos CONCORDAM com a fase retomada: nao mexe em nada, nao gasta Save-Estado a toa
+$script:saves = 0
+function Read-Status { St 9744 9176 8304 10000 }
 $script:phase = 'normal'; $script:warmupCount = 0
 Valida-FaseBoot
 Chk 'concordando, fase intacta'      $script:phase 'normal'
@@ -51,7 +64,7 @@ Valida-FaseBoot
 Chk 'warmup concordando com baixo, fase intacta' $script:phase 'warmup'
 Chk 'warmup concordando, nao salva a toa'         $script:warmupCount 1
 
-# 4. nao consegue ler o status (jogo travado, tela de loading etc): nao inventa, mantem o que o estado.txt disse.
+# 5. nao consegue ler o status (jogo travado, tela de loading etc): nao inventa, mantem o que o estado.txt disse.
 #    E diz O MOTIVO (captcha vs outra coisa) - antes so dizia "falhou", igual todo outro "Read-Status falhou" do
 #    log, sem dar pra saber DE LONGE se era a mesma classe do incidente de 19/09 (painel tapado) ou um captcha.
 $script:saves = 0
@@ -76,5 +89,5 @@ Valida-FaseBoot
 Chk 'sem captura nenhuma, nao quebra' $script:phase 'warmup'
 Chk 'sem captura nenhuma, avisa no log' ([bool]($script:logs -match 'nao consegui ler')) 'True'
 
-if($script:erros -eq 0){ "OK: Valida-FaseBoot corrige losttower7/k37 pelos atributos reais, so quando discorda do estado.txt" }
+if($script:erros -eq 0){ "OK: Valida-FaseBoot corrige losttower7/k37 pelos atributos reais (os 4 tem que passar de `$WarmupPts), so quando discorda do estado.txt" }
 else { "$($script:erros) FALHA(S)"; exit 1 }

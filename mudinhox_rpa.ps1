@@ -52,11 +52,15 @@ $GameTitle     = ''       # DEFAULT: considerar o jogo em aberto como cliente de
                           # nem pra conferir foco.
 $WarpCmd       = '/k37'    # comando de teleporte pro spot de farm normal (troque aqui se mudar de spot).
 $WarmupCmd     = '/losttower7'   # apos /darmr o personagem volta fraco em Lorencia: farma AQUI (Lost Tower 7) ate juntar os primeiros resets
-$WarmupResets  = 3           # quantos resets fazer no modo warmup (pos-darmr) antes de voltar ao spot normal ($WarpCmd).
-                             # Era 10, depois 3. Chegou a ir pra 2 em 08/09 e voltou pra 3 no rollback daquele lote.
+$WarmupPts     = 8000         # quem decide sair do warmup: os 4 atributos (For/Agi/Vit/Ene) tem que estar >= isto.
+                              # Conferido a cada reset feito em $WarmupCmd (pedido do usuario, 21/09). Antes era so
+                              # contar resets ($WarmupResets) - impreciso, porque o ganho por reset la varia com o char.
+$WarmupResets  = 3           # so DISPLAY agora (contador de "quantos resets ja rodei em warmup", plano/log/metrics) -
+                             # quem decide a saida e o $WarmupPts acima. Era 10, depois 3. Chegou a ir pra 2 em 08/09
+                             # e voltou pra 3 no rollback daquele lote.
                              # Medido em 9 master resets: o warmup e o MAIOR ponto isolado de demora - 13.9 min de um
                              # MR de 41.8 (33%) pra fazer 3 dos ~23 resets. Cada reset la custa 255s contra 74s no
-                             # $WarpCmd. Vale reduzir de novo, mas UMA mudanca por vez e com o bot medido depois.
+                             # $WarpCmd.
 $WarmupTeste   = $false  # TESTA o spot normal logo apos o /darmr: fechou um reset la em ate $WarmupTesteSec, pula o
                          # warmup inteiro; estourou, cai pro Lost Tower e faz os $WarmupResets normalmente.
                          # Ligado em 08/09 junto com outras 2 mudancas e revertido no mesmo dia - NAO por culpa dele:
@@ -1336,10 +1340,10 @@ function Load-Estado {
 }
 function Valida-FaseBoot {   # chamada 1x no boot, depois do Load-Estado: confere a fase contra o PERSONAGEM
   # O estado.txt diz qual fase, mas ele pode estar errado, ausente ou velho (voce apagou o arquivo, ou deu /darmr
-  # na mao fora do bot). Antes de decidir pra onde teleportar, confere pelo PERSONAGEM: os 4 atributos voltam pra
-  # 1500 cada logo apos um /darmr (medido no log, MR #155) - bem abaixo da 1a etapa ($StatStages[0] = 5000). Char
-  # com QUALQUER atributo ja acima disso claramente nao acabou de resetar; char com os 4 ainda abaixo e o caso
-  # que o warmup existe pra atender. So corrige quando DISCORDA do estado.txt - concordando, nao gasta o C a toa.
+  # na mao fora do bot). Antes de decidir pra onde teleportar, confere pelo PERSONAGEM: a regra e a MESMA que
+  # decide a saida do warmup no meio da sessao (pedido do usuario, 21/09) - os 4 atributos (For/Agi/Vit/Ene) tem
+  # que estar >= $WarmupPts. Logo apos um /darmr eles voltam pra 1500 cada (medido no log, MR #155), bem abaixo -
+  # entao um char recem-resetado sempre cai em 'warmup' aqui, sem precisar de um caso especial pra isso.
   $stAtual = Read-Status
   if(-not $stAtual){
     # DIZ POR QUE, nao so "falhou" - Run-StartCheck (logo acima, no boot) ja confere captcha antes de outras
@@ -1349,10 +1353,25 @@ function Valida-FaseBoot {   # chamada 1x no boot, depois do Load-Estado: confer
     Log "nao consegui ler os atributos pra validar a fase no boot ($motivo) - seguindo com '$($script:phase)' do estado.txt"
     return
   }
-  $espFase = if($StatOrder | ? { [int]$stAtual[$_] -ge $StatStages[0] }){ 'normal' } else { 'warmup' }
+  $espFase = if($StatOrder | ? { [int]$stAtual[$_] -lt $WarmupPts }){ 'warmup' } else { 'normal' }   # TODOS >= WarmupPts pra sair do warmup, um so abaixo ja segura
   if($espFase -eq $script:phase){ Log "atributos confirmam a fase retomada ($($script:phase))"; return }
   Log "atributos (F=$($stAtual.For) A=$($stAtual.Agi) V=$($stAtual.Vit) E=$($stAtual.Ene)) dizem '$espFase', estado.txt tinha '$($script:phase)' - corrigindo"
   $script:phase = $espFase; $script:warmupCount = 0; Save-Estado
+}
+function Checa-Fim-Warmup {   # chamada apos CADA reset em warmup: sai pro spot normal quando os 4 atributos passam de $WarmupPts
+  $script:warmupCount++
+  # Quem decide sair do warmup sao os ATRIBUTOS (pedido do usuario, 21/09; mesma regra do Valida-FaseBoot), nao a
+  # contagem de resets - $WarmupResets virou so display (CONFIG). Le de novo aqui: o reset que acabou de
+  # acontecer pode ter rendido pontos novos pra gastar.
+  $stW = Read-Status
+  if($stW -and -not ($StatOrder | ? { [int]$stW[$_] -lt $WarmupPts })){
+    $script:phase = 'normal'
+    Log "warmup completo (F=$($stW.For) A=$($stW.Agi) V=$($stW.Vit) E=$($stW.Ene), todos >= $WarmupPts) -> voltando ao spot normal ($WarpCmd)"
+  } else {
+    $faltam = if($stW){ ($StatOrder | ? { [int]$stW[$_] -lt $WarmupPts } | % { "$_=$($stW[$_])" }) -join ' ' } else { 'nao consegui ler o status' }
+    Log "warmup: reset $($script:warmupCount) (Lost Tower) - ainda abaixo de ${WarmupPts}: $faltam"
+  }
+  Save-Estado
 }
 function Same-Map($a,$b){ $a -and $b -and $a.Substring(0,[Math]::Min(4,$a.Length)) -eq $b.Substring(0,[Math]::Min(4,$b.Length)) }   # mesmo mapa pelos 4 primeiros caracteres (tolera ruido do OCR nas coords/fim)
 function Close-Popup {   # ESC fecha popup do jogo (ex "precisa estar fora da cidade" apos /darmr) - mas com NADA
@@ -2270,7 +2289,7 @@ function Master-Reset {   # atributos cheios: /darmr -> tela de selecao -> clica
       $script:spotTeste = $true; $script:spotTesteIni = Get-Date
       Log "pos-MR: testando o spot normal ($WarpCmd) por ate $WarmupTesteSec s antes de decidir pelo warmup"
     } else {
-      $script:phase = 'warmup'; $script:warmupCount = 0; Log "modo warmup ($WarmupCmd ate $WarmupResets resets)"
+      $script:phase = 'warmup'; $script:warmupCount = 0; Log "modo warmup ($WarmupCmd ate os 4 atributos passarem de $WarmupPts)"
     }
     Save-Estado; $script:restartCycle = $true
   }
@@ -2779,10 +2798,10 @@ function Log-Plano {   # o que o bot VAI fazer, em duas linhas, logo no start
   # e quando ele fazia outra coisa (spot errado, fase errada retomada do estado.txt) isso so aparecia dali a
   # varios minutos, no meio do log. Declarado aqui, uma linha desmente a outra na hora.
   $ciclo = if($WarmupTeste){ "TESTA $WarpCmd primeiro; se nao fechar um reset em ${WarmupTesteSec}s, cai pro warmup" }
-           else { "$WarmupResets resets em $WarmupCmd (warmup: apos o /darmr o char volta fraco)" }
+           else { "$WarmupCmd ate os 4 atributos passarem de $WarmupPts (warmup: apos o /darmr o char volta fraco)" }
   Log "plano: $ciclo -> depois $WarpCmd ate os 4 atributos no cap -> /darmr"
   $agora = if($script:modo -eq 'joias'){ "MODO JOIAS - farma em $WarpCmd, mixa no $MixCmd, NAO reseta" }
-           elseif($script:phase -eq 'warmup'){ "warmup $($script:warmupCount)/$WarmupResets -> vai pra $WarmupCmd" }
+           elseif($script:phase -eq 'warmup'){ "warmup ($($script:warmupCount) resets ate agora) -> vai pra $WarmupCmd ate passar de $WarmupPts" }
            else { "fase normal -> vai pra $WarpCmd" }
   Log ("  agora: {0} | reseta no level {1} (piso {2}) | {3} resets e {4} pontos neste MR" -f `
        $agora, $script:TargetLevel, $script:LevelMinReset, $script:resets, $script:ptsSent)
@@ -3483,15 +3502,12 @@ if(-not $MixEnabled -and $script:modo -eq 'joias'){
   $script:modo = 'reset'; $script:cotaJoias = $false; Save-Estado
   Log "mix de joias desativado: retomando o ciclo normal"
 }
-# Se o $WarmupResets do CONFIG baixou (10 -> 3) e o estado.txt guardou uma contagem maior, o char ja cumpriu a
-# cota: sai do warmup na hora, em vez de gastar mais um ciclo de ~220s no Lost Tower so pra descobrir isso.
-if($script:phase -eq 'warmup' -and $script:warmupCount -ge $WarmupResets){
-  $script:phase = 'normal'; Save-Estado
-  Log "warmup ja cumprido ($($script:warmupCount)/$WarmupResets pelo estado.txt) -> indo direto pro spot normal ($WarpCmd)"
-}
+# O pre-check por CONTAGEM de resets saiu daqui (21/09): virou redundante com o Valida-FaseBoot logo abaixo, que
+# usa a MESMA regra ($WarmupPts) direto dos atributos - e sem o risco de logar "warmup ja cumprido" e o proximo
+# log dizer o contrario porque os atributos discordam da contagem.
 Valida-FaseBoot
 if($script:modo -eq 'joias'){ Log "retomando em MODO JOIAS: farma em $WarpCmd ate encher, mixa no $MixCmd, repete" }
-if(Test-Path $WarmupFile){ Remove-Item $WarmupFile -ErrorAction SilentlyContinue; $script:phase = 'warmup'; $script:warmupCount = 0; Save-Estado; Log "iniciando em modo warmup (pos-MR manual): $WarmupCmd ate $WarmupResets resets" }
+if(Test-Path $WarmupFile){ Remove-Item $WarmupFile -ErrorAction SilentlyContinue; $script:phase = 'warmup'; $script:warmupCount = 0; Save-Estado; Log "iniciando em modo warmup (pos-MR manual): $WarmupCmd ate os 4 atributos passarem de $WarmupPts" }
 Log-Plano   # DEPOIS do Load-Estado e dos ajustes de fase acima: o plano tem que refletir o que o bot vai fazer de verdade, nao o CONFIG cru
 while(-not $script:stop){   # envelope: se o cliente cair, o catch espera ele voltar e o ciclo recomeca aqui (antes o script terminava)
 try {
@@ -3659,11 +3675,7 @@ while($true){
     Log "pos-MR: o spot normal fechou um reset em ${seg}s - PULANDO o warmup (medido: o warmup custa ~14 min, 33% do MR)"
     Save-Estado
   }
-  if($script:phase -eq 'warmup'){
-    $script:warmupCount++; Log "warmup: reset $($script:warmupCount)/$WarmupResets (Lost Tower)"
-    if($script:warmupCount -ge $WarmupResets){ $script:phase = 'normal'; Log "warmup completo ($WarmupResets resets) -> voltando ao spot normal ($WarpCmd)" }
-    Save-Estado
-  }
+  if($script:phase -eq 'warmup'){ Checa-Fim-Warmup }
   $script:statDue = Get-Date   # distribui os pontos do reset ja no proximo tick (Distribute-Points valida os 4 atributos e cuida do /darmr)
 }
 } catch {
