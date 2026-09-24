@@ -1344,7 +1344,14 @@ function Valida-FaseBoot {   # chamada 1x no boot, depois do Load-Estado: confer
   # decide a saida do warmup no meio da sessao (pedido do usuario, 21/09) - os 4 atributos (For/Agi/Vit/Ene) tem
   # que estar >= $WarmupPts. Logo apos um /darmr eles voltam pra 1500 cada (medido no log, MR #155), bem abaixo -
   # entao um char recem-resetado sempre cai em 'warmup' aqui, sem precisar de um caso especial pra isso.
-  $stAtual = Read-Status
+  # TRY/CATCH obrigatorio: esta funcao roda FORA do envelope do laco principal (o `try` que espera o cliente
+  # voltar). Sem ele, jogo fechado no boot faz o Read-Status lancar "MudinhoX (mudx.exe) nao esta rodando" e o
+  # script INTEIRO morre ali - sem log de plano, sem limpar o heartbeat, e as aberturas seguintes saem por
+  # "heartbeat fresco" (24/09: projeto fechava logo depois de abrir). Sem jogo nao ha o que validar: segue com o
+  # estado.txt e o laco principal espera o cliente sozinho.
+  $stAtual = $null; $erroLeitura = $null
+  try { $stAtual = Read-Status } catch { $erroLeitura = $_.Exception.Message }
+  if($erroLeitura){ Log "nao consegui validar a fase no boot ($erroLeitura) - seguindo com '$($script:phase)' do estado.txt"; return }
   if(-not $stAtual){
     # DIZ POR QUE, nao so "falhou" - Run-StartCheck (logo acima, no boot) ja confere captcha antes de outras
     # leituras por essa mesma razao. Barato: so roda quando a leitura ja falhou, uma vez no boot.

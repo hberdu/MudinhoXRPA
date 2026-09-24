@@ -89,5 +89,18 @@ Valida-FaseBoot
 Chk 'sem captura nenhuma, nao quebra' $script:phase 'warmup'
 Chk 'sem captura nenhuma, avisa no log' ([bool]($script:logs -match 'nao consegui ler')) 'True'
 
+# 6. REGRESSAO (24/09): jogo FECHADO no boot. Read-Status LANCA ("MudinhoX (mudx.exe) nao esta rodando") em vez de
+#    devolver $null, e Valida-FaseBoot roda fora do try do laco principal - a excecao derrubava o script inteiro
+#    logo depois de abrir. Tem que engolir, logar, manter a fase e NAO propagar.
+$script:saves = 0; $script:logs = @()
+function Read-Status { throw "MudinhoX (mudx.exe) nao esta rodando" }
+$script:phase = 'warmup'; $script:warmupCount = 1
+$propagou = $false
+try { Valida-FaseBoot } catch { $propagou = $true }
+Chk 'jogo fechado: NAO propaga a excecao' $propagou $false
+Chk 'jogo fechado: mantem a fase'         $script:phase 'warmup'
+Chk 'jogo fechado: nao grava'             $script:saves 0
+Chk 'jogo fechado: loga o motivo'         ([bool]($script:logs -match 'nao esta rodando')) 'True'
+
 if($script:erros -eq 0){ "OK: Valida-FaseBoot corrige losttower7/k37 pelos atributos reais (os 4 tem que passar de `$WarmupPts), so quando discorda do estado.txt" }
 else { "$($script:erros) FALHA(S)"; exit 1 }
