@@ -4,6 +4,7 @@ $EstadoFile = Join-Path $env:TEMP 'estado_rt_test.txt'
 $WarmupResets = 10
 $AutoTune = $true
 $TargetLevel = 350
+$LevelMaximo = 400
 $WarpCmd = '/k37'
 $WarpMap = ''
 $WarmupCmd = '/losttower7'
@@ -141,12 +142,26 @@ Chk 'corrompido nao zera resets' $script:resets 99
 #     erro e sem inventar override nenhum - CONFIG (ou o que ja estava em memoria) continua mandando.
 @('fase=normal','modo=reset','warmup=0','resets=10','warpCmd=/k37','warpMap=kant') -join "`r`n" | Set-Content $EstadoFile -Encoding ASCII
 $script:WarpCmd = '/s21'; $script:warpCmdUi = 'nao_deveria_sobreviver'; $script:WarmupCmd = '/losttower3'; $script:warmupCmdUi = 'nem_essa'
+$script:TargetLevel = 777; $script:targetLevelUi = 'nem_essa_tb'
 Load-Estado
 Chk 'estado.txt antigo: nao inventa warpCmdUi'    $script:warpCmdUi 'nao_deveria_sobreviver'
 Chk 'estado.txt antigo: nao mexe no WarpCmd'      $script:WarpCmd '/s21'
 Chk 'estado.txt antigo: nao inventa warmupCmdUi'  $script:warmupCmdUi 'nem_essa'
 Chk 'estado.txt antigo: nao mexe no WarmupCmd'    $script:WarmupCmd '/losttower3'
+Chk 'estado.txt antigo: nao inventa targetLevelUi' $script:targetLevelUi 'nem_essa_tb'
+Chk 'estado.txt antigo: nao mexe no TargetLevel'   $script:TargetLevel 777
 $script:warpCmdUi = ''; $script:warmupCmdUi = ''; $script:WarpCmd = '/k37'; $script:WarmupCmd = '/losttower7'
+$script:targetLevelUi = ''; $script:TargetLevel = 350; $script:TargetLevelConfig = 350
+
+# 3c. REGRESSAO: targetLevelUi CORROMPIDO no estado.txt ('abc' na mao, campo truncado) nao pode abortar o RESTO
+#     do parsing desta chamada - achado escrevendo este teste: [int] direto lancava dentro do try do Load-Estado,
+#     o catch geral pegava mas pulava tudo que vinha DEPOIS (warpMap incluso), nao so o valor invalido.
+@('fase=normal','modo=reset','warpCmd=/k37','warpMap=kant','targetLevelUi=abc') -join "`r`n" | Set-Content $EstadoFile -Encoding ASCII
+$script:TargetLevel = 350; $script:targetLevelUi = ''; $script:WarpCmd = '/k37'; $script:WarpMap = ''
+Load-Estado
+Chk 'targetLevelUi corrompido: nao derruba, mantem o CONFIG' $script:TargetLevel 350
+Chk 'targetLevelUi corrompido: nao inventa o override'        $script:targetLevelUi ''
+Chk 'targetLevelUi corrompido: NAO aborta o resto do parsing (warpMap continua sendo lido)' $script:WarpMap 'kant'
 
 # 4. mapa do spot aprendido. O bot descobre no primeiro teleporte que nome o minimapa mostra pro $WarpCmd
 #    (nao da pra saber de fora), grava, e retoma no restart. Mas so quando ele mesmo aprendeu.
@@ -193,6 +208,26 @@ Load-Estado
 Chk 'janelinha troca o comando'          $script:WarpCmd '/s21'
 Chk 'e o mapa do comando antigo NAO vem' $script:WarpMap ''
 $script:warpCmdUi = ''; $script:WarpCmd = '/k37'; $script:WarpMap = ''; Save-Estado; Load-Estado   # limpa
+
+# 4c. alvo de reset definido pela JANELINHA (targetLevelUi, campo ALVO - pedido do usuario em 29/09: trocar de
+#     350 pra 325 vivia custando editar o .ps1). Mesma convencao do warpCmdUi/warmupCmdUi, e tambem atualiza o
+#     $TargetLevelConfig (o "alvo que voce pediu" - ver Ajustar-Alvo-Do-Proximo-Ciclo).
+# A/B DESLIGADO aqui de proposito: com $AutoTune ligado o proprio alvo= do A/B (mecanismo separado, secao 1e)
+# tambem reescreve o $TargetLevel a cada Load-Estado, e ia mascarar o que estes casos testam.
+$AutoTune = $false
+$script:targetLevelUi = '325'; Save-Estado
+$script:targetLevelUi = ''; $script:TargetLevel = 350; $script:TargetLevelConfig = 350; Load-Estado
+Chk 'targetLevelUi sobrepoe o CONFIG no restart' $script:TargetLevel 325
+Chk 'e atualiza o TargetLevelConfig junto'       $script:TargetLevelConfig 325
+Chk 'e fica guardado pra salvar nos proximos Save-Estado' $script:targetLevelUi '325'
+$script:targetLevelUi = ''; $script:TargetLevel = 350; $script:TargetLevelConfig = 350; Save-Estado; Load-Estado
+
+# nunca mexeu na janelinha (targetLevelUi vazio): CONFIG continua mandando
+$script:targetLevelUi = ''; Save-Estado
+$script:TargetLevel = 340; Load-Estado
+Chk 'targetLevelUi vazio nao mexe no CONFIG' $script:TargetLevel 340
+$script:TargetLevel = 350; Save-Estado; Load-Estado
+$AutoTune = $true   # devolve pro estado que o resto do arquivo assume (A/B ligado)
 
 # 5. veredito do piso de /f /v /e. E uma pergunta feita ao servidor UMA vez na vida: se nao sobreviver ao
 #    restart, todo start gasta um /f e uma leitura de status pra reaprender o que ja se sabia.

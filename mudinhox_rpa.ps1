@@ -22,7 +22,7 @@ param([switch]$Check, [string]$TestImage, [string]$TestStatus = "", [switch]$Tes
 # pra caber quatro bots no mesmo primeiro plano, mas o que ele resolve de verdade e nao roubar a sua tela.
 
 # ---------- CONFIG (coordenadas relativas a area cliente do jogo, 1920x1009) ----------
-$TargetLevel   = 350     # level pra resetar nesta conta. O bot sobe o alvo se o servidor recusar.
+$TargetLevel   = 325     # level pra resetar nesta conta. O bot sobe o alvo se o servidor recusar. Editavel na janelinha (ALVO) - sobrevive a restart em targetLevelUi= no estado.txt.
                          # A razao e do jogo, nao do bot: quanto MAIOR o level, mais devagar ele sobe. Entao os
                          # levels entre o alvo e um valor maior sao os mais caros do ciclo, e os pontos a mais que
                          # eles rendem no reset nao pagam o tempo. Resetar no piso e o ciclo mais curto possivel.
@@ -657,6 +657,21 @@ function Aplica-SpotUi($tb,[string]$campo,[string]$rotulo){
   Log "spot $rotulo`: mudei pra '$novo' pela interface (gravado no estado.txt, sobrevive a restart)"
   Save-Estado
 }
+function Aplica-AlvoUi($tb){   # campo ALVO da janelinha: nivel de reset. Mesma ideia do Aplica-SpotUi, validando numero em vez de comando
+  $novo = $tb.Text.Trim()
+  if($novo -eq "$TargetLevel"){ $tb.BackColor = $HudPoco; return }
+  $n = 0
+  if(-not [int]::TryParse($novo,[ref]$n) -or $n -lt 1 -or $n -gt $LevelMaximo){
+    Log "alvo de reset: '$novo' invalido (precisa ser numero de 1 a $LevelMaximo), mantendo $TargetLevel"
+    $tb.Text = "$TargetLevel"; $tb.BackColor = $HudSangueCl; return
+  }
+  # $TargetLevelConfig tambem muda: e ele que o bot trata como "o alvo que voce pediu" (o $TargetLevel sozinho e
+  # mutavel - o aprendizado do piso empurra ele pra cima quando o servidor recusa, e depois volta pro Config).
+  $script:TargetLevel = $n; $script:TargetLevelConfig = $n; $script:targetLevelUi = "$n"
+  $tb.BackColor = $HudPoco
+  Log "alvo de reset: mudei pra $n pela interface (gravado no estado.txt, sobrevive a restart)"
+  Save-Estado
+}
 function Set-Barra([double]$pct){   # barra do MR: guarda a fracao e repinta
   # O ProgressBar do WinForms ignora BackColor/ForeColor com visual styles e sai sempre verde do Windows - a
   # unica cor que a HUD do jogo nao tem em lugar nenhum. Aqui ela e desenhada no Paint do painel.
@@ -673,7 +688,7 @@ function Show-Ui {
   # arrasto e o proprio mouse sobre a pedra. Fechar pelo console continua sendo o que NAO se deve fazer: mata o
   # processo sem salvar o estado, e foi assim que o char ficou inconsistente duas vezes (08/09 e 09/09).
   $f.Text = 'MudinhoX RPA'   # nao aparece mais na tela, mas e o que identifica a janela pro Windows
-  $f.Width = 300; $f.Height = 204; $f.TopMost = $true; $f.FormBorderStyle = 'None'   # +16 da linha WARMUP/NORMAL
+  $f.Width = 300; $f.Height = 220; $f.TopMost = $true; $f.FormBorderStyle = 'None'   # +16 da linha WARMUP/NORMAL, +16 da linha ALVO
   $f.BackColor = $HudPedraBase; $f.ForeColor = $HudCreme
   # AutoScaleMode 'None' ANTES da fonte: o padrao e 'Font', que reescala os controles filhos a partir da fonte do
   # formulario. Como a grade abaixo esta em pixel fixo, escala automatica so teria como estragar.
@@ -726,10 +741,17 @@ function Show-Ui {
   # sempre depois de uma tentativa invalida, mesmo digitando certo da proxima vez).
   $onFocoEntra = { param($s,$e) $s.BackColor = $HudPoco }
   $script:tbWarmup.Add_Enter($onFocoEntra); $script:tbWarp.Add_Enter($onFocoEntra)
+  # Nivel de reset, mesma ideia (pedido do usuario: trocar de 350 pra 325 e voltar custava editar o .ps1).
+  $lblAlvo = Hud-Rotulo 'ALVO' 10 70 40
+  $script:tbAlvo = Hud-Campo 52 68 50
+  $script:tbAlvo.Text = "$TargetLevel"
+  $script:tbAlvo.Add_Leave({ Aplica-AlvoUi $script:tbAlvo })
+  $script:tbAlvo.Add_KeyDown($onEnter)
+  $script:tbAlvo.Add_Enter($onFocoEntra)
   # Barra = caminho ate o proximo /darmr (os 4 atributos do zero ao cap), NAO "quantos resets faltam": reset e so
   # o meio de juntar pontos, e quantos cabem num MR muda com o alvo, com o spot e com a fase. Pontos e o que conta.
   # (A PROJECAO de resets aparece no texto abaixo, que e onde ela pode vir acompanhada do "~".)
-  $script:barraBox = New-Object System.Windows.Forms.Panel; $script:barraBox.SetBounds(10,70,280,9)
+  $script:barraBox = New-Object System.Windows.Forms.Panel; $script:barraBox.SetBounds(10,86,280,9)
   $script:barraBox.BackColor = $HudPedraBase
   $script:barraBox.Add_Paint({
     param($s,$e)
@@ -747,12 +769,12 @@ function Show-Ui {
     # SEM numero dentro da barra: creme sobre ouro nao se le, e a linha logo abaixo ja diz "MR 62.0%" - eram dois
     # lugares mostrando o mesmo, e o pior deles ficava por cima do unico elemento colorido da janela.
   })
-  $script:contador = New-Object System.Windows.Forms.Label; $script:contador.SetBounds(10,83,280,14); $script:contador.Text = '0 resets | 0 MR'
+  $script:contador = New-Object System.Windows.Forms.Label; $script:contador.SetBounds(10,99,280,14); $script:contador.Text = '0 resets | 0 MR'
   $script:contador.ForeColor = $HudCreme; $script:contador.BackColor = [System.Drawing.Color]::Transparent
   $script:contador.Font = Hud-Fonte 8
   $script:contador.TextAlign = 'MiddleCenter'
   # Caixa do log num buraco escavado: painel desenha o relevo, o TextBox mora 3px pra dentro.
-  $poco = New-Object System.Windows.Forms.Panel; $poco.SetBounds(10,101,280,93); $poco.BackColor = $HudPoco
+  $poco = New-Object System.Windows.Forms.Panel; $poco.SetBounds(10,117,280,93); $poco.BackColor = $HudPoco
   $poco.Add_Paint({ param($s,$e) Hud-Relevo $e.Graphics $s.ClientRectangle $HudBronzeEsc $HudBronze })
   # SEM barra de rolagem: o scrollbar do WinForms nao aceita cor e sai branco do sistema - de longe o que mais
   # destoava. O historico de verdade esta no rpa.log, que e onde toda analise deste projeto acontece, e o
@@ -776,7 +798,7 @@ function Show-Ui {
   # PARAR = fechar a janela, a pedido: um caminho so de saida, e ele passa pelo FormClosing (parada limpa).
   $btnParar.Add_Click({ $script:stopReason = 'usuario'; $script:stop = $true; $script:ui.Close() })
   $f.Add_FormClosing({ if(-not $script:stop){ $script:stopReason = 'janela fechada'; $script:stop = $true } })
-  $f.Controls.AddRange(@($script:btnPause,$btnParar,$lblWarmup,$script:tbWarmup,$lblWarp,$script:tbWarp,$script:barraBox,$script:contador,$poco)); $f.Show(); $script:ui = $f
+  $f.Controls.AddRange(@($script:btnPause,$btnParar,$lblWarmup,$script:tbWarmup,$lblWarp,$script:tbWarp,$lblAlvo,$script:tbAlvo,$script:barraBox,$script:contador,$poco)); $f.Show(); $script:ui = $f
 }
 
 # ---------- janela do jogo / foco ----------
@@ -1189,6 +1211,7 @@ $script:farmMap = ''; $script:phase = 'normal'; $script:warmupCount = 0; $script
 # editado depois - e a unica forma de um valor digitado na interface sobreviver a um restart. Pra voltar ao
 # CONFIG, apague a linha warpCmdUi=/warmupCmdUi= do estado.txt (mesma convencao do warpMap=).
 $script:warpCmdUi = ''; $script:warmupCmdUi = ''
+$script:targetLevelUi = ''   # mesma convencao acima, pro nivel de reset (campo ALVO da janelinha)
 # Cota diaria de master resets. mrsDia conta os de HOJE (mrs, do estado, e da vida inteira do char). cotaJoias
 # lembra que foi a COTA que ligou o modo joias - sem isso, virar o dia arrancaria voce de um modo joias que
 # VOCE escolheu. Os tres vao pro estado.txt: reiniciar o bot nao pode ser jeito de furar a cota.
@@ -1251,6 +1274,7 @@ function Save-Estado {   # fase/warmup E as metricas do MR. Medir um MR leva hor
       "warpMap=$WarpMap"
       "warpCmdUi=$($script:warpCmdUi)"
       "warmupCmdUi=$($script:warmupCmdUi)"
+      "targetLevelUi=$($script:targetLevelUi)"
       # Veredito do servidor sobre comando abaixo do piso (0 nao perguntei / 1 aceita / -1 recusa). E uma
       # pergunta que se faz UMA vez na vida: sem gravar, cada restart gastaria um /f e uma leitura de status.
       "statMinOk=$($script:statMinOk)"
@@ -1325,6 +1349,22 @@ function Load-Estado {
       if($kv.warmupCmdUi){
         if($kv.warmupCmdUi -ne $WarmupCmd){ Log "spot warmup: usando '$($kv.warmupCmdUi)' definido antes pela interface (CONFIG diz '$WarmupCmd')" }
         $script:warmupCmdUi = $kv.warmupCmdUi; $script:WarmupCmd = $kv.warmupCmdUi
+      }
+      # Alvo de reset definido pela interface (campo ALVO): mesma convencao, e roda DEPOIS do $kv.alvo do A/B -
+      # a interface e escolha sua, feita agora; ganha de um braco de experimento antigo. Atualiza o
+      # $TargetLevelConfig tambem (nao so o $TargetLevel mutavel): e ele que o bot usa como "o que voce pediu"
+      # pra voltar depois de o aprendizado do piso empurrar o alvo pra cima.
+      if($kv.targetLevelUi){
+        # TryParse, nao [int] direto: um estado.txt com essa linha corrompida ('abc' na mao, ou truncada) lancava
+        # excecao aqui DENTRO do try do Load-Estado - o catch geral pegava, mas pulava TUDO que viria depois
+        # (warpMap, statCarry, o resto), nao so este valor. O arquivo corrompido nao pode custar mais que ele mesmo.
+        $v = 0
+        if([int]::TryParse($kv.targetLevelUi,[ref]$v) -and $v -ge 1 -and $v -le $LevelMaximo){
+          if($v -ne $TargetLevel){ Log "alvo de reset: usando $v definido antes pela interface (CONFIG diz $TargetLevel)" }
+          $script:targetLevelUi = $kv.targetLevelUi; $script:TargetLevel = $v; $script:TargetLevelConfig = $v
+        } else {
+          Log "alvo de reset: estado.txt tem targetLevelUi='$($kv.targetLevelUi)' invalido - ignorando, CONFIG manda ($TargetLevel)"
+        }
       }
       if($kv.warpMap -and -not $WarpMap -and $kv.warpCmd -eq $WarpCmd){ $script:WarpMap = $kv.warpMap; Log "mapa do spot ($WarpCmd) retomado do estado.txt: '$WarpMap'" }
       # Piso de /f /v /e: nao guarda o VALOR, guarda o veredito - assim mexer no $StatMinTeste do CONFIG vale na hora
@@ -3504,6 +3544,7 @@ Load-Estado   # retoma fase/warmup/modo de onde parou (o warmup.flag abaixo aind
 # a caixa mostraria o CONFIG enquanto o bot de fato usa o valor salvo, e voce reescreveria o mesmo texto a toa.
 if($script:tbWarmup -and -not $script:tbWarmup.IsDisposed){ $script:tbWarmup.Text = $WarmupCmd }
 if($script:tbWarp -and -not $script:tbWarp.IsDisposed){ $script:tbWarp.Text = $WarpCmd }
+if($script:tbAlvo -and -not $script:tbAlvo.IsDisposed){ $script:tbAlvo.Text = "$TargetLevel" }
 $script:statDue = Get-Date   # primeira validacao de status acontece no primeiro poll apos o warp, nao 3 min depois
 if(-not $MixEnabled -and $script:modo -eq 'joias'){
   $script:modo = 'reset'; $script:cotaJoias = $false; Save-Estado
